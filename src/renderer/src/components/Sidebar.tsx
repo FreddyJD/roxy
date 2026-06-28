@@ -8,13 +8,14 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  Repeat,
   Settings as SettingsIcon,
   Trash2
 } from 'lucide-react'
-import type { Chat } from '@shared/types'
+import type { Chat, Loop } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
-import { LoopsSection } from './LoopsSection'
+import { HeartbeatDot, NewLoopDialog } from './LoopsSection'
 import { UpdateCard } from './UpdateCard'
 import roxy from '../assets/roxy.png'
 
@@ -29,6 +30,7 @@ interface Project {
   path: string
   name: string
   sessions: Chat[]
+  loops: Loop[]
 }
 
 export function Sidebar(): JSX.Element {
@@ -40,6 +42,8 @@ export function Sidebar(): JSX.Element {
   const newSessionInProject = useRoxyStore((s) => s.newSessionInProject)
   const deleteChat = useRoxyStore((s) => s.deleteChat)
   const sendingChats = useRoxyStore((s) => s.sendingChats)
+  const loops = useRoxyStore((s) => s.loops)
+  const removeLoop = useRoxyStore((s) => s.removeLoop)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
   const [width, setWidth] = useState<number>(() => {
@@ -47,6 +51,7 @@ export function Sidebar(): JSX.Element {
     return Number.isFinite(v) && v >= MIN_WIDTH && v <= MAX_WIDTH ? v : DEFAULT_WIDTH
   })
   const [railed, setRailed] = useState<boolean>(() => localStorage.getItem(COLLAPSED_KEY) === '1')
+  const [loopDialogFor, setLoopDialogFor] = useState<{ path: string; name: string } | null>(null)
 
   useEffect(() => {
     localStorage.setItem(WIDTH_KEY, String(width))
@@ -80,7 +85,7 @@ export function Sidebar(): JSX.Element {
       let group = map.get(path)
       if (!group) {
         const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path
-        group = { path, name, sessions: [] }
+        group = { path, name, sessions: [], loops: [] }
         map.set(path, group)
       }
       return group
@@ -89,8 +94,13 @@ export function Sidebar(): JSX.Element {
       if (c.kind !== 'main') continue
       ensure(c.workspacePath ?? '(no folder)').sessions.push(c)
     }
+    // Loops belong to a project too — group them by their chat's workspace.
+    const chatPath = new Map(chats.map((c) => [c.id, c.workspacePath]))
+    for (const loop of loops) {
+      ensure(chatPath.get(loop.chatId) ?? '(no folder)').loops.push(loop)
+    }
     return [...map.values()]
-  }, [chats])
+  }, [chats, loops])
 
   // Subagent sessions grouped by the main chat that spawned them.
   const subsByParent = useMemo(() => {
@@ -193,8 +203,6 @@ export function Sidebar(): JSX.Element {
       </div>
 
       <div className="mt-4 flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3">
-        <LoopsSection />
-
         <section className="flex min-h-0 flex-1 flex-col">
           <div className="mb-2 flex items-center justify-between px-1">
             <span className="text-xs font-medium text-text-muted">Sessions</span>
@@ -235,6 +243,15 @@ export function Sidebar(): JSX.Element {
                       <span className="shrink-0 text-[10px] tabular-nums text-text-subtle">
                         {project.sessions.length}
                       </span>
+                      {project.path !== '(no folder)' && (
+                        <button
+                          onClick={() => setLoopDialogFor({ path: project.path, name: project.name })}
+                          title="New loop in this project"
+                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle transition hover:bg-white/5 hover:text-text"
+                        >
+                          <Repeat className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                       <button
                         onClick={() => void newSessionInProject(project.path)}
                         title="New session in this project"
@@ -244,6 +261,42 @@ export function Sidebar(): JSX.Element {
                       </button>
                     </div>
                     {!isCollapsed && (
+                      <>
+                      {project.loops.length > 0 && (
+                        <ul className="mb-0.5 flex flex-col gap-0.5 pl-2">
+                          {project.loops.map((loop) => (
+                            <li key={loop.id}>
+                              <div
+                                className={cn(
+                                  'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition',
+                                  loop.chatId === activeChatId
+                                    ? 'bg-elevated text-text'
+                                    : 'text-text-muted hover:bg-white/5 hover:text-text'
+                                )}
+                              >
+                                <HeartbeatDot enabled={loop.enabled} />
+                                <button
+                                  onClick={() => selectChat(loop.chatId)}
+                                  title={loop.name}
+                                  className="min-w-0 flex-1 text-left"
+                                >
+                                  <span className="block truncate">{loop.name}</span>
+                                  <span className="block text-[11px] text-text-subtle">
+                                    every {loop.intervalMinutes}m{loop.enabled ? '' : ' · paused'}
+                                  </span>
+                                </button>
+                                <button
+                                  onClick={() => removeLoop(loop.id)}
+                                  title="Delete loop"
+                                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover:opacity-100"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                       <ul className="mt-0.5 flex flex-col gap-0.5 pl-2">
                         {project.sessions.map((chat) => {
                           const sending = !!sendingChats[chat.id]
@@ -324,6 +377,7 @@ export function Sidebar(): JSX.Element {
                           )
                         })}
                       </ul>
+                      </>
                     )}
                   </div>
                 )
@@ -332,6 +386,14 @@ export function Sidebar(): JSX.Element {
           )}
         </section>
       </div>
+
+      {loopDialogFor && (
+        <NewLoopDialog
+          workspacePath={loopDialogFor.path}
+          projectName={loopDialogFor.name}
+          onClose={() => setLoopDialogFor(null)}
+        />
+      )}
 
       <UpdateCard />
 

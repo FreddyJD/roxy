@@ -1,78 +1,10 @@
 import { useState } from 'react'
-import { Plus, Repeat, Trash2 } from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
 import { Button, Input, Textarea } from './ui'
-import { cn } from '../lib/cn'
 
 const INTERVALS = [1, 5, 15, 30, 60]
 
-export function LoopsSection(): JSX.Element {
-  const loops = useRoxyStore((s) => s.loops)
-  const activeChatId = useRoxyStore((s) => s.activeChatId)
-  const selectChat = useRoxyStore((s) => s.selectChat)
-  const removeLoop = useRoxyStore((s) => s.removeLoop)
-  const [creating, setCreating] = useState(false)
-
-  return (
-    <section>
-      <div className="mb-2 flex items-center justify-between px-1">
-        <span className="flex items-center gap-1.5 text-xs font-medium text-text-muted">
-          <Repeat className="h-3.5 w-3.5" /> Loops
-        </span>
-        <button
-          onClick={() => setCreating(true)}
-          title="New loop"
-          className="flex h-5 w-5 items-center justify-center rounded text-text-subtle transition hover:bg-white/5 hover:text-text"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-
-      {loops.length === 0 ? (
-        <button
-          onClick={() => setCreating(true)}
-          className="w-full rounded-lg border border-dashed border-border px-2.5 py-2 text-left text-xs text-text-subtle transition hover:border-border-strong hover:text-text-muted"
-        >
-          Create a loop — a prompt on a heartbeat
-        </button>
-      ) : (
-        <ul className="flex flex-col gap-0.5">
-          {loops.map((loop) => (
-            <li key={loop.id}>
-              <div
-                className={cn(
-                  'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition',
-                  loop.chatId === activeChatId
-                    ? 'bg-elevated text-text'
-                    : 'text-text-muted hover:bg-white/5 hover:text-text'
-                )}
-              >
-                <HeartbeatDot enabled={loop.enabled} />
-                <button onClick={() => selectChat(loop.chatId)} className="min-w-0 flex-1 text-left">
-                  <span className="block truncate">{loop.name}</span>
-                  <span className="block text-[11px] text-text-subtle">
-                    every {loop.intervalMinutes}m{loop.enabled ? '' : ' · paused'}
-                  </span>
-                </button>
-                <button
-                  onClick={() => removeLoop(loop.id)}
-                  title="Delete loop"
-                  className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle transition hover:bg-white/5 hover:text-danger group-hover:flex"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {creating && <NewLoopDialog onClose={() => setCreating(false)} />}
-    </section>
-  )
-}
-
-function HeartbeatDot({ enabled }: { enabled: boolean }): JSX.Element {
+export function HeartbeatDot({ enabled }: { enabled: boolean }): JSX.Element {
   if (!enabled) return <span className="h-2 w-2 shrink-0 rounded-full bg-text-subtle/40" />
   return (
     <span className="relative flex h-2 w-2 shrink-0">
@@ -82,7 +14,15 @@ function HeartbeatDot({ enabled }: { enabled: boolean }): JSX.Element {
   )
 }
 
-function NewLoopDialog({ onClose }: { onClose: () => void }): JSX.Element {
+export function NewLoopDialog({
+  workspacePath,
+  projectName,
+  onClose
+}: {
+  workspacePath: string | null
+  projectName?: string
+  onClose: () => void
+}): JSX.Element {
   const createLoop = useRoxyStore((s) => s.createLoop)
   const [name, setName] = useState('')
   const [prompt, setPrompt] = useState('')
@@ -95,7 +35,7 @@ function NewLoopDialog({ onClose }: { onClose: () => void }): JSX.Element {
     if (!canCreate || busy) return
     setBusy(true)
     try {
-      await createLoop({ name: name.trim(), prompt: prompt.trim(), intervalMinutes })
+      await createLoop({ name: name.trim(), prompt: prompt.trim(), intervalMinutes, workspacePath })
       onClose()
     } finally {
       setBusy(false)
@@ -113,8 +53,9 @@ function NewLoopDialog({ onClose }: { onClose: () => void }): JSX.Element {
       >
         <h2 className="text-lg font-semibold">New loop</h2>
         <p className="mt-1 text-sm text-text-muted">
-          A loop runs a prompt on a heartbeat — like a cron job for your agent. It posts into its own
-          chat, where you can step in any time.
+          A loop runs a prompt on a heartbeat — like a cron job for your agent
+          {projectName ? ` in ${projectName}` : ''}. It posts into its own chat, where you can step
+          in any time.
         </p>
 
         <div className="mt-4 flex flex-col gap-3">
