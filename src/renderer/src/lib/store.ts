@@ -342,7 +342,10 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
 
     // Persist the turn (always — even if the user navigated away) and clean up.
     const finishTurn = async (): Promise<void> => {
-      if (stopped()) {
+      // Capture the stop flag BEFORE clearStop() wipes it below — otherwise the
+      // queue would drain even after the user hit Stop (the guard read `false`).
+      const wasStopped = stopped()
+      if (wasStopped) {
         parts = parts.map((p, i) =>
           i === parts.length - 1 && (p.type === 'text' || p.type === 'reasoning')
             ? { type: p.type, text: `${p.text.trimEnd()}\n\n_[stopped]_` }
@@ -368,7 +371,8 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       if (active && !get().chats.some((c) => c.id === active)) {
         await get().selectChat(chatId)
       }
-      if (!stopped()) await get().drainQueue(chatId)
+      // Don't auto-run the next queued prompt when the user stopped this turn.
+      if (!wasStopped) await get().drainQueue(chatId)
     }
 
     clearStop()
