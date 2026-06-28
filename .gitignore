@@ -1,0 +1,12 @@
+node_modules
+dist
+out
+.DS_Store
+*.log
+*.log.*
+.env
+.env.*
+!.env.example
+
+# smoke-test build output
+test/.out/

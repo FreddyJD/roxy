@@ -1,0 +1,108 @@
+@import 'tailwindcss';
+
+/* Scan Streamdown's prebuilt classes so streamed markdown renders styled. */
+@source '../../../../node_modules/streamdown/dist/*.js';
+
+@theme {
+  /* Typography — Cursor-style geometric sans + mono */
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', 'JetBrains Mono', monospace;
+
+  /* Cursor-inspired dark palette (near-black, high contrast, hairline borders) */
+  --color-bg: #0a0a0a;
+  --color-surface: #0f0f10;
+  --color-surface-2: #161618;
+  --color-elevated: #1d1d20;
+  --color-border: #232326;
+  --color-border-strong: #303035;
+  --color-text: #ededed;
+  --color-text-muted: #9a9aa3;
+  --color-text-subtle: #6a6a73;
+  --color-accent: #4d8dff;
+  --color-accent-hover: #6aa0ff;
+  --color-success: #3fb950;
+  --color-danger: #f0556a;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+/* Tailwind v4 borders default to currentColor — pin a sane default. */
+*,
+::before,
+::after {
+  border-color: var(--color-border);
+}
+
+/* Tailwind v4 Preflight gives buttons `cursor: default` — restore the pointer. */
+button:not(:disabled),
+[role='button']:not(:disabled),
+label[for],
+summary {
+  cursor: pointer;
+}
+
+/* Images shouldn't ghost-drag (avatars/logos) — feels broken in a desktop app. */
+img {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-synthesis-weight: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
+/* Thin, Cursor-like scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3d3d43;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Electron custom title bar: make a region draggable, keep controls clickable. */
+.titlebar {
+  -webkit-app-region: drag;
+}
+.titlebar :where(button, a, input, textarea, select, [role='button'], [role='switch']) {
+  -webkit-app-region: no-drag;
+}
+
+/* Reserve space for the native window controls so app content never sits under
+   them — traffic lights (left) on macOS, control overlay (right) elsewhere. */
+[data-platform='darwin'] .reserve-controls-left {
+  padding-left: 80px;
+}
+[data-platform='win32'] .reserve-controls-right,
+[data-platform='linux'] .reserve-controls-right {
+  padding-right: 144px;
+}
