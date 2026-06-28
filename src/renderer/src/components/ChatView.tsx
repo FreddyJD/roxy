@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronRight, FolderOpen, ListTree, Repeat, Settings, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, FolderOpen, ListTree, Repeat, Settings, X } from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
 import { MessageBubble } from './MessageBubble'
@@ -34,6 +34,7 @@ export function ChatView(): JSX.Element {
   const stop = useRoxyStore((s) => s.stop)
   const queue = useRoxyStore((s) => s.queue)
   const removeQueued = useRoxyStore((s) => s.removeQueued)
+  const moveQueued = useRoxyStore((s) => s.moveQueued)
   const newSession = useRoxyStore((s) => s.newSession)
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const chats = useRoxyStore((s) => s.chats)
@@ -206,7 +207,7 @@ export function ChatView(): JSX.Element {
                 </QueueSectionTrigger>
                 <QueueSectionContent>
                   <QueueList>
-                    {queue.map((item) => (
+                    {queue.map((item, i) => (
                       <QueueItem key={item.id}>
                         <QueueItemIndicator />
                         <div className="min-w-0 flex-1">
@@ -225,6 +226,22 @@ export function ChatView(): JSX.Element {
                           )}
                         </div>
                         <QueueItemActions>
+                          <QueueItemAction
+                            onClick={() => moveQueued(item.id, 'up')}
+                            disabled={i === 0}
+                            title="Move up (run sooner)"
+                            className="disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-subtle"
+                          >
+                            <ChevronUp className="h-3.5 w-3.5" />
+                          </QueueItemAction>
+                          <QueueItemAction
+                            onClick={() => moveQueued(item.id, 'down')}
+                            disabled={i === queue.length - 1}
+                            title="Move down"
+                            className="disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-subtle"
+                          >
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          </QueueItemAction>
                           <QueueItemAction
                             onClick={() => removeQueued(item.id)}
                             title="Remove from queue"

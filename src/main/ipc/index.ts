@@ -138,6 +138,9 @@ export function registerIpc(): void {
     repo.enqueue(chatId, content, images)
   )
   ipcMain.handle(CHANNELS.queueRemove, (_e, id: string) => repo.removeQueueItem(id))
+  ipcMain.handle(CHANNELS.queueReorder, (_e, chatId: string, ids: string[]) =>
+    repo.reorderQueue(chatId, ids)
+  )
 
   // ---- llm (streamed model completions) ----
   ipcMain.handle(CHANNELS.llmStart, async (event, input: LlmStartInput) => {

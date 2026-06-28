@@ -658,6 +658,23 @@ export function removeQueueItem(id: string): void {
   getDb().prepare('DELETE FROM queue WHERE id = ?').run(id)
 }
 
+/** Reorder a chat's queue to match `orderedIds` (front = runs next). Assigns
+ *  small strictly-increasing sort keys (1,2,3…) — far below any real `Date.now()`
+ *  so newly-enqueued items still append after. No-op unless the full set of the
+ *  chat's queue ids is passed. */
+export function reorderQueue(chatId: string, orderedIds: string[]): void {
+  const db = getDb()
+  const existing = db.prepare('SELECT id FROM queue WHERE chat_id = ?').all(chatId) as {
+    id: string
+  }[]
+  if (existing.length < 2) return
+  const valid = new Set(existing.map((r) => r.id))
+  const ids = orderedIds.filter((id) => valid.has(id))
+  if (ids.length !== existing.length) return
+  const update = db.prepare('UPDATE queue SET created_at = ? WHERE id = ?')
+  db.transaction(() => ids.forEach((id, i) => update.run(i + 1, id)))()
+}
+
 // ---- Integrations ------------------------------------------------------------
 
 export function listIntegrations(): IntegrationConnection[] {

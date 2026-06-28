@@ -130,8 +130,10 @@ async function main(): Promise<void> {
 
   // ---- queue (FIFO) ----
   const q1 = repo.enqueue(chat.id, 'q1')
-  repo.enqueue(chat.id, 'q2')
+  const q2 = repo.enqueue(chat.id, 'q2')
   check('queue FIFO order', repo.listQueue(chat.id).map((x) => x.content).join() === 'q1,q2')
+  repo.reorderQueue(chat.id, [q2.id, q1.id])
+  check('queue reorder', repo.listQueue(chat.id).map((x) => x.content).join() === 'q2,q1')
   repo.removeQueueItem(q1.id)
   check('queue remove', repo.listQueue(chat.id).map((x) => x.content).join() === 'q2')
   const qImg = repo.enqueue(chat.id, 'with image', [

@@ -60,6 +60,7 @@ interface RoxyStore {
   sendMessage: (content: string, chatId?: string, images?: ComposerImage[]) => Promise<void>
   drainQueue: (chatId: string) => Promise<void>
   removeQueued: (id: string) => Promise<void>
+  moveQueued: (id: string, direction: 'up' | 'down') => Promise<void>
   stop: () => void
   compactConversation: () => Promise<void>
 }
@@ -569,6 +570,24 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
 
   removeQueued: async (id) => {
     await api.queue.remove(id)
+    await get().refreshQueue()
+  },
+
+  moveQueued: async (id, direction) => {
+    const chatId = get().activeChatId
+    if (!chatId) return
+    const items = get().queue
+    const i = items.findIndex((q) => q.id === id)
+    if (i < 0) return
+    const j = direction === 'up' ? i - 1 : i + 1
+    if (j < 0 || j >= items.length) return
+    const reordered = items.slice()
+    ;[reordered[i], reordered[j]] = [reordered[j], reordered[i]]
+    set({ queue: reordered }) // optimistic — snappy reorder before the round-trip
+    await api.queue.reorder(
+      chatId,
+      reordered.map((q) => q.id)
+    )
     await get().refreshQueue()
   },
 

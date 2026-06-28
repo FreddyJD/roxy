@@ -42,6 +42,7 @@ export const CHANNELS = {
   queueList: 'queue:list',
   queueAdd: 'queue:add',
   queueRemove: 'queue:remove',
+  queueReorder: 'queue:reorder',
 
   llmStart: 'llm:start',
   llmAbort: 'llm:abort',

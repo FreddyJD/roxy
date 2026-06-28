@@ -198,6 +198,8 @@ export interface RoxyApi {
     list(chatId: string): Promise<QueueItem[]>
     add(chatId: string, content: string, images?: QueueImage[]): Promise<QueueItem>
     remove(id: string): Promise<void>
+    /** Reorder a chat's queue; `ids` is the full queue front-to-back. */
+    reorder(chatId: string, ids: string[]): Promise<void>
   }
   llm: {
     /** Stream a completion; text deltas arrive via onDelta. Resolves when done. */
