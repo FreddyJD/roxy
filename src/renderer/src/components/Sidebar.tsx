@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ChevronRight,
   FolderOpen,
   Hammer,
   Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Settings as SettingsIcon,
   Trash2
@@ -14,6 +16,13 @@ import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
 import { LoopsSection } from './LoopsSection'
 import roxy from '../assets/roxy.png'
+
+const MIN_WIDTH = 220
+const MAX_WIDTH = 480
+const DEFAULT_WIDTH = 288
+const WIDTH_KEY = 'roxy.sidebar.width'
+const COLLAPSED_KEY = 'roxy.sidebar.collapsed'
+const clampWidth = (n: number): number => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, n))
 
 interface Project {
   path: string
@@ -32,6 +41,36 @@ export function Sidebar(): JSX.Element {
   const sendingChats = useRoxyStore((s) => s.sendingChats)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
+  const [width, setWidth] = useState<number>(() => {
+    const v = Number(localStorage.getItem(WIDTH_KEY))
+    return Number.isFinite(v) && v >= MIN_WIDTH && v <= MAX_WIDTH ? v : DEFAULT_WIDTH
+  })
+  const [railed, setRailed] = useState<boolean>(() => localStorage.getItem(COLLAPSED_KEY) === '1')
+
+  useEffect(() => {
+    localStorage.setItem(WIDTH_KEY, String(width))
+  }, [width])
+  useEffect(() => {
+    localStorage.setItem(COLLAPSED_KEY, railed ? '1' : '0')
+  }, [railed])
+
+  // Drag the right edge to resize; the window listeners live only during a drag.
+  const startResize = (e: ReactMouseEvent): void => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = width
+    const onMove = (ev: MouseEvent): void => setWidth(clampWidth(startW + ev.clientX - startX))
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   // A project = a workspace folder; main sessions group under it.
   const projects = useMemo<Project[]>(() => {
@@ -80,8 +119,42 @@ export function Sidebar(): JSX.Element {
       return next
     })
 
+  if (railed) {
+    return (
+      <aside className="flex h-full w-14 shrink-0 flex-col items-center border-r border-border bg-surface">
+        <div className="titlebar reserve-controls-left h-[54px] w-full shrink-0" />
+        <div className="flex flex-col items-center gap-1 pt-1">
+          <button
+            onClick={() => setRailed(false)}
+            title="Expand sidebar"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </button>
+          <button
+            onClick={newSession}
+            title="New session"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          >
+            <FolderOpen className="h-4 w-4" />
+          </button>
+        </div>
+        <button
+          onClick={() => navigate('/settings')}
+          title="Settings"
+          className="mb-3 mt-auto flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+        >
+          <SettingsIcon className="h-4 w-4" />
+        </button>
+      </aside>
+    )
+  }
+
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-border bg-surface">
+    <aside
+      style={{ width }}
+      className="relative flex h-full shrink-0 flex-col border-r border-border bg-surface"
+    >
       <div className="titlebar reserve-controls-left flex items-center justify-between px-4 py-3.5">
         <div className="flex items-center gap-2.5">
           <img
@@ -91,13 +164,22 @@ export function Sidebar(): JSX.Element {
           />
           <span className="text-sm font-semibold tracking-tight">Roxy</span>
         </div>
-        <button
-          onClick={() => navigate('/settings')}
-          title="Settings"
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
-        >
-          <SettingsIcon className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => navigate('/settings')}
+            title="Settings"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          >
+            <SettingsIcon className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setRailed(true)}
+            title="Collapse sidebar"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       <div className="px-3">
@@ -249,6 +331,14 @@ export function Sidebar(): JSX.Element {
           )}
         </section>
       </div>
+
+      {/* Drag the right edge to resize; double-click to reset to the default width. */}
+      <div
+        onMouseDown={startResize}
+        onDoubleClick={() => setWidth(DEFAULT_WIDTH)}
+        title="Drag to resize · double-click to reset"
+        className="absolute inset-y-0 right-0 z-20 w-1 cursor-col-resize transition hover:bg-accent/50"
+      />
     </aside>
   )
 }
