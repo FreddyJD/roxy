@@ -71,8 +71,12 @@ function geminiParts(m: ChatMessage): unknown[] {
 }
 
 /** Exchange the stored GitHub token for a short-lived Copilot token (cached). */
-async function getCopilotToken(): Promise<string> {
-  if (copilotCache && copilotCache.expiresAt - 60_000 > Date.now()) return copilotCache.token
+async function getCopilotToken(force = false): Promise<string> {
+  // Refresh a couple of minutes early so a near-expiry token is never sent
+  // (covers clock skew + the time a long agent turn spends between calls).
+  if (!force && copilotCache && copilotCache.expiresAt - 120_000 > Date.now()) {
+    return copilotCache.token
+  }
 
   const github = repo.getProviderToken('github-copilot')
   if (!github) throw new Error('GitHub Copilot is not linked. Connect it in onboarding or Settings.')
@@ -96,6 +100,33 @@ async function getCopilotToken(): Promise<string> {
   const data = (await res.json()) as { token: string; expires_at: number }
   copilotCache = { token: data.token, expiresAt: data.expires_at * 1000 }
   return data.token
+}
+
+/** Drop the cached Copilot token so the next call re-exchanges it (used on a 401). */
+export function invalidateCopilotToken(): void {
+  copilotCache = null
+}
+
+/**
+ * Run a request, and if GitHub Copilot rejects the short-lived token with a 401
+ * ("IDE token expired"), drop the cached token, WAIT a beat, and retry a few
+ * times. The rejection is usually a brief expiry / clock-skew race that a fresh
+ * token clears once it has propagated. Aborts immediately if the turn is stopped.
+ */
+export async function withCopilotRetry(
+  isCopilot: boolean,
+  send: () => Promise<Response>,
+  signal?: AbortSignal
+): Promise<Response> {
+  let res = await send()
+  for (let attempt = 0; isCopilot && res.status === 401 && attempt < 3; attempt++) {
+    if (signal?.aborted) break
+    invalidateCopilotToken()
+    await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** attempt)) // 400ms, 800ms, 1.6s
+    if (signal?.aborted) break
+    res = await send()
+  }
+  return res
 }
 
 function copilotHeaders(token: string, vision = false): Record<string, string> {
@@ -193,17 +224,21 @@ export async function streamChat(opts: StreamChatOptions): Promise<void> {
 
   // GitHub Copilot: exchange the GitHub token, then an OpenAI-compatible endpoint.
   if (providerId === 'github-copilot') {
-    const res = await fetch(COPILOT_CHAT_URL, {
-      method: 'POST',
-      headers: copilotHeaders(await getCopilotToken(), messagesHaveImages(messages)),
-      body: JSON.stringify({
-        model,
-        messages: messages.map((m) => ({ role: m.role, content: openAiContent(m) })),
-        ...openAiReasoning('github-copilot', reasoning, reasoningEffort),
-        stream: true
-      }),
-      signal
+    const vision = messagesHaveImages(messages)
+    const body = JSON.stringify({
+      model,
+      messages: messages.map((m) => ({ role: m.role, content: openAiContent(m) })),
+      ...openAiReasoning('github-copilot', reasoning, reasoningEffort),
+      stream: true
     })
+    const send = async (): Promise<Response> =>
+      fetch(COPILOT_CHAT_URL, {
+        method: 'POST',
+        headers: copilotHeaders(await getCopilotToken(), vision),
+        body,
+        signal
+      })
+    const res = await withCopilotRetry(true, send, signal)
     return readSse(res, (j) => emitOpenAi(j, onDelta))
   }
 

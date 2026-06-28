@@ -19,6 +19,7 @@ import {
   openAiContent,
   openaiEndpoint,
   streamChat,
+  withCopilotRetry,
   type OpenAiContentPart
 } from '../services/llm'
 
@@ -240,13 +241,13 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<void> {
     return
   }
 
-  const { url, headers } = await openaiEndpoint(providerId, { vision: messagesHaveImages(messages) })
+  const vision = messagesHaveImages(messages)
   const convo: OpenAiMessage[] = messages.map((m) => ({ role: m.role, content: openAiContent(m) }))
 
   // The primary "build" agent gets every tool, plus `task` to delegate to subagents.
   await runLoop({
-    url,
-    headers,
+    providerId,
+    vision,
     model,
     convo,
     cwd,
@@ -264,8 +265,10 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<void> {
 }
 
 interface LoopOptions {
-  url: string
-  headers: Record<string, string>
+  /** The connected provider — re-resolved each call so Copilot's token can refresh. */
+  providerId: string
+  /** Whether the initial messages carry images (flips on vision headers). */
+  vision: boolean
   model: string
   convo: OpenAiMessage[]
   cwd: string
@@ -288,7 +291,7 @@ interface LoopOptions {
 
 /** The shared agent loop: stream → run tools (incl. `task`) → repeat. Returns the final prose. */
 async function runLoop(o: LoopOptions): Promise<string> {
-  const { url, headers, model, convo, cwd, parentChatId, sessionId, signal, emitTool, onText, onReasoning, tools, reasoning, effort, depth } =
+  const { providerId, vision, model, convo, cwd, parentChatId, sessionId, signal, emitTool, onText, onReasoning, tools, reasoning, effort, depth } =
     o
   let lastText = ''
 
@@ -297,8 +300,8 @@ async function runLoop(o: LoopOptions): Promise<string> {
   for (;;) {
     if (signal.aborted) return lastText
     const { text, toolCalls } = await streamOnce(
-      url,
-      headers,
+      providerId,
+      vision,
       model,
       convo,
       signal,
@@ -336,8 +339,8 @@ async function runLoop(o: LoopOptions): Promise<string> {
           description: typeof input.description === 'string' ? input.description : 'subtask',
           prompt: typeof input.prompt === 'string' ? input.prompt : '',
           subagentType: typeof input.subagent_type === 'string' ? input.subagent_type : 'general',
-          url,
-          headers,
+          providerId,
+          vision,
           model,
           cwd,
           parentChatId,
@@ -379,8 +382,8 @@ interface SubagentOptions {
   description: string
   prompt: string
   subagentType: string
-  url: string
-  headers: Record<string, string>
+  providerId: string
+  vision: boolean
   model: string
   cwd: string
   parentChatId?: string
@@ -393,7 +396,7 @@ interface SubagentOptions {
 
 /** Spawn a subagent: a focused child run of the same loop, returned as a `task` result. */
 async function runSubagent(o: SubagentOptions): Promise<string> {
-  const { callId, description, prompt, subagentType, url, headers, model, cwd, parentChatId, signal, emit, reasoning, effort, depth } =
+  const { callId, description, prompt, subagentType, providerId, vision, model, cwd, parentChatId, signal, emit, reasoning, effort, depth } =
     o
   const fail = (msg: string): string => {
     emit({ type: 'tool-start', callId, tool: 'task', title: description })
@@ -487,8 +490,8 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
 
   try {
     const text = await runLoop({
-      url,
-      headers,
+      providerId,
+      vision,
       model,
       convo: subConvo,
       cwd,
@@ -537,8 +540,8 @@ function renderTaskResult(subagent: string, state: 'completed' | 'error', text: 
 
 /** Stream one model turn, accumulating prose text and tool calls. */
 async function streamOnce(
-  url: string,
-  headers: Record<string, string>,
+  providerId: string,
+  vision: boolean,
   model: string,
   messages: OpenAiMessage[],
   signal: AbortSignal,
@@ -548,19 +551,25 @@ async function streamOnce(
   onText: (delta: string) => void,
   onReasoning: (delta: string) => void
 ): Promise<{ text: string; toolCalls: ToolCallAccum[] }> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model,
-      messages,
-      tools,
-      tool_choice: 'auto',
-      ...(reasoning && effort ? { reasoning_effort: effort } : {}),
-      stream: true
-    }),
-    signal
+  const payload = JSON.stringify({
+    model,
+    messages,
+    tools,
+    tool_choice: 'auto',
+    ...(reasoning && effort ? { reasoning_effort: effort } : {}),
+    stream: true
   })
+  // Resolve a FRESH endpoint + auth on EVERY model call. For GitHub Copilot this
+  // re-exchanges the short-lived Copilot token as it nears expiry, so a long
+  // agent loop (many tool calls) never sends a stale token — the root cause of
+  // the intermittent "IDE token expired" 401.
+  const send = async (): Promise<Response> => {
+    const { url, headers } = await openaiEndpoint(providerId, { vision })
+    return fetch(url, { method: 'POST', headers, body: payload, signal })
+  }
+  // On a 401 the token was rejected (expiry race / clock skew) — drop it, wait,
+  // and retry a few times before surfacing the error.
+  const res = await withCopilotRetry(providerId === 'github-copilot', send, signal)
   if (!res.ok || !res.body) {
     const body = await res.text().catch(() => '')
     throw new Error(`Model request failed (${res.status}). ${body.slice(0, 300)}`)
