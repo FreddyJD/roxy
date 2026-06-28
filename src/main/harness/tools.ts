@@ -325,16 +325,33 @@ function runBashKill(id: string, cwd: string): ToolResult {
   return { ok: true, output: `Killed background process ${id} ($ ${p.command}).` }
 }
 
-/** Kill a child process and, on Windows, its whole tree (servers spawn children). */
-function killProc(child: ReturnType<typeof spawn>): void {
+/** Kill a child process directly, swallowing the "already gone" race. */
+function killChildSafely(child: ReturnType<typeof spawn>): void {
   try {
-    if (process.platform === 'win32' && child.pid) {
-      spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true })
-    } else {
-      child.kill()
-    }
+    child.kill()
   } catch {
     // already gone
+  }
+}
+
+/** Kill a child process and, on Windows, its whole tree (servers spawn children). */
+function killProc(child: ReturnType<typeof spawn>): void {
+  if (process.platform !== 'win32' || !child.pid) {
+    killChildSafely(child)
+    return
+  }
+  // Windows: `taskkill /t` kills the whole tree (a dev server spawns node
+  // children). Resolve it by FULL PATH — a packaged app's PATH may not include
+  // System32, so a bare `spawn('taskkill')` fails with ENOENT. CRUCIALLY, a
+  // spawn failure is emitted ASYNCHRONOUSLY as an 'error' event, which a
+  // try/catch can't catch and which CRASHES the whole main process if unhandled
+  // — so attach an 'error' listener that falls back to a direct kill.
+  const taskkill = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe')
+  try {
+    const killer = spawn(taskkill, ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true })
+    killer.on('error', () => killChildSafely(child))
+  } catch {
+    killChildSafely(child)
   }
 }
 
