@@ -54,7 +54,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        # windows-2022 ships Visual Studio 2022, which node-gyp detects reliably
+        # (the newest windows-latest image has a VS that older node-gyp can't
+        # parse). macOS/Linux have working toolchains out of the box.
+        os: [windows-2022, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -65,7 +68,12 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        # --ignore-scripts skips native postinstall builds (better-sqlite3 tries
+        # to compile for Node here and fails: npm's bundled node-gyp can't detect
+        # the runner's newest Visual Studio). We don't need a Node-ABI binary —
+        # electron-builder rebuilds native deps against Electron's ABI when it
+        # packages (npmRebuild: true), preferring prebuilt binaries.
+        run: npm ci --ignore-scripts
 
       - name: Build renderer + main
         run: npm run build
