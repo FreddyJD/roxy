@@ -76,6 +76,7 @@ export interface LlmResult {
 /** One streamed step of an agent turn: prose text, or a tool call start/delta/end. */
 export type LlmEvent =
   | { type: 'text'; delta: string }
+  | { type: 'reasoning'; delta: string }
   | { type: 'tool-start'; callId: string; tool: string; title?: string }
   | { type: 'tool-delta'; callId: string; chunk: string }
   | { type: 'tool-end'; callId: string; output: string; ok: boolean; image?: string; diff?: ToolDiff }

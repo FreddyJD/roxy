@@ -9,9 +9,15 @@ const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '
 
 export function ThinkingIndicator(): JSX.Element {
   const [i, setI] = useState(0)
+  const [seconds, setSeconds] = useState(0)
   useEffect(() => {
-    const id = setInterval(() => setI((n) => (n + 1) % FRAMES.length), 90)
-    return () => clearInterval(id)
+    const spin = setInterval(() => setI((n) => (n + 1) % FRAMES.length), 90)
+    const start = Date.now()
+    const clock = setInterval(() => setSeconds(Math.floor((Date.now() - start) / 1000)), 1000)
+    return () => {
+      clearInterval(spin)
+      clearInterval(clock)
+    }
   }, [])
   return (
     <div className="flex items-center gap-2 py-1 text-sm">
@@ -19,6 +25,9 @@ export function ThinkingIndicator(): JSX.Element {
         {FRAMES[i]}
       </span>
       <span className="animate-pulse text-text-muted">thinking</span>
+      {seconds > 0 && (
+        <span className="font-mono text-xs tabular-nums text-text-subtle">{seconds}s</span>
+      )}
     </div>
   )
 }

@@ -453,6 +453,16 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
           } else {
             parts = [...parts, { type: 'text', text: event.delta }]
           }
+        } else if (event.type === 'reasoning') {
+          // The model's live thinking tokens — grow the current reasoning part so
+          // the "Thinking…" block fills in instead of just spinning.
+          const last = parts[parts.length - 1]
+          if (last && last.type === 'reasoning') {
+            const text = last.text + event.delta
+            parts = parts.map((p, i) => (i === parts.length - 1 ? { type: 'reasoning', text } : p))
+          } else {
+            parts = [...parts, { type: 'reasoning', text: event.delta }]
+          }
         } else if (event.type === 'tool-start') {
           callIndex.set(event.callId, parts.length)
           parts = [...parts, { type: 'tool', tool: event.tool, state: 'running', title: event.title }]
@@ -635,7 +645,7 @@ async function buildChatMessages(
             ? p.output
               ? `\`\`\`\n${p.output}\n\`\`\``
               : ''
-            : p.type === 'image'
+            : p.type === 'image' || p.type === 'reasoning'
               ? ''
               : p.text
         )

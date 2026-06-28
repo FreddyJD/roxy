@@ -177,6 +177,8 @@ interface StreamDelta {
   choices?: {
     delta?: {
       content?: string
+      reasoning_content?: string
+      reasoning?: string
       tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]
     }
   }[]
@@ -238,6 +240,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<void> {
     signal,
     emitTool: emit,
     onText: (delta) => emit({ type: 'text', delta }),
+    onReasoning: (delta) => emit({ type: 'reasoning', delta }),
     tools: schemasFor('all', true),
     reasoning,
     effort: reasoningEffort,
@@ -260,6 +263,8 @@ interface LoopOptions {
   emitTool: (event: LlmEvent) => void
   /** Prose deltas — the parent streams them; a subagent swallows them (captured via the return). */
   onText: (delta: string) => void
+  /** Reasoning/thinking deltas (when the model streams them) — the parent shows them live. */
+  onReasoning: (delta: string) => void
   tools: ToolSchema[]
   reasoning?: boolean
   effort?: ReasoningEffort
@@ -268,7 +273,7 @@ interface LoopOptions {
 
 /** The shared agent loop: stream → run tools (incl. `task`) → repeat. Returns the final prose. */
 async function runLoop(o: LoopOptions): Promise<string> {
-  const { url, headers, model, convo, cwd, parentChatId, sessionId, signal, emitTool, onText, tools, reasoning, effort, depth } =
+  const { url, headers, model, convo, cwd, parentChatId, sessionId, signal, emitTool, onText, onReasoning, tools, reasoning, effort, depth } =
     o
   let lastText = ''
 
@@ -285,7 +290,8 @@ async function runLoop(o: LoopOptions): Promise<string> {
       reasoning,
       effort,
       tools,
-      onText
+      onText,
+      onReasoning
     )
     if (text) lastText = text
     if (toolCalls.length === 0) return lastText // model finished with prose
@@ -474,6 +480,7 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
       signal,
       emitTool: emitNested,
       onText: addText,
+      onReasoning: () => {},
       tools: schemasFor(agent.tools, false),
       reasoning,
       effort,
@@ -523,7 +530,8 @@ async function streamOnce(
   reasoning: boolean | undefined,
   effort: ReasoningEffort | undefined,
   tools: ToolSchema[],
-  onText: (delta: string) => void
+  onText: (delta: string) => void,
+  onReasoning: (delta: string) => void
 ): Promise<{ text: string; toolCalls: ToolCallAccum[] }> {
   const res = await fetch(url, {
     method: 'POST',
@@ -574,6 +582,8 @@ async function streamOnce(
         continue
       }
       const delta = json.choices?.[0]?.delta
+      const reasoningDelta = delta?.reasoning_content ?? delta?.reasoning
+      if (reasoningDelta) onReasoning(reasoningDelta)
       if (delta?.content) {
         text += delta.content
         onText(delta.content)
