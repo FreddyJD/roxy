@@ -15,6 +15,7 @@ import type { Chat } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
 import { LoopsSection } from './LoopsSection'
+import { UpdateCard } from './UpdateCard'
 import roxy from '../assets/roxy.png'
 
 const MIN_WIDTH = 220
@@ -331,6 +332,8 @@ export function Sidebar(): JSX.Element {
           )}
         </section>
       </div>
+
+      <UpdateCard />
 
       {/* Drag the right edge to resize; double-click to reset to the default width. */}
       <div
