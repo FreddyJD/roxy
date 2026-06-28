@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { FolderOpen, ListTree, Repeat, Settings, X } from 'lucide-react'
+import { ChevronRight, FolderOpen, ListTree, Repeat, Settings, X } from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
 import { MessageBubble } from './MessageBubble'
@@ -45,6 +45,7 @@ export function ChatView(): JSX.Element {
   // back down — resume following once you scroll back to the end.
   const stickToBottom = useRef(true)
   const [loopPaneOpen, setLoopPaneOpen] = useState(false)
+  const [infoOpen, setInfoOpen] = useState(false)
 
   const onScroll = (): void => {
     const el = scrollRef.current
@@ -52,9 +53,10 @@ export function ChatView(): JSX.Element {
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }
 
-  // Switching chats starts you pinned to the latest message.
+  // Switching chats starts you pinned to the latest message + collapses details.
   useEffect(() => {
     stickToBottom.current = true
+    setInfoOpen(false)
   }, [activeChatId])
 
   useEffect(() => {
@@ -64,6 +66,10 @@ export function ChatView(): JSX.Element {
 
   const activeChat = chats.find((c) => c.id === activeChatId)
   const activeLoop = loops.find((l) => l.chatId === activeChatId)
+  const sessionTasks = activeChat?.tasks ?? []
+  const tasksDone = sessionTasks.filter((t) => t.status === 'completed').length
+  const hasSessionInfo =
+    activeChat?.kind === 'main' && (!!activeChat.description?.trim() || sessionTasks.length > 0)
 
   // No workspace open — prompt to open a folder to start a session.
   if (!activeChat) {
@@ -110,6 +116,28 @@ export function ChatView(): JSX.Element {
                 {activeChat.workspacePath}
               </span>
             )}
+            {hasSessionInfo && (
+              <button
+                onClick={() => setInfoOpen((o) => !o)}
+                title="Description & tasks"
+                className={cn(
+                  'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition',
+                  infoOpen
+                    ? 'bg-elevated text-text'
+                    : 'text-text-muted hover:bg-white/5 hover:text-text'
+                )}
+              >
+                <ListTree className="h-3.5 w-3.5" />
+                {sessionTasks.length > 0 && (
+                  <span className="tabular-nums">
+                    {tasksDone}/{sessionTasks.length}
+                  </span>
+                )}
+                <ChevronRight
+                  className={cn('h-3 w-3 transition-transform', infoOpen && 'rotate-90')}
+                />
+              </button>
+            )}
           </div>
         )}
         {activeLoop && (
@@ -128,7 +156,7 @@ export function ChatView(): JSX.Element {
         )}
       </header>
 
-      {activeChat.kind === 'main' && <SessionInfo chat={activeChat} />}
+      {activeChat.kind === 'main' && infoOpen && <SessionInfo chat={activeChat} />}
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
         {isEmpty ? (
