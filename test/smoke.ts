@@ -210,6 +210,27 @@ async function main(): Promise<void> {
   const bashr = await run('bash', { command: bashCmd })
   check('bash tool runs in workspace', bashr.ok && bashr.output.includes('roxy-bash-ok'), bashr.output)
 
+  // ---- background bash (long-running processes: dev servers / watchers) ----
+  const bgCmd =
+    process.platform === 'win32'
+      ? 'Write-Output roxy-bg-ok; Start-Sleep -Seconds 5'
+      : 'echo roxy-bg-ok; sleep 5'
+  const started = await run('bash', { command: bgCmd, background: true })
+  const bgId = started.output.match(/bg_\d+/)?.[0] ?? ''
+  check('bash background starts and returns an id', started.ok && bgId !== '', started.output)
+  await new Promise((r) => setTimeout(r, 1500))
+  const bgList = await run('bash_list', {})
+  check(
+    'bash_list shows the running process',
+    bgList.ok && bgList.output.includes(bgId) && bgList.output.includes('running'),
+    bgList.output
+  )
+  const bgOut = await run('bash_output', { id: bgId })
+  check('bash_output reads new output', bgOut.ok && bgOut.output.includes('roxy-bg-ok'), bgOut.output)
+  const bgKill = await run('bash_kill', { id: bgId })
+  check('bash_kill stops the process', bgKill.ok, bgKill.output)
+  check('bash_output rejects an unknown id', !(await run('bash_output', { id: 'bg_nope' })).ok)
+
   // ---- change_session_metadata (the agent organizing its own session) ----
   const metaChat = repo.createChat({ title: 'Session 1', workspacePath: ws, kind: 'main' })
   const metaRes = await runTool(

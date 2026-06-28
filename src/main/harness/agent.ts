@@ -57,9 +57,24 @@ const BASE_SCHEMAS = [
     { pattern: str('Regex.'), include: str('Glob of files to search (default "**/*").') },
     ['pattern']
   ),
-  fn('bash', 'Run a quick shell command in the workspace (PowerShell on Windows). Each call is a FRESH shell — the working directory and env do NOT persist between calls, and a command that never returns (a dev server) will time out.', { command: str('The command.') }, [
-    'command'
-  ]),
+  fn(
+    'bash',
+    'Run a shell command in the workspace (PowerShell on Windows). By default each call is a FRESH shell (cwd/env do NOT persist) that returns when the command finishes or after `timeout` seconds. For a LONG-RUNNING process (a dev server, watcher, `npm run dev`), pass background:true — it starts the process and returns immediately with an id; then use bash_output to read its logs and bash_kill to stop it.',
+    {
+      command: str('The command.'),
+      timeout: { type: 'number', description: 'Foreground timeout in seconds (default 60, max 600). Ignored when background is true.' },
+      background: { type: 'boolean', description: 'Run as a long-lived background process (servers/watchers) instead of waiting. Returns a process id.' }
+    },
+    ['command']
+  ),
+  fn('bash_list', 'List the background processes running in this workspace (id, status, runtime, command).', {}, []),
+  fn(
+    'bash_output',
+    'Read new output from a background process started by bash (background:true), and whether it is still running or has exited.',
+    { id: str('The background process id, e.g. "bg_1" (from bash or bash_list).') },
+    ['id']
+  ),
+  fn('bash_kill', 'Stop a background process started by bash (background:true).', { id: str('The background process id, e.g. "bg_1".') }, ['id']),
   fn('browser_open', 'Open the built-in browser to a URL.', { url: str('URL or bare host.') }, ['url']),
   fn('browser_screenshot', 'Screenshot the current browser page.', {}, []),
   fn('browser_read', 'Read the current page HTML (optionally a CSS selector).', { selector: str('CSS selector.') }, []),
@@ -606,6 +621,11 @@ function toolTitle(name: string, input: Record<string, unknown>): string {
   switch (name) {
     case 'bash':
       return s(input.command)
+    case 'bash_output':
+    case 'bash_kill':
+      return s(input.id)
+    case 'bash_list':
+      return 'background processes'
     case 'read':
     case 'write':
     case 'edit':

@@ -7,6 +7,7 @@ import { getDb } from './db/database'
 import { startLoopScheduler } from './services/loops'
 import { setAppIcon } from './services/browser'
 import { initAutoUpdater } from './services/updater'
+import { killAllBackground } from './harness'
 
 function createWindow(): BrowserWindow {
   const isMac = process.platform === 'darwin'
@@ -83,4 +84,9 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// Kill any agent-started background processes (dev servers/watchers) on quit.
+app.on('will-quit', () => {
+  killAllBackground()
 })

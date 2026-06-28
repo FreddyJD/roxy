@@ -26,6 +26,9 @@ const FileView = lazy(() => import('./FileView'))
 
 const TOOL_ICON: Record<string, LucideIcon> = {
   bash: Terminal,
+  bash_list: Terminal,
+  bash_output: Terminal,
+  bash_kill: Terminal,
   read: FileText,
   write: FileText,
   edit: Code,
@@ -58,8 +61,8 @@ const TOOL_ICON: Record<string, LucideIcon> = {
  * Renders a single tool call as an inline, expandable card — the way an agent
  * step shows up between reasoning and prose. Click to reveal the output.
  */
-/** A trailing status line our bash wrapper appends, e.g. `[exit 1]` / `[timed out]`. */
-const FOOTER_RE = /^\[(exit \d+|timed out|error:[\s\S]*)\]$/
+/** A trailing status line our bash wrapper appends, e.g. `[exit 1]` / `[timed out after 60s …]`. */
+const FOOTER_RE = /^\[(exit \d+|timed out[\s\S]*|error:[\s\S]*)\]$/
 
 /** Renders bash/shell output as a colored terminal block (prompt + ANSI body + status). */
 function TerminalOutput({
@@ -184,7 +187,7 @@ export function ToolCall({
             <FileView name={title || 'file.txt'} contents={body} />
           </Suspense>
         </div>
-      ) : open && tool === 'bash' ? (
+      ) : open && (tool === 'bash' || tool === 'bash_output') ? (
         <TerminalOutput text={body} state={state} />
       ) : open ? (
         <pre className="max-h-72 overflow-auto border-t border-border bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">

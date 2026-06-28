@@ -23,7 +23,25 @@ export interface ToolContext {
 const MAX_OUTPUT = 100_000
 const MAX_DIFF_SIDE = 100_000
 const MAX_IMAGE_BYTES = 3_000_000
+const MAX_BG_OUTPUT = 200_000
+const FG_TIMEOUT_MAX = 600_000
 const IGNORE = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/out/**']
+
+/** A long-running command started by `bash` with background:true — it keeps running after the call returns. */
+interface BgProc {
+  id: string
+  command: string
+  cwd: string
+  child: ReturnType<typeof spawn>
+  output: string
+  /** How far bash_output has already read, so each read returns only new output. */
+  readCursor: number
+  status: 'running' | 'exited' | 'killed' | 'error'
+  exitCode: number | null
+  startedAt: number
+}
+const bgProcs = new Map<string, BgProc>()
+let bgCounter = 0
 
 export async function runTool(
   name: string,
@@ -33,7 +51,16 @@ export async function runTool(
   try {
     switch (name) {
       case 'bash':
-        return await runBash(str(input.command), ctx.cwd, ctx.onChunk)
+        return await runBash(str(input.command), ctx.cwd, ctx.onChunk, {
+          timeout: num(input.timeout),
+          background: bool(input.background)
+        })
+      case 'bash_list':
+        return runBashList(ctx.cwd)
+      case 'bash_output':
+        return runBashOutput(str(input.id ?? input.process), ctx.cwd)
+      case 'bash_kill':
+        return runBashKill(str(input.id ?? input.process), ctx.cwd)
       case 'read':
         return await runRead(str(input.path ?? input.file), ctx.cwd)
       case 'write':
@@ -98,6 +125,16 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : v == null ? '' : String(v)
 }
 
+function num(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v)
+  return undefined
+}
+
+function bool(v: unknown): boolean {
+  return v === true || v === 'true' || v === 1 || v === '1'
+}
+
 function cap(text: string): string {
   return text.length > MAX_OUTPUT ? text.slice(0, MAX_OUTPUT) + '\n…(truncated)' : text
 }
@@ -141,9 +178,13 @@ function resolveInCwd(cwd: string, p: string): string {
 function runBash(
   command: string,
   cwd: string,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  opts: { timeout?: number; background?: boolean } = {}
 ): Promise<ToolResult> {
   if (!command.trim()) return Promise.resolve({ ok: false, output: 'bash: missing "command"' })
+  // Long-running commands (dev servers, watchers) run detached; poll via bash_output.
+  if (opts.background) return Promise.resolve(startBackground(command, cwd))
+  const timeoutMs = Math.min(Math.max((opts.timeout ?? 60) * 1000, 1000), FG_TIMEOUT_MAX)
   const { cmd, args } = shellInvocation(command)
   return new Promise((resolve) => {
     const header = `$ ${command}\n`
@@ -172,8 +213,8 @@ function runBash(
     child.stderr?.on('data', onData)
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill()
-    }, 60_000)
+      killProc(child)
+    }, timeoutMs)
     child.on('error', (e) => {
       clearTimeout(timer)
       const msg = `\n[error: ${e.message}]`
@@ -183,11 +224,128 @@ function runBash(
     child.on('close', (code) => {
       clearTimeout(timer)
       const exitCode = code ?? (timedOut ? 124 : 0)
-      const suffix = timedOut ? '\n[timed out]' : exitCode !== 0 ? `\n[exit ${exitCode}]` : ''
+      const suffix = timedOut
+        ? `\n[timed out after ${Math.round(timeoutMs / 1000)}s — for a server or watcher, call bash again with background:true]`
+        : exitCode !== 0
+          ? `\n[exit ${exitCode}]`
+          : ''
       if (suffix) onChunk?.(suffix)
       resolve({ ok: !timedOut && exitCode === 0, output: (acc + suffix).trimEnd() || '(no output)' })
     })
   })
+}
+
+/** Start a long-running command that keeps running after this call returns. */
+function startBackground(command: string, cwd: string): ToolResult {
+  const id = `bg_${++bgCounter}`
+  const { cmd, args } = shellInvocation(command)
+  const child = spawn(cmd, args, {
+    cwd,
+    windowsHide: true,
+    env: { ...process.env, FORCE_COLOR: '3', CLICOLOR_FORCE: '1', TERM: 'xterm-256color' }
+  })
+  const proc: BgProc = {
+    id,
+    command,
+    cwd,
+    child,
+    output: `$ ${command}\n`,
+    readCursor: 0,
+    status: 'running',
+    exitCode: null,
+    startedAt: Date.now()
+  }
+  const append = (buf: Buffer): void => {
+    proc.output += buf.toString()
+    if (proc.output.length > MAX_BG_OUTPUT) {
+      const drop = proc.output.length - MAX_BG_OUTPUT
+      proc.output = proc.output.slice(drop)
+      proc.readCursor = Math.max(0, proc.readCursor - drop)
+    }
+  }
+  child.stdout?.on('data', append)
+  child.stderr?.on('data', append)
+  child.on('error', (e) => {
+    proc.status = 'error'
+    proc.output += `\n[error: ${e.message}]`
+  })
+  child.on('close', (code) => {
+    proc.exitCode = code ?? proc.exitCode
+    if (proc.status === 'running') proc.status = 'exited'
+  })
+  bgProcs.set(id, proc)
+  return {
+    ok: true,
+    output:
+      `Started background process ${id}: $ ${command}\n` +
+      `It runs in the background in this workspace. ` +
+      `Use bash_output({ id: "${id}" }) to read new logs, bash_kill({ id: "${id}" }) to stop it, or bash_list to see all running processes.`
+  }
+}
+
+function ownedBg(id: string, cwd: string): BgProc | undefined {
+  const p = bgProcs.get(id)
+  return p && p.cwd === cwd ? p : undefined
+}
+
+/** A short status label for a background process, e.g. `running 12s` / `exited (exit 0)`. */
+function bgState(p: BgProc): string {
+  const secs = Math.round((Date.now() - p.startedAt) / 1000)
+  if (p.status === 'running') return `running ${secs}s`
+  if (p.exitCode != null) return `${p.status} (exit ${p.exitCode})`
+  return p.status
+}
+
+function runBashList(cwd: string): ToolResult {
+  const mine = [...bgProcs.values()].filter((p) => p.cwd === cwd)
+  if (!mine.length) return { ok: true, output: 'No background processes in this workspace.' }
+  return { ok: true, output: mine.map((p) => `${p.id}  [${bgState(p)}]  $ ${p.command}`).join('\n') }
+}
+
+function runBashOutput(id: string, cwd: string): ToolResult {
+  if (!id) return { ok: false, output: 'bash_output: missing "id"' }
+  const p = ownedBg(id, cwd)
+  if (!p)
+    return { ok: false, output: `No background process "${id}" in this workspace. Use bash_list to see them.` }
+  let fresh = p.output.slice(p.readCursor)
+  p.readCursor = p.output.length
+  if (fresh.length > MAX_OUTPUT) fresh = '…(truncated)\n' + fresh.slice(fresh.length - MAX_OUTPUT)
+  const body = fresh.trim() ? fresh.replace(/[\r\n]+$/, '') : '(no new output)'
+  return { ok: true, output: `[${id} ${bgState(p)}]\n${body}` }
+}
+
+function runBashKill(id: string, cwd: string): ToolResult {
+  if (!id) return { ok: false, output: 'bash_kill: missing "id"' }
+  const p = ownedBg(id, cwd)
+  if (!p) return { ok: false, output: `No background process "${id}" in this workspace.` }
+  if (p.status === 'running') {
+    p.status = 'killed'
+    killProc(p.child)
+  }
+  return { ok: true, output: `Killed background process ${id} ($ ${p.command}).` }
+}
+
+/** Kill a child process and, on Windows, its whole tree (servers spawn children). */
+function killProc(child: ReturnType<typeof spawn>): void {
+  try {
+    if (process.platform === 'win32' && child.pid) {
+      spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true })
+    } else {
+      child.kill()
+    }
+  } catch {
+    // already gone
+  }
+}
+
+/** Kill every background process — called on app quit so dev servers aren't orphaned. */
+export function killAllBackground(): void {
+  for (const p of bgProcs.values()) {
+    if (p.status === 'running') {
+      p.status = 'killed'
+      killProc(p.child)
+    }
+  }
 }
 
 /** How to invoke a shell command per platform (PowerShell on Windows, sh elsewhere). */

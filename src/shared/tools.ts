@@ -26,6 +26,9 @@ export const TOOLS: ToolDef[] = [
   { id: 'glob', name: 'glob', description: 'Find files by glob pattern.', mutates: false },
   { id: 'list', name: 'list', description: 'List directory contents.', mutates: false },
   { id: 'bash', name: 'bash', description: 'Run a shell command in the workspace.', mutates: true },
+  { id: 'bash_list', name: 'bash_list', description: 'List background processes in the workspace.', mutates: false },
+  { id: 'bash_output', name: 'bash_output', description: 'Read output from a background process.', mutates: false },
+  { id: 'bash_kill', name: 'bash_kill', description: 'Stop a background process.', mutates: true },
   { id: 'webfetch', name: 'webfetch', description: 'Fetch the contents of a URL.', mutates: false },
   {
     id: 'websearch',

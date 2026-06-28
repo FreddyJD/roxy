@@ -7,5 +7,5 @@
  * Today it exposes the tool dispatch (`runTool`); the model loop plugs in here so
  * tool calling lives inside the harness rather than as a standalone IPC.
  */
-export { runTool, type ToolContext } from './tools'
+export { runTool, killAllBackground, type ToolContext } from './tools'
 export { runAgentTurn, type RunTurnOptions } from './agent'
