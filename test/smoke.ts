@@ -15,7 +15,6 @@ import * as repo from '../src/main/db/repo'
 import { closeDb } from '../src/main/db/database'
 import { runTool } from '../src/main/harness'
 import * as browser from '../src/main/services/browser'
-import * as terminal from '../src/main/services/terminal'
 import type { MessagePart } from '../src/shared/types'
 
 let pass = 0
@@ -208,6 +207,35 @@ async function main(): Promise<void> {
   const bashCmd = process.platform === 'win32' ? 'Write-Output roxy-bash-ok' : 'echo roxy-bash-ok'
   const bashr = await run('bash', { command: bashCmd })
   check('bash tool runs in workspace', bashr.ok && bashr.output.includes('roxy-bash-ok'), bashr.output)
+
+  // ---- change_session_metadata (the agent organizing its own session) ----
+  const metaChat = repo.createChat({ title: 'Session 1', workspacePath: ws, kind: 'main' })
+  const metaRes = await runTool(
+    'change_session_metadata',
+    {
+      title: 'Auth refactor',
+      description: 'Refactoring the login flow',
+      tasks: [
+        { title: 'read auth code', status: 'completed' },
+        { title: 'write tests', status: 'in_progress' }
+      ]
+    },
+    { cwd: ws, sessionId: metaChat.id }
+  )
+  const metaAfter = repo.getChat(metaChat.id)
+  check(
+    'change_session_metadata sets name/description/tasks',
+    metaRes.ok &&
+      metaAfter?.title === 'Auth refactor' &&
+      metaAfter?.description === 'Refactoring the login flow' &&
+      metaAfter?.tasks.length === 2 &&
+      metaAfter?.tasks[0].status === 'completed',
+    metaRes.output
+  )
+  check(
+    'change_session_metadata refuses without a session',
+    !(await runTool('change_session_metadata', { title: 'x' }, { cwd: ws })).ok
+  )
   const escape = await run('read', { path: '../../../etc/hosts' })
   check('path-escape is rejected (sandbox)', !escape.ok)
 
@@ -276,63 +304,6 @@ async function main(): Promise<void> {
     browser.close()
   } catch (e) {
     check('browser tools', false, e instanceof Error ? e.message : String(e))
-  }
-
-  // ---- terminal sessions (cross-platform persistent shell) ----
-  try {
-    const sess = terminal.createSession({ cwd: ws, name: 'smoke-term' })
-    check('terminal createSession starts a session', Boolean(sess.id) && sess.status === 'running')
-    const listed = await withTimeout(run('terminal_list', {}), 20_000, 'terminal_list')
-    check(
-      'terminal_list shows the session',
-      listed.ok && listed.output.includes(sess.id),
-      listed.output.slice(0, 120)
-    )
-    const sent = await withTimeout(
-      run('terminal_send', { id: sess.id, command: 'echo hello-roxy' }),
-      20_000,
-      'terminal_send'
-    )
-    check(
-      'terminal_send runs a command and returns its output',
-      sent.output.includes('hello-roxy'),
-      sent.output.slice(0, 160)
-    )
-    const readBack = await withTimeout(run('terminal_read', { id: sess.id }), 20_000, 'terminal_read')
-    check(
-      'terminal_read returns buffered output',
-      readBack.output.includes('hello-roxy'),
-      readBack.output.slice(0, 160)
-    )
-    // Isolation: a session in ANOTHER workspace must be invisible + untouchable here.
-    const ws2 = path.join(tmp, 'workspace2')
-    await fs.mkdir(ws2, { recursive: true })
-    const other = terminal.createSession({ cwd: ws2, name: 'other-ws' })
-    const scoped = await withTimeout(run('terminal_list', {}), 20_000, 'terminal_list (scoped)')
-    check(
-      'terminal_list is scoped to the workspace',
-      scoped.output.includes(sess.id) && !scoped.output.includes(other.id),
-      scoped.output.slice(0, 160)
-    )
-    const cross = await withTimeout(
-      run('terminal_send', { id: other.id, command: 'echo nope' }),
-      20_000,
-      'terminal_send (cross)'
-    )
-    check(
-      'terminal_send refuses another workspace\u2019s session',
-      !cross.ok && /this workspace/i.test(cross.output),
-      cross.output.slice(0, 160)
-    )
-    terminal.killSession(other.id)
-    const killed = await withTimeout(run('terminal_kill', { id: sess.id }), 20_000, 'terminal_kill')
-    check(
-      'terminal_kill removes the session',
-      killed.ok && !terminal.listSessions().some((s) => s.id === sess.id),
-      killed.output
-    )
-  } catch (e) {
-    check('terminal sessions', false, e instanceof Error ? e.message : String(e))
   }
 
   closeDb()

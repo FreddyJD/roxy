@@ -5,6 +5,7 @@ import { cn } from '../lib/cn'
 import { MessageBubble } from './MessageBubble'
 import { Composer } from './Composer'
 import { LoopDetailsPane } from './LoopDetailsPane'
+import { SessionInfo } from './SessionInfo'
 import {
   Queue,
   QueueItem,
@@ -126,6 +127,8 @@ export function ChatView(): JSX.Element {
           </button>
         )}
       </header>
+
+      {activeChat.kind === 'main' && <SessionInfo chat={activeChat} />}
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
         {isEmpty ? (

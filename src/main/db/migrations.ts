@@ -103,5 +103,11 @@ export const MIGRATIONS: string[] = [
   `,
 
   // ---- v9: subagent sessions link back to the chat that spawned them ----
-  /* sql */ `ALTER TABLE chats ADD COLUMN parent_id TEXT;`
+  /* sql */ `ALTER TABLE chats ADD COLUMN parent_id TEXT;`,
+
+  // ---- v10: agent-set session metadata (description + task checklist JSON) ----
+  /* sql */ `
+    ALTER TABLE chats ADD COLUMN description TEXT;
+    ALTER TABLE chats ADD COLUMN tasks TEXT;
+  `
 ]

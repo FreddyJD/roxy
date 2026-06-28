@@ -6,9 +6,7 @@ import type {
   LlmDelta,
   BrowserState,
   BrowserTab,
-  TerminalSessionInfo,
-  TerminalDataEvent,
-  TerminalExitEvent
+  UpdateState
 } from '../shared/api'
 
 /**
@@ -47,6 +45,16 @@ const roxy: RoxyApi = {
   system: {
     getVersions: () => ipcRenderer.invoke(CHANNELS.systemGetVersions),
     openExternal: (url) => ipcRenderer.invoke(CHANNELS.systemOpenExternal, url)
+  },
+  updates: {
+    check: () => ipcRenderer.invoke(CHANNELS.updateCheck),
+    install: () => ipcRenderer.invoke(CHANNELS.updateInstall),
+    getState: () => ipcRenderer.invoke(CHANNELS.updateGetState),
+    onStatus: (callback) => {
+      const handler = (_e: Electron.IpcRendererEvent, s: UpdateState): void => callback(s)
+      ipcRenderer.on(CHANNELS.updateStatus, handler)
+      return () => ipcRenderer.removeListener(CHANNELS.updateStatus, handler)
+    }
   },
   copilot: {
     start: () => ipcRenderer.invoke(CHANNELS.copilotStart),
@@ -113,28 +121,6 @@ const roxy: RoxyApi = {
         callback(tabs)
       ipcRenderer.on(CHANNELS.browserTabs, handler)
       return () => ipcRenderer.removeListener(CHANNELS.browserTabs, handler)
-    }
-  },
-  terminal: {
-    list: () => ipcRenderer.invoke(CHANNELS.terminalList),
-    create: (input) => ipcRenderer.invoke(CHANNELS.terminalCreate, input),
-    read: (id) => ipcRenderer.invoke(CHANNELS.terminalRead, id),
-    write: (id, data) => ipcRenderer.invoke(CHANNELS.terminalWrite, id, data),
-    kill: (id) => ipcRenderer.invoke(CHANNELS.terminalKill, id),
-    onData: (callback) => {
-      const handler = (_e: Electron.IpcRendererEvent, p: TerminalDataEvent): void => callback(p)
-      ipcRenderer.on(CHANNELS.terminalData, handler)
-      return () => ipcRenderer.removeListener(CHANNELS.terminalData, handler)
-    },
-    onExit: (callback) => {
-      const handler = (_e: Electron.IpcRendererEvent, p: TerminalExitEvent): void => callback(p)
-      ipcRenderer.on(CHANNELS.terminalExit, handler)
-      return () => ipcRenderer.removeListener(CHANNELS.terminalExit, handler)
-    },
-    onSessions: (callback) => {
-      const handler = (_e: Electron.IpcRendererEvent, s: TerminalSessionInfo[]): void => callback(s)
-      ipcRenderer.on(CHANNELS.terminalSessions, handler)
-      return () => ipcRenderer.removeListener(CHANNELS.terminalSessions, handler)
     }
   }
 }

@@ -22,8 +22,13 @@ import {
   type OpenAiContentPart
 } from '../services/llm'
 
-const MAX_STEPS = 16
 const MAX_SUBAGENT_DEPTH = 1
+
+/** Strip ANSI escape sequences so colored shell output doesn't pollute the model's context. */
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+}
 
 /** OpenAI function schemas for the workspace/browser tools (the base toolset). */
 const BASE_SCHEMAS = [
@@ -52,7 +57,7 @@ const BASE_SCHEMAS = [
     { pattern: str('Regex.'), include: str('Glob of files to search (default "**/*").') },
     ['pattern']
   ),
-  fn('bash', 'Run a quick ONE-OFF shell command in the workspace (PowerShell on Windows). Each call is a FRESH shell — the working directory and env do NOT persist between calls, and a command that never returns (a dev server) will time out. For a long-running process, or a shell whose state must persist, use terminal_create / terminal_send instead.', { command: str('The command.') }, [
+  fn('bash', 'Run a quick shell command in the workspace (PowerShell on Windows). Each call is a FRESH shell — the working directory and env do NOT persist between calls, and a command that never returns (a dev server) will time out.', { command: str('The command.') }, [
     'command'
   ]),
   fn('browser_open', 'Open the built-in browser to a URL.', { url: str('URL or bare host.') }, ['url']),
@@ -88,21 +93,31 @@ const BASE_SCHEMAS = [
   fn('loop_enable', 'Resume a paused loop by name or id.', { loop: str('Loop name or id.') }, ['loop']),
   fn('loop_disable', 'Pause a running loop by name or id.', { loop: str('Loop name or id.') }, ['loop']),
   fn('loop_remove', 'Delete a loop by name or id.', { loop: str('Loop name or id.') }, ['loop']),
-  fn('terminal_list', 'List the persistent terminal sessions running in THIS workspace (id, name, status, shell). These are separate from the one-shot `bash` tool. Use it to find a session id.', {}, []),
   fn(
-    'terminal_create',
-    'Start a NEW persistent terminal session (a long-lived shell) in this workspace — separate from the one-shot `bash` tool. Use it for processes that should keep running, e.g. a dev server (`npm run dev`). Optionally run an initial command.',
-    { name: str('Optional short label.'), command: str('Optional command to run on start, e.g. "npm run dev".') },
+    'change_session_metadata',
+    "Organize THIS session: set its `title` (shown in the sidebar), a one-line `description` of what it's about, and/or a `tasks` checklist you maintain as you work. Send the FULL tasks array each time — it REPLACES the previous list. Use it to rename a vaguely-named session and to track multi-step work (mark a task in_progress when you start it, completed when done).",
+    {
+      title: str('A short session name, ≤ 80 chars. Optional.'),
+      description: str('A one-line summary of what this session is for. Optional.'),
+      tasks: {
+        type: 'array',
+        description: 'The full task checklist, replacing the previous one. Optional.',
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'What the task is.' },
+            status: {
+              type: 'string',
+              enum: ['pending', 'in_progress', 'completed'],
+              description: 'Task status.'
+            }
+          },
+          required: ['title', 'status']
+        }
+      }
+    },
     []
-  ),
-  fn(
-    'terminal_send',
-    'Run a command in an existing terminal session (in this workspace) and return its output. Long-running processes (dev servers) return their startup output and keep running in the background — use terminal_read to see more.',
-    { id: str('Session id from terminal_list / terminal_create.'), command: str('The command to run.') },
-    ['id', 'command']
-  ),
-  fn('terminal_read', 'Read the recent output of a terminal session in this workspace — e.g. to check on a running dev server.', { id: str('Session id.') }, ['id']),
-  fn('terminal_kill', 'Stop and remove a terminal session in this workspace (kills its process).', { id: str('Session id.') }, ['id'])
+  )
 ]
 
 function str(description: string): { type: 'string'; description: string } {
@@ -219,6 +234,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<void> {
     convo,
     cwd,
     parentChatId: chatId,
+    sessionId: chatId,
     signal,
     emitTool: emit,
     onText: (delta) => emit({ type: 'text', delta }),
@@ -237,6 +253,8 @@ interface LoopOptions {
   cwd: string
   /** Parent session id — subagents spawned here persist as its `sub` children. */
   parentChatId?: string
+  /** The session this loop runs — the target of `change_session_metadata`. */
+  sessionId?: string
   signal: AbortSignal
   /** Tool cards — the parent's and any subagent's tool work both surface here. */
   emitTool: (event: LlmEvent) => void
@@ -250,11 +268,13 @@ interface LoopOptions {
 
 /** The shared agent loop: stream → run tools (incl. `task`) → repeat. Returns the final prose. */
 async function runLoop(o: LoopOptions): Promise<string> {
-  const { url, headers, model, convo, cwd, parentChatId, signal, emitTool, onText, tools, reasoning, effort, depth } =
+  const { url, headers, model, convo, cwd, parentChatId, sessionId, signal, emitTool, onText, tools, reasoning, effort, depth } =
     o
   let lastText = ''
 
-  for (let step = 0; step < MAX_STEPS; step++) {
+  // No step cap — keep streaming → running tools → repeating until the model
+  // finishes with prose (no tool calls) or the user stops it (signal aborts).
+  for (;;) {
     if (signal.aborted) return lastText
     const { text, toolCalls } = await streamOnce(
       url,
@@ -313,6 +333,7 @@ async function runLoop(o: LoopOptions): Promise<string> {
       emitTool({ type: 'tool-start', callId: tc.id, tool: tc.name, title: toolTitle(tc.name, input) })
       const result = await runTool(tc.name, input, {
         cwd,
+        sessionId,
         onChunk: (chunk) => emitTool({ type: 'tool-delta', callId: tc.id, chunk })
       })
       emitTool({
@@ -326,12 +347,10 @@ async function runLoop(o: LoopOptions): Promise<string> {
       convo.push({
         role: 'tool',
         tool_call_id: tc.id,
-        content: result.output.slice(0, 8000) || '(no output)'
+        content: stripAnsi(result.output).slice(0, 8000) || '(no output)'
       })
     }
   }
-  onText('\n\n_[stopped after reaching the tool-step limit]_')
-  return lastText
 }
 
 interface SubagentOptions {
@@ -588,13 +607,8 @@ function toolTitle(name: string, input: Record<string, unknown>): string {
       return s(input.pattern)
     case 'list':
       return s(input.path) || '.'
-    case 'terminal_create':
-      return s(input.command) || s(input.name) || 'new terminal'
-    case 'terminal_send':
-      return s(input.command)
-    case 'terminal_read':
-    case 'terminal_kill':
-      return s(input.id)
+    case 'change_session_metadata':
+      return s(input.title) || s(input.name) || 'session metadata'
     default:
       return ''
   }

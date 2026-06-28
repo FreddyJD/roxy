@@ -5,6 +5,10 @@
   "main": "./out/main/index.js",
   "author": "",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FreddyJD/roxy.git"
+  },
   "engines": {
     "node": ">=20"
   },
@@ -17,6 +21,10 @@
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux",
+    "release": "npm run build && electron-builder --publish always",
+    "release:win": "npm run build && electron-builder --win --publish always",
+    "release:mac": "npm run build && electron-builder --mac --publish always",
+    "release:linux": "npm run build && electron-builder --linux --publish always",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
@@ -36,6 +44,7 @@
     "@pierre/diffs": "^1.2.11",
     "better-sqlite3": "^12.11.1",
     "clsx": "^2.1.1",
+    "electron-updater": "^6.3.9",
     "lucide-react": "^1.21.0",
     "react-router-dom": "^7.18.0",
     "streamdown": "^2.5.0",

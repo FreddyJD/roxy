@@ -1,0 +1,8 @@
+# Lets electron-updater check GitHub Releases from a dev / unpacked build so you
+# can test the update flow without shipping. The packaged app ignores this and
+# uses the generated app-update.yml instead. Excluded from the build (see the
+# `files` globs in electron-builder.yml).
+provider: github
+owner: FreddyJD
+repo: roxy
+updaterCacheDirName: roxy-updater

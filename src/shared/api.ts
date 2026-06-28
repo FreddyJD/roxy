@@ -114,6 +114,25 @@ export interface BrowserTab {
   active: boolean
 }
 
+/** Auto-update lifecycle state (main -> renderer). */
+export type UpdateState =
+  | { status: 'idle' }
+  | { status: 'checking' }
+  | { status: 'available'; version: string }
+  | { status: 'not-available' }
+  | { status: 'downloading'; percent: number }
+  | { status: 'downloaded'; version: string }
+  | { status: 'error'; message: string }
+
+/** Snapshot returned by `updates.getState()`. */
+export interface UpdateInfo {
+  /** The running app version. */
+  version: string
+  /** False in dev/unpacked builds, where updates are inert. */
+  packaged: boolean
+  state: UpdateState
+}
+
 export interface RoxyApi {
   settings: {
     getAll(): Promise<AppSettings>
@@ -145,6 +164,16 @@ export interface RoxyApi {
   system: {
     getVersions(): Promise<AppVersions>
     openExternal(url: string): Promise<void>
+  }
+  updates: {
+    /** Manually trigger an update check. */
+    check(): Promise<void>
+    /** Quit and install a downloaded update. */
+    install(): Promise<void>
+    /** The running version + the latest known update state. */
+    getState(): Promise<UpdateInfo>
+    /** Subscribe to update-status changes; returns an unsubscribe fn. */
+    onStatus(callback: (state: UpdateState) => void): () => void
   }
   copilot: {
     start(): Promise<DeviceFlowStart>

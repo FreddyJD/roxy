@@ -1,0 +1,102 @@
+name: Release
+
+# Auto-release on a version bump. When a push to `main` changes package.json and
+# that version hasn't been published yet, this builds installers for Windows,
+# macOS and Linux, uploads them to a DRAFT GitHub Release, and — only once ALL
+# three platforms succeed — flips the release to published so the auto-updater
+# and users can download it. Typical flow:
+#
+#   npm version patch     # bumps package.json to the next version
+#   git push              # merge to main → this workflow runs and releases it
+#
+# No version change → no release (the guard below skips it). You can also run it
+# by hand from the Actions tab (workflow_dispatch) for whatever version is in
+# package.json.
+
+on:
+  push:
+    branches: [main]
+    paths: ['package.json']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # Release only when package.json's version has no PUBLISHED release yet, so a
+  # re-merge that doesn't bump the version is a no-op (and a stuck draft from a
+  # failed run self-heals on the next push).
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VERSION" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q '^false$'; then
+            echo "v$VERSION is already published — nothing to do."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Releasing v$VERSION."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Build + upload each OS's installers to the (draft) release for this version.
+  build:
+    needs: guard
+    if: needs.guard.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer + main
+        run: npm run build
+
+      - name: Package & upload to the draft release
+        run: npx --no-install electron-builder --publish always
+        env:
+          # Provided automatically by Actions; lets electron-builder upload assets.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ----- Add later, once you have signing credentials -----
+          # Windows code signing (Azure Trusted Signing):
+          # AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          # AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          # AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          # macOS signing + notarization (Apple Developer ID):
+          # CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          # CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+  # Every platform uploaded successfully → make the release live (creates the
+  # vX.Y.Z tag and lets the auto-updater pick it up). If any build failed, the
+  # release stays a draft so a half-finished version never ships.
+  publish:
+    needs: [guard, build]
+    if: needs.guard.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "v${{ needs.guard.outputs.version }}" --draft=false --latest

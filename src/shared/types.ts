@@ -82,6 +82,12 @@ export interface DeviceFlowStart {
  */
 export type SessionKind = 'main' | 'sub' | 'loop'
 
+/** A single item in a session's agent-maintained task checklist. */
+export interface SessionTask {
+  title: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
 export interface Chat {
   id: string
   title: string
@@ -95,6 +101,10 @@ export interface Chat {
   contextSummary: string | null
   /** createdAt of the last message folded into the summary (0/null = none). */
   contextSummaryAt: number | null
+  /** A short agent-written summary of what this session is about. */
+  description: string | null
+  /** Agent-maintained task checklist for this session. */
+  tasks: SessionTask[]
   createdAt: number
   updatedAt: number
 }

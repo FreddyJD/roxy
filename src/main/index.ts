@@ -6,8 +6,9 @@ import { registerIpc } from './ipc'
 import { getDb } from './db/database'
 import { startLoopScheduler } from './services/loops'
 import { setAppIcon } from './services/browser'
+import { initAutoUpdater } from './services/updater'
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
   const isMac = process.platform === 'darwin'
   const mainWindow = new BrowserWindow({
     width: 1100,
@@ -47,6 +48,8 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  return mainWindow
 }
 
 app.whenReady().then(() => {
@@ -68,7 +71,8 @@ app.whenReady().then(() => {
   registerIpc()
   startLoopScheduler()
 
-  createWindow()
+  const mainWindow = createWindow()
+  initAutoUpdater(mainWindow)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -10,7 +10,7 @@ import type {
   QueueItem,
   ReasoningEffort
 } from '@shared/types'
-import type { ChatMessage, CreateLoopInput, LlmEvent, ModelInfo, TerminalSessionInfo } from '@shared/api'
+import type { ChatMessage, CreateLoopInput, LlmEvent, ModelInfo } from '@shared/api'
 import { api } from './api'
 import type { ComposerImage } from './images'
 
@@ -36,10 +36,6 @@ interface RoxyStore {
   stopChats: Record<string, boolean>
   /** Chats currently being compacted, keyed by chat id. */
   compactingChats: Record<string, boolean>
-  /** Live terminal sessions (in-memory in main; not persisted across restarts). */
-  terminals: TerminalSessionInfo[]
-  /** The terminal shown in the main pane, or null when a chat is shown. */
-  activeTerminalId: string | null
 
   bootstrap: () => Promise<void>
   refreshChats: () => Promise<void>
@@ -54,10 +50,6 @@ interface RoxyStore {
   clearActive: () => void
   newSession: () => Promise<void>
   newSessionInProject: (workspacePath: string) => Promise<void>
-  refreshTerminals: () => Promise<void>
-  newTerminalInProject: (workspacePath: string) => Promise<void>
-  selectTerminal: (id: string) => void
-  killTerminal: (id: string) => Promise<void>
   createLoop: (input: CreateLoopInput) => Promise<void>
   setLoopEnabled: (id: string, enabled: boolean) => Promise<void>
   removeLoop: (id: string) => Promise<void>
@@ -76,7 +68,6 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 let loopTickSubscribed = false
 let llmDeltaSubscribed = false
-let terminalSubscribed = false
 /** Routes streamed completion events to the in-flight send for a request id. */
 const deltaHandlers = new Map<string, (event: LlmEvent) => void>()
 /** The active llm request id per chat, so stop() can abort the right stream. */
@@ -99,18 +90,15 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   queue: [],
   stopChats: {},
   compactingChats: {},
-  terminals: [],
-  activeTerminalId: null,
 
   bootstrap: async () => {
-    const [settings, providers, chats, loops, terminals] = await Promise.all([
+    const [settings, providers, chats, loops] = await Promise.all([
       api.settings.getAll(),
       api.providers.listConnected(),
       api.chats.list(),
-      api.loops.list(),
-      api.terminal.list()
+      api.loops.list()
     ])
-    set({ settings, providers, chats, loops, terminals, ready: true })
+    set({ settings, providers, chats, loops, ready: true })
 
     if (!loopTickSubscribed) {
       loopTickSubscribed = true
@@ -147,12 +135,6 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     if (!llmDeltaSubscribed) {
       llmDeltaSubscribed = true
       api.llm.onDelta(({ requestId, event }) => deltaHandlers.get(requestId)?.(event))
-    }
-
-    if (!terminalSubscribed) {
-      terminalSubscribed = true
-      // Live session-list changes (create / exit / kill) keep the sidebar fresh.
-      api.terminal.onSessions((sessions) => set({ terminals: sessions }))
     }
 
     const firstSession = chats.find((c) => c.kind === 'main')
@@ -227,7 +209,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   selectChat: async (id) => {
     // Per-chat send state survives switching — just swap which chat is shown.
     // Clear messages/queue first so the previous chat's content never flashes.
-    set({ activeChatId: id, activeTerminalId: null, messages: [], queue: [], activeAgentId: DEFAULT_AGENT_ID })
+    set({ activeChatId: id, messages: [], queue: [], activeAgentId: DEFAULT_AGENT_ID })
     const [messages, queue] = await Promise.all([api.messages.list(id), api.queue.list(id)])
     if (get().activeChatId === id) set({ messages, queue })
   },
@@ -256,28 +238,6 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const chat = await api.chats.create({ title: `Session ${count + 1}`, workspacePath })
     await get().refreshChats()
     await get().selectChat(chat.id)
-  },
-
-  refreshTerminals: async () => {
-    set({ terminals: await api.terminal.list() })
-  },
-
-  newTerminalInProject: async (workspacePath) => {
-    const count = get().terminals.filter((t) => t.cwd === workspacePath).length
-    const info = await api.terminal.create({
-      cwd: workspacePath,
-      name: `Terminal ${count + 1}`
-    })
-    await get().refreshTerminals()
-    get().selectTerminal(info.id)
-  },
-
-  selectTerminal: (id) => set({ activeTerminalId: id, activeChatId: null }),
-
-  killTerminal: async (id) => {
-    await api.terminal.kill(id)
-    await get().refreshTerminals()
-    if (get().activeTerminalId === id) set({ activeTerminalId: null })
   },
 
   deleteChat: async (id) => {
@@ -538,6 +498,14 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
                   set({ messages: await api.messages.list(active) })
                 }
               })()
+            } else if (
+              event.ok &&
+              ended?.type === 'tool' &&
+              ended.tool === 'change_session_metadata'
+            ) {
+              // The agent renamed / described / re-tasked its own session —
+              // refresh so the sidebar title + the SessionInfo strip update live.
+              void get().refreshChats()
             }
           }
         }

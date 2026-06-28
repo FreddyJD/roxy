@@ -8,14 +8,14 @@ import { spawn } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { glob } from 'tinyglobby'
-import type { ToolDiff, ToolResult } from '../../shared/types'
-import type { TerminalSessionInfo } from '../../shared/api'
+import type { ToolDiff, ToolResult, SessionTask } from '../../shared/types'
 import * as browser from '../services/browser'
-import * as terminal from '../services/terminal'
 import * as repo from '../db/repo'
 
 export interface ToolContext {
   cwd: string
+  /** The session (chat id) this turn runs in — the target of session-metadata tools. */
+  sessionId?: string
   /** Optional sink for incremental output (bash streams its logs here live). */
   onChunk?: (chunk: string) => void
 }
@@ -84,16 +84,8 @@ export async function runTool(
         return runLoopSet(str(input.loop ?? input.name ?? input.id), true)
       case 'loop_disable':
         return runLoopSet(str(input.loop ?? input.name ?? input.id), false)
-      case 'terminal_list':
-        return runTerminalList(ctx.cwd)
-      case 'terminal_create':
-        return await runTerminalCreate(input, ctx.cwd)
-      case 'terminal_send':
-        return await runTerminalSend(str(input.id ?? input.session), str(input.command), ctx.cwd)
-      case 'terminal_read':
-        return runTerminalRead(str(input.id ?? input.session), ctx.cwd)
-      case 'terminal_kill':
-        return runTerminalKill(str(input.id ?? input.session), ctx.cwd)
+      case 'change_session_metadata':
+        return runSetSessionMetadata(input, ctx.sessionId)
       default:
         return { ok: false, output: `Unknown tool: ${name}` }
     }
@@ -159,7 +151,13 @@ function runBash(
     let acc = header
     let truncated = false
     let timedOut = false
-    const child = spawn(cmd, args, { cwd, windowsHide: true })
+    const child = spawn(cmd, args, {
+      cwd,
+      windowsHide: true,
+      // Coax CLIs into emitting ANSI color even though stdout is a pipe, not a
+      // TTY. The UI renders the color; the agent strips it before the model reads it.
+      env: { ...process.env, FORCE_COLOR: '3', CLICOLOR_FORCE: '1', TERM: 'xterm-256color' }
+    })
     const onData = (buf: Buffer): void => {
       if (truncated) return
       let chunk = buf.toString()
@@ -442,69 +440,63 @@ function runLoopSet(ref: string, enabled: boolean): ToolResult {
   return { ok: true, output: `${enabled ? 'Enabled' : 'Disabled'} loop "${loop.name}".` }
 }
 
-// ---- Terminal sessions (persistent shells: dev servers, long-running cmds) ----
+// ---- Session metadata (the agent organizing its own session) ----------------
 
-function fmtSession(s: TerminalSessionInfo): string {
-  const state =
-    s.status === 'exited' ? `exited(${s.exitCode ?? '?'})` : s.busy ? 'busy' : 'idle'
-  return `[${s.id}] ${s.name} — ${state} · ${s.shell} · ${s.cwd}`
-}
-
-/** A session the agent may touch: it must belong to the agent's own workspace. */
-function ownedSession(id: string, cwd: string): TerminalSessionInfo | undefined {
-  const s = terminal.getSession(id)
-  return s && s.cwd === cwd ? s : undefined
-}
-
-function runTerminalList(cwd: string): ToolResult {
-  const list = terminal.listSessions().filter((s) => s.cwd === cwd)
-  if (list.length === 0) {
-    return { ok: true, output: 'No terminal sessions in this workspace. Use terminal_create to start one.' }
-  }
-  return { ok: true, output: list.map(fmtSession).join('\n') }
-}
-
-async function runTerminalCreate(input: Record<string, unknown>, cwd: string): Promise<ToolResult> {
-  if (!cwd) return { ok: false, output: 'terminal_create: no workspace for this session.' }
-  const info = terminal.createSession({ cwd, name: str(input.name) || undefined })
-  const command = str(input.command).trim()
-  if (!command) {
-    return {
-      ok: true,
-      output: `Started terminal [${info.id}] "${info.name}" (${info.shell}) in ${info.cwd}.`
+/** Coerce the model's `tasks` argument into a clean checklist (accepts strings or objects). */
+function parseTasksInput(raw: unknown): SessionTask[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: SessionTask[] = []
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      if (item.trim()) out.push({ title: item.trim(), status: 'pending' })
+      continue
+    }
+    if (item && typeof item === 'object') {
+      const rec = item as Record<string, unknown>
+      const title = str(rec.title ?? rec.text ?? rec.name).trim()
+      if (!title) continue
+      const status =
+        rec.status === 'in_progress' || rec.status === 'completed'
+          ? rec.status
+          : rec.done === true || rec.completed === true
+            ? 'completed'
+            : 'pending'
+      out.push({ title, status })
     }
   }
-  const res = await terminal.sendCommand(info.id, command)
-  const note = res.timedOut ? '\n[still running — read it later with terminal_read]' : ''
-  return {
-    ok: res.exitCode === null || res.exitCode === 0,
-    output: `Started terminal [${info.id}] "${info.name}".\n$ ${command}\n${res.output}${note}`.trimEnd()
+  return out
+}
+
+function runSetSessionMetadata(input: Record<string, unknown>, sessionId?: string): ToolResult {
+  if (!sessionId) {
+    return { ok: false, output: 'change_session_metadata: no active session to update.' }
   }
-}
-
-async function runTerminalSend(id: string, command: string, cwd: string): Promise<ToolResult> {
-  if (!id) return { ok: false, output: 'terminal_send: missing "id" (see terminal_list).' }
-  if (!command.trim()) return { ok: false, output: 'terminal_send: missing "command".' }
-  if (!ownedSession(id, cwd)) return { ok: false, output: `No terminal session "${id}" in this workspace.` }
-  const res = await terminal.sendCommand(id, command)
-  const note = res.timedOut
-    ? '\n[still running — read it later with terminal_read]'
-    : res.exitCode !== null && res.exitCode !== 0
-      ? `\n[exit ${res.exitCode}]`
-      : ''
-  const ok = res.timedOut || res.exitCode === null || res.exitCode === 0
-  return { ok, output: `$ ${command}\n${res.output}${note}`.trimEnd() || '(no output)' }
-}
-
-function runTerminalRead(id: string, cwd: string): ToolResult {
-  if (!id) return { ok: false, output: 'terminal_read: missing "id".' }
-  if (!ownedSession(id, cwd)) return { ok: false, output: `No terminal session "${id}" in this workspace.` }
-  return { ok: true, output: terminal.readOutput(id) || '(no output yet)' }
-}
-
-function runTerminalKill(id: string, cwd: string): ToolResult {
-  if (!id) return { ok: false, output: 'terminal_kill: missing "id".' }
-  if (!ownedSession(id, cwd)) return { ok: false, output: `No terminal session "${id}" in this workspace.` }
-  const ok = terminal.killSession(id)
-  return { ok, output: ok ? `Killed terminal ${id}.` : `No terminal session "${id}".` }
+  const patch: { title?: string; description?: string; tasks?: SessionTask[] } = {}
+  const title = str(input.title ?? input.name).trim()
+  if (title) patch.title = title.slice(0, 80)
+  if (typeof input.description === 'string') {
+    patch.description = input.description.trim().slice(0, 2000)
+  }
+  const tasks = parseTasksInput(input.tasks)
+  if (tasks) patch.tasks = tasks
+  if (Object.keys(patch).length === 0) {
+    return {
+      ok: false,
+      output: 'change_session_metadata: provide at least one of title, description, or tasks.'
+    }
+  }
+  let chat: ReturnType<typeof repo.setChatMetadata>
+  try {
+    chat = repo.setChatMetadata(sessionId, patch)
+  } catch {
+    return { ok: false, output: `change_session_metadata: no session "${sessionId}".` }
+  }
+  const bits: string[] = []
+  if (patch.title) bits.push(`name → "${chat.title}"`)
+  if (patch.description !== undefined) bits.push('description updated')
+  if (patch.tasks) {
+    const done = patch.tasks.filter((t) => t.status === 'completed').length
+    bits.push(`tasks ${done}/${patch.tasks.length} done`)
+  }
+  return { ok: true, output: `Updated session metadata (${bits.join(', ')}).` }
 }

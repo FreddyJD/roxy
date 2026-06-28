@@ -33,12 +33,6 @@ check(
   'loop tools registered',
   ['loop_list', 'loop_enable', 'loop_disable'].every((id) => Boolean(getTool(id)))
 )
-check(
-  'terminal tools registered',
-  ['terminal_list', 'terminal_create', 'terminal_send', 'terminal_read', 'terminal_kill'].every(
-    (id) => Boolean(getTool(id))
-  )
-)
 check('file/bash tools registered', ['read', 'write', 'edit', 'bash', 'grep', 'glob', 'list'].every((id) => Boolean(getTool(id))))
 check('resolveToolIds("all") expands to every tool', resolveToolIds('all').length === TOOLS.length)
 check('resolveToolIds passthrough', resolveToolIds(['read', 'bash']).join() === 'read,bash')

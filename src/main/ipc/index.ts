@@ -8,6 +8,7 @@ import * as browser from '../services/browser'
 import { listModels } from '../services/models'
 import { compactChat } from '../services/compaction'
 import { runTool, runAgentTurn } from '../harness'
+import { checkForUpdates, quitAndInstall, getUpdateState } from '../services/updater'
 
 /** In-flight streamed completions, keyed by requestId, so they can be aborted. */
 const llmControllers = new Map<string, AbortController>()
@@ -64,6 +65,15 @@ export function registerIpc(): void {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node
+  }))
+
+  // ---- auto-update (GitHub Releases) ----
+  ipcMain.handle(CHANNELS.updateCheck, () => checkForUpdates())
+  ipcMain.handle(CHANNELS.updateInstall, () => quitAndInstall())
+  ipcMain.handle(CHANNELS.updateGetState, () => ({
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    state: getUpdateState()
   }))
   ipcMain.handle(CHANNELS.systemOpenExternal, async (_e, url: string) => {
     // Only allow web URLs — never file:, javascript:, or other schemes.

@@ -7,7 +7,6 @@ import {
   Loader2,
   Plus,
   Settings as SettingsIcon,
-  Terminal,
   Trash2
 } from 'lucide-react'
 import type { Chat } from '@shared/types'
@@ -31,14 +30,8 @@ export function Sidebar(): JSX.Element {
   const newSessionInProject = useRoxyStore((s) => s.newSessionInProject)
   const deleteChat = useRoxyStore((s) => s.deleteChat)
   const sendingChats = useRoxyStore((s) => s.sendingChats)
-  const terminals = useRoxyStore((s) => s.terminals)
-  const activeTerminalId = useRoxyStore((s) => s.activeTerminalId)
-  const newTerminalInProject = useRoxyStore((s) => s.newTerminalInProject)
-  const selectTerminal = useRoxyStore((s) => s.selectTerminal)
-  const killTerminal = useRoxyStore((s) => s.killTerminal)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
-  const [menuFor, setMenuFor] = useState<string | null>(null)
 
   // A project = a workspace folder; main sessions group under it.
   const projects = useMemo<Project[]>(() => {
@@ -56,10 +49,8 @@ export function Sidebar(): JSX.Element {
       if (c.kind !== 'main') continue
       ensure(c.workspacePath ?? '(no folder)').sessions.push(c)
     }
-    // Surface projects that have only terminal sessions (no chats) too.
-    for (const t of terminals) ensure(t.cwd)
     return [...map.values()]
-  }, [chats, terminals])
+  }, [chats])
 
   // Subagent sessions grouped by the main chat that spawned them.
   const subsByParent = useMemo(() => {
@@ -91,9 +82,6 @@ export function Sidebar(): JSX.Element {
 
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col border-r border-border bg-surface">
-      {menuFor && (
-        <div className="fixed inset-0 z-10" onClick={() => setMenuFor(null)} />
-      )}
       <div className="titlebar reserve-controls-left flex items-center justify-between px-4 py-3.5">
         <div className="flex items-center gap-2.5">
           <img
@@ -143,7 +131,6 @@ export function Sidebar(): JSX.Element {
             <div className="flex flex-col gap-2">
               {projects.map((project) => {
                 const isCollapsed = collapsed.has(project.path)
-                const projectTerminals = terminals.filter((t) => t.cwd === project.path)
                 return (
                   <div key={project.path}>
                     <div className="flex items-center gap-1 px-1">
@@ -165,42 +152,15 @@ export function Sidebar(): JSX.Element {
                       <span className="shrink-0 text-[10px] tabular-nums text-text-subtle">
                         {project.sessions.length}
                       </span>
-                      <div className="relative shrink-0">
-                        <button
-                          onClick={() =>
-                            setMenuFor((m) => (m === project.path ? null : project.path))
-                          }
-                          title="New session in this project"
-                          className="flex h-5 w-5 items-center justify-center rounded text-text-subtle transition hover:bg-white/5 hover:text-text"
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                        </button>
-                        {menuFor === project.path && (
-                          <div className="absolute right-0 top-6 z-20 w-44 overflow-hidden rounded-lg border border-border bg-elevated py-1 shadow-2xl">
-                            <button
-                              onClick={() => {
-                                setMenuFor(null)
-                                void newSessionInProject(project.path)
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-muted transition hover:bg-white/5 hover:text-text"
-                            >
-                              <FolderOpen className="h-3.5 w-3.5" /> Chat session
-                            </button>
-                            <button
-                              onClick={() => {
-                                setMenuFor(null)
-                                void newTerminalInProject(project.path)
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-muted transition hover:bg-white/5 hover:text-text"
-                            >
-                              <Terminal className="h-3.5 w-3.5" /> Terminal session
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      <button
+                        onClick={() => void newSessionInProject(project.path)}
+                        title="New session in this project"
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle transition hover:bg-white/5 hover:text-text"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                     {!isCollapsed && (
-                      <>
                       <ul className="mt-0.5 flex flex-col gap-0.5 pl-2">
                         {project.sessions.map((chat) => {
                           const sending = !!sendingChats[chat.id]
@@ -281,47 +241,6 @@ export function Sidebar(): JSX.Element {
                           )
                         })}
                       </ul>
-                      {projectTerminals.length > 0 && (
-                        <ul className="mt-0.5 flex flex-col gap-0.5 pl-2">
-                          {projectTerminals.map((t) => (
-                            <li key={t.id}>
-                              <div
-                                className={cn(
-                                  'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition',
-                                  t.id === activeTerminalId
-                                    ? 'bg-elevated text-text'
-                                    : 'text-text-muted hover:bg-white/5 hover:text-text'
-                                )}
-                              >
-                                <Terminal
-                                  className={cn(
-                                    'h-3.5 w-3.5 shrink-0',
-                                    t.status === 'exited' ? 'text-text-subtle' : 'text-success'
-                                  )}
-                                />
-                                <button
-                                  onClick={() => selectTerminal(t.id)}
-                                  title={t.name}
-                                  className="min-w-0 flex-1 truncate text-left"
-                                >
-                                  {t.name}
-                                  {t.status === 'exited' && (
-                                    <span className="ml-1 text-[10px] text-text-subtle">exited</span>
-                                  )}
-                                </button>
-                                <button
-                                  onClick={() => void killTerminal(t.id)}
-                                  title="Kill terminal"
-                                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover:opacity-100"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      </>
                     )}
                   </div>
                 )

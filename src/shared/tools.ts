@@ -113,6 +113,12 @@ export const TOOLS: ToolDef[] = [
     mutates: true
   },
   {
+    id: 'change_session_metadata',
+    name: 'change_session_metadata',
+    description: "Set the session's name, description, and task checklist.",
+    mutates: true
+  },
+  {
     id: 'lsp',
     name: 'lsp',
     description: 'Query the language server (diagnostics, hover).',

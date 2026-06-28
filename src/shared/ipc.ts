@@ -52,6 +52,12 @@ export const CHANNELS = {
 
   contextCompact: 'context:compact',
 
+  updateCheck: 'update:check',
+  updateInstall: 'update:install',
+  updateGetState: 'update:get-state',
+  /** main -> renderer: auto-update status changes */
+  updateStatus: 'update:status',
+
   browserOpen: 'browser:open',
   browserNavigate: 'browser:navigate',
   browserBack: 'browser:back',

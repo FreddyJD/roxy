@@ -21,6 +21,9 @@ nsis:
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   notarize: false
+  target:
+    - dmg
+    - zip
 dmg:
   artifactName: ${name}-${version}.${ext}
 linux:
@@ -31,4 +34,9 @@ linux:
   category: Development
 appImage:
   artifactName: ${name}-${version}.${ext}
-npmRebuild: false
+# Rebuild native deps (better-sqlite3) against Electron's ABI when packaging.
+npmRebuild: true
+publish:
+  provider: github
+  owner: FreddyJD
+  repo: roxy

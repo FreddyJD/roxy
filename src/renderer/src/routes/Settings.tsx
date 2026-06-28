@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Globe, Plus, Trash2 } from 'lucide-react'
 import type { AppVersions, ConnectedProvider } from '@shared/types'
+import type { UpdateInfo } from '@shared/api'
 import { AUTH_LABELS } from '@shared/providers'
 import { api } from '../lib/api'
 import { Button } from '../components/ui'
@@ -17,12 +18,18 @@ export default function Settings(): JSX.Element {
   const bootstrap = useRoxyStore((s) => s.bootstrap)
   const clearActive = useRoxyStore((s) => s.clearActive)
   const [versions, setVersions] = useState<AppVersions | null>(null)
+  const [update, setUpdate] = useState<UpdateInfo | null>(null)
   const [confirmingReset, setConfirmingReset] = useState(false)
   const [resetting, setResetting] = useState(false)
 
   useEffect(() => {
     refreshProviders()
     api.system.getVersions().then(setVersions)
+    api.updates.getState().then(setUpdate)
+    const off = api.updates.onStatus((state) =>
+      setUpdate((prev) => (prev ? { ...prev, state } : { version: '', packaged: true, state }))
+    )
+    return off
   }, [refreshProviders])
 
   const disconnect = async (id: string): Promise<void> => {
@@ -37,6 +44,25 @@ export default function Settings(): JSX.Element {
     await bootstrap()
     navigate('/onboarding')
   }
+
+  const us = update?.state
+  const updateBusy =
+    us?.status === 'checking' || us?.status === 'downloading' || us?.status === 'available'
+  const updateLabel = !update?.packaged
+    ? 'Auto-updates run in the installed app.'
+    : us?.status === 'checking'
+      ? 'Checking for updates…'
+      : us?.status === 'available'
+        ? `Found v${us.version} — downloading…`
+        : us?.status === 'downloading'
+          ? `Downloading… ${us.percent}%`
+          : us?.status === 'downloaded'
+            ? `v${us.version} is ready to install.`
+            : us?.status === 'error'
+              ? `Update check failed: ${us.message}`
+              : us?.status === 'not-available'
+                ? "You're on the latest version."
+                : 'Updates install automatically from GitHub.'
 
   return (
     <PageShell title="Settings" onBack={() => navigate('/')}>
@@ -83,10 +109,33 @@ export default function Settings(): JSX.Element {
 
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">About</h2>
-        <div className="rounded-xl border border-border bg-surface p-4 text-xs text-text-muted">
-          {versions
-            ? `Roxy v${versions.app} · Electron ${versions.electron} · Chromium ${versions.chrome} · Node ${versions.node}`
-            : 'Roxy'}
+        <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-text">Roxy v{versions?.app ?? '—'}</div>
+              <p className="mt-0.5 text-xs text-text-muted">{updateLabel}</p>
+            </div>
+            {update?.state.status === 'downloaded' ? (
+              <Button variant="primary" className="shrink-0" onClick={() => api.updates.install()}>
+                Restart to update
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                className="shrink-0"
+                disabled={!update?.packaged || updateBusy}
+                onClick={() => void api.updates.check()}
+                title={update?.packaged ? undefined : 'Available in the installed app'}
+              >
+                {updateBusy ? 'Checking…' : 'Check for updates'}
+              </Button>
+            )}
+          </div>
+          {versions && (
+            <p className="text-[11px] text-text-subtle">
+              Electron {versions.electron} · Chromium {versions.chrome} · Node {versions.node}
+            </p>
+          )}
         </div>
       </section>
 

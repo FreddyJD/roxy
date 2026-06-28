@@ -19,6 +19,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import type { ToolDiff } from '@shared/types'
 import { cn } from '../lib/cn'
+import { renderAnsi } from '../lib/ansi'
 
 const FileDiffView = lazy(() => import('./FileDiffView'))
 const FileView = lazy(() => import('./FileView'))
@@ -50,18 +51,60 @@ const TOOL_ICON: Record<string, LucideIcon> = {
   loop_list: Repeat,
   loop_enable: Repeat,
   loop_disable: Repeat,
-  loop_remove: Repeat,
-  terminal_list: Terminal,
-  terminal_create: Terminal,
-  terminal_send: Terminal,
-  terminal_read: Terminal,
-  terminal_kill: Terminal
+  loop_remove: Repeat
 }
 
 /**
  * Renders a single tool call as an inline, expandable card — the way an agent
  * step shows up between reasoning and prose. Click to reveal the output.
  */
+/** A trailing status line our bash wrapper appends, e.g. `[exit 1]` / `[timed out]`. */
+const FOOTER_RE = /^\[(exit \d+|timed out|error:[\s\S]*)\]$/
+
+/** Renders bash/shell output as a colored terminal block (prompt + ANSI body + status). */
+function TerminalOutput({
+  text,
+  state
+}: {
+  text: string
+  state: 'running' | 'done' | 'error'
+}): JSX.Element {
+  let prompt = ''
+  let body = text
+  // Pull off our own `$ command` header line so we can tint it like a prompt.
+  if (body.startsWith('$ ')) {
+    const nl = body.indexOf('\n')
+    prompt = nl === -1 ? body : body.slice(0, nl)
+    body = nl === -1 ? '' : body.slice(nl + 1)
+  }
+  // Pull off a trailing status line so we can color it green/amber/red.
+  let footer = ''
+  const lines = body.split('\n')
+  const lastLine = lines[lines.length - 1]
+  if (lastLine && FOOTER_RE.test(lastLine)) {
+    footer = lastLine
+    body = lines.slice(0, -1).join('\n')
+  }
+  const footerColor = footer.startsWith('[timed')
+    ? '#fbbf24'
+    : footer.startsWith('[exit') || footer.startsWith('[error')
+      ? '#f87171'
+      : '#9a9aa3'
+  const trimmed = body.replace(/[\r\n]+$/, '')
+  return (
+    <pre className="max-h-72 overflow-auto border-t border-border bg-[#0b0b0d] px-3 py-2 font-mono text-xs leading-relaxed text-[#d4d4d4]">
+      {prompt && <div style={{ color: '#4ade80' }}>{prompt}</div>}
+      {trimmed && <span>{renderAnsi(trimmed)}</span>}
+      {!prompt && !trimmed && !footer && (state === 'running' ? 'Running…' : '(no output)')}
+      {footer && (
+        <div className="mt-0.5" style={{ color: footerColor }}>
+          {footer}
+        </div>
+      )}
+    </pre>
+  )
+}
+
 export function ToolCall({
   tool,
   state,
@@ -141,6 +184,8 @@ export function ToolCall({
             <FileView name={title || 'file.txt'} contents={body} />
           </Suspense>
         </div>
+      ) : open && tool === 'bash' ? (
+        <TerminalOutput text={body} state={state} />
       ) : open ? (
         <pre className="max-h-72 overflow-auto border-t border-border bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
           {body || (state === 'running' ? 'Running…' : '(no output)')}

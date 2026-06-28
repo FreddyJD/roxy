@@ -17,7 +17,8 @@ import type {
   QueueItem,
   ReasoningEffort,
   SessionKind,
-  SessionStatus
+  SessionStatus,
+  SessionTask
 } from '../../shared/types'
 import type { CreateChatInput, CreateLoopInput } from '../../shared/api'
 import { getDb } from './database'
@@ -47,6 +48,8 @@ interface ChatRow {
   parent_id: string | null
   context_summary: string | null
   context_summary_at: number | null
+  description: string | null
+  tasks: string | null
   created_at: number
   updated_at: number
 }
@@ -275,6 +278,23 @@ export function storeCopilotCredential(token: string): ConnectedProvider {
 
 // ---- Chats -------------------------------------------------------------------
 
+/** Parse the tasks JSON column into a checklist, tolerating malformed data. */
+function parseTasks(raw: string | null): SessionTask[] {
+  if (!raw) return []
+  try {
+    const arr: unknown = JSON.parse(raw)
+    if (!Array.isArray(arr)) return []
+    return arr
+      .filter((t): t is SessionTask => !!t && typeof (t as SessionTask).title === 'string')
+      .map((t) => ({
+        title: t.title,
+        status: t.status === 'in_progress' || t.status === 'completed' ? t.status : 'pending'
+      }))
+  } catch {
+    return []
+  }
+}
+
 function rowToChat(row: ChatRow): Chat {
   return {
     id: row.id,
@@ -286,6 +306,8 @@ function rowToChat(row: ChatRow): Chat {
     parentId: row.parent_id,
     contextSummary: row.context_summary,
     contextSummaryAt: row.context_summary_at,
+    description: row.description,
+    tasks: parseTasks(row.tasks),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -377,6 +399,40 @@ export function setChatSummary(chatId: string, summary: string, throughAt: numbe
       'UPDATE chats SET context_summary = ?, context_summary_at = ?, updated_at = ? WHERE id = ?'
     )
     .run(summary, throughAt, Date.now(), chatId)
+  const chat = getChat(chatId)
+  if (!chat) throw new Error('Chat not found')
+  return chat
+}
+
+/** Update agent-settable session metadata (any subset of name / description / tasks). */
+export function setChatMetadata(
+  chatId: string,
+  patch: { title?: string; description?: string; tasks?: SessionTask[] }
+): Chat {
+  const sets: string[] = []
+  const vals: unknown[] = []
+  if (patch.title !== undefined) {
+    sets.push('title = ?')
+    vals.push(patch.title.trim() || 'New chat')
+  }
+  if (patch.description !== undefined) {
+    sets.push('description = ?')
+    vals.push(patch.description.trim() || null)
+  }
+  if (patch.tasks !== undefined) {
+    sets.push('tasks = ?')
+    vals.push(JSON.stringify(patch.tasks))
+  }
+  if (sets.length === 0) {
+    const chat = getChat(chatId)
+    if (!chat) throw new Error('Chat not found')
+    return chat
+  }
+  sets.push('updated_at = ?')
+  vals.push(Date.now(), chatId)
+  getDb()
+    .prepare(`UPDATE chats SET ${sets.join(', ')} WHERE id = ?`)
+    .run(...vals)
   const chat = getChat(chatId)
   if (!chat) throw new Error('Chat not found')
   return chat
