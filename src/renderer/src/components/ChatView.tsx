@@ -25,7 +25,9 @@ import { Button } from './ui'
 import roxy from '../assets/roxy.png'
 
 /** Only render the most recent N messages — older ones stay in the DB but off-screen. */
-const VISIBLE_MESSAGES = 12
+/** Render the latest N messages; scrolling to the top reveals PAGE more. */
+const VISIBLE_MESSAGES = 8
+const PAGE = 8
 
 export function ChatView(): JSX.Element {
   const messages = useRoxyStore((s) => s.messages)
@@ -50,18 +52,36 @@ export function ChatView(): JSX.Element {
   const stickToBottom = useRef(true)
   const [loopPaneOpen, setLoopPaneOpen] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
+  // Show only the latest N; scrolling up loads older ones a page at a time.
+  const [visibleCount, setVisibleCount] = useState(VISIBLE_MESSAGES)
+  const restoreHeight = useRef<number | null>(null)
 
   const onScroll = (): void => {
     const el = scrollRef.current
     if (!el) return
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    // Near the top with more history → reveal another page, preserving position.
+    if (el.scrollTop < 80 && visibleCount < messages.length) {
+      restoreHeight.current = el.scrollHeight
+      setVisibleCount((c) => Math.min(messages.length, c + PAGE))
+    }
   }
 
   // Switching chats starts you pinned to the latest message + collapses details.
   useEffect(() => {
     stickToBottom.current = true
     setInfoOpen(false)
+    setVisibleCount(VISIBLE_MESSAGES)
   }, [activeChatId])
+
+  // Keep the scroll anchored when older messages prepend (no jump to the top).
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el && restoreHeight.current !== null) {
+      el.scrollTop += el.scrollHeight - restoreHeight.current
+      restoreHeight.current = null
+    }
+  }, [visibleCount])
 
   useEffect(() => {
     if (!stickToBottom.current) return
@@ -183,12 +203,12 @@ export function ChatView(): JSX.Element {
           </div>
         ) : (
           <div className="mx-auto max-w-3xl px-4 py-4">
-            {messages.length > VISIBLE_MESSAGES && (
+            {messages.length > visibleCount && (
               <p className="mb-3 text-center text-xs text-text-subtle">
-                Showing the last {VISIBLE_MESSAGES} of {messages.length} messages
+                Scroll up to load older — showing the last {visibleCount} of {messages.length}
               </p>
             )}
-            {messages.slice(-VISIBLE_MESSAGES).map((message) => (
+            {messages.slice(-visibleCount).map((message) => (
               <MessageBubble key={message.id} role={message.role} parts={message.parts} />
             ))}
             {streaming !== null && (
