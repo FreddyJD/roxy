@@ -62,7 +62,7 @@ interface RoxyStore {
   removeQueued: (id: string) => Promise<void>
   moveQueued: (id: string, direction: 'up' | 'down') => Promise<void>
   stop: () => void
-  compactConversation: () => Promise<void>
+  compactConversation: (chatId?: string) => Promise<void>
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -443,6 +443,13 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         settings?.contextLimit ?? Math.min(modelContext, 200_000),
         modelContext
       )
+      // Auto-compact when the window is ~80% full so there's always headroom for
+      // this turn (depends on context size). Compaction summarizes the older
+      // turns; buildChatMessages then sends just the summary + recent messages.
+      if (!get().compactingChats[chatId]) {
+        const used = await estimateUsedTokens(chatId)
+        if (used > contextBudget * 0.8) await get().compactConversation(chatId)
+      }
       const requestId = crypto.randomUUID()
       const chatMessages = await buildChatMessages(chatId, contextBudget, info?.outputLimit ?? 4096)
       // Build parts live from the agent's event stream: text grows the current
@@ -603,8 +610,8 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     if (requestId) void api.llm.abort(requestId)
   },
 
-  compactConversation: async () => {
-    const chatId = get().activeChatId
+  compactConversation: async (targetChatId) => {
+    const chatId = targetChatId ?? get().activeChatId
     if (!chatId || get().compactingChats[chatId]) return
     const { settings, providers } = get()
     const provider =
@@ -700,6 +707,22 @@ async function buildChatMessages(
     used += tokens
   }
   return [{ role: 'system', content: systemText }, ...kept]
+}
+
+/** Rough estimate of tokens currently in a chat's live window (post-compaction). */
+async function estimateUsedTokens(chatId: string): Promise<number> {
+  const chat = useRoxyStore.getState().chats.find((c) => c.id === chatId)
+  const since = chat?.contextSummaryAt ?? 0
+  const msgs = (await api.messages.list(chatId)).filter((m) => m.createdAt > since)
+  let chars = buildSystemPrompt(chat).length
+  let images = 0
+  for (const m of msgs)
+    for (const p of m.parts) {
+      if (p.type === 'tool') chars += (p.output ?? '').length
+      else if (p.type === 'image') images += 1
+      else chars += p.text.length
+    }
+  return Math.ceil(chars / 4) + images * 800
 }
 
 function buildPlaceholderReply(
