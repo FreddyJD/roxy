@@ -260,6 +260,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<void> {
     tools: schemasFor('all', true),
     reasoning,
     effort: reasoningEffort,
+    contextLimit,
     depth: 0
   })
 }
@@ -286,12 +287,14 @@ interface LoopOptions {
   tools: ToolSchema[]
   reasoning?: boolean
   effort?: ReasoningEffort
+  /** Token budget for the rolling conversation (drops oldest tool results to fit). */
+  contextLimit?: number
   depth: number
 }
 
 /** The shared agent loop: stream → run tools (incl. `task`) → repeat. Returns the final prose. */
 async function runLoop(o: LoopOptions): Promise<string> {
-  const { providerId, vision, model, convo, cwd, parentChatId, sessionId, signal, emitTool, onText, onReasoning, tools, reasoning, effort, depth } =
+  const { providerId, vision, model, convo, cwd, parentChatId, sessionId, signal, emitTool, onText, onReasoning, tools, reasoning, effort, contextLimit, depth } =
     o
   let lastText = ''
 
@@ -303,7 +306,7 @@ async function runLoop(o: LoopOptions): Promise<string> {
       providerId,
       vision,
       model,
-      convo,
+      trimConvo(convo, contextLimit),
       signal,
       reasoning,
       effort,
@@ -348,6 +351,7 @@ async function runLoop(o: LoopOptions): Promise<string> {
           emit: emitTool,
           reasoning,
           effort,
+          contextLimit,
           depth
         })
         convo.push({ role: 'tool', tool_call_id: tc.id, content: result.slice(0, 12_000) })
@@ -391,12 +395,13 @@ interface SubagentOptions {
   emit: (event: LlmEvent) => void
   reasoning?: boolean
   effort?: ReasoningEffort
+  contextLimit?: number
   depth: number
 }
 
 /** Spawn a subagent: a focused child run of the same loop, returned as a `task` result. */
 async function runSubagent(o: SubagentOptions): Promise<string> {
-  const { callId, description, prompt, subagentType, providerId, vision, model, cwd, parentChatId, signal, emit, reasoning, effort, depth } =
+  const { callId, description, prompt, subagentType, providerId, vision, model, cwd, parentChatId, signal, emit, reasoning, effort, contextLimit, depth } =
     o
   const fail = (msg: string): string => {
     emit({ type: 'tool-start', callId, tool: 'task', title: description })
@@ -502,6 +507,7 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
       tools: schemasFor(agent.tools, false),
       reasoning,
       effort,
+      contextLimit,
       depth: depth + 1
     })
     const report = text.trim() || '(subagent returned no report)'
@@ -622,6 +628,38 @@ async function streamOnce(
     }
   }
   return finish()
+}
+
+/** Rough token estimate for a message (~4 chars/token, incl. tool-call args). */
+function msgTokens(m: OpenAiMessage): number {
+  const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')
+  const calls = m.tool_calls ? JSON.stringify(m.tool_calls) : ''
+  return Math.ceil((c.length + calls.length) / 4)
+}
+
+/**
+ * Keep the rolling agent conversation under the model's context budget. System
+ * messages stay; the oldest turns are dropped first. A `tool` reply can't lead
+ * the kept window (its assistant call would be gone → an orphaned tool message),
+ * so leading tool replies are trimmed too. Prevents a long tool-heavy loop from
+ * blowing past 100% (the "Tool Results 101%" overflow).
+ */
+function trimConvo(convo: OpenAiMessage[], budget = 200_000): OpenAiMessage[] {
+  const cap = Math.max(8000, budget - 12_000) // leave room for the model's reply
+  const total = convo.reduce((n, m) => n + msgTokens(m), 0)
+  if (total <= cap) return convo
+  const sys = convo.filter((m) => m.role === 'system')
+  const rest = convo.filter((m) => m.role !== 'system')
+  let used = sys.reduce((n, m) => n + msgTokens(m), 0)
+  const kept: OpenAiMessage[] = []
+  for (let i = rest.length - 1; i >= 0; i--) {
+    const t = msgTokens(rest[i])
+    if (used + t > cap && kept.length > 0) break
+    kept.unshift(rest[i])
+    used += t
+  }
+  while (kept.length && kept[0].role === 'tool') kept.shift()
+  return [...sys, ...kept]
 }
 
 /** A short, human-readable summary shown on the tool card. */
