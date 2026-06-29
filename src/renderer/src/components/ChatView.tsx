@@ -24,6 +24,9 @@ import {
 import { Button } from './ui'
 import roxy from '../assets/roxy.png'
 
+/** Only render the most recent N messages — older ones stay in the DB but off-screen. */
+const VISIBLE_MESSAGES = 12
+
 export function ChatView(): JSX.Element {
   const messages = useRoxyStore((s) => s.messages)
   const streaming = useRoxyStore((s) =>
@@ -180,7 +183,12 @@ export function ChatView(): JSX.Element {
           </div>
         ) : (
           <div className="mx-auto max-w-3xl px-4 py-4">
-            {messages.map((message) => (
+            {messages.length > VISIBLE_MESSAGES && (
+              <p className="mb-3 text-center text-xs text-text-subtle">
+                Showing the last {VISIBLE_MESSAGES} of {messages.length} messages
+              </p>
+            )}
+            {messages.slice(-VISIBLE_MESSAGES).map((message) => (
               <MessageBubble key={message.id} role={message.role} parts={message.parts} />
             ))}
             {streaming !== null && (
