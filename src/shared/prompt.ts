@@ -110,11 +110,18 @@ export interface AssembleInput {
  * Roxy's commit co-author identity. Mirrors how GitHub Copilot attributes its
  * work with a `Co-authored-by` trailer, so commits Roxy helps write render as
  * "<you> and Roxy" on GitHub. This is the single source of truth for the
- * identity — change this one line to rebrand it (e.g. swap in a GitHub bot
- * account's `<id>+roxy@users.noreply.github.com` noreply address to get an
- * avatar + linked profile on GitHub, the way Copilot's trailer does).
+ * identity — change this one line to rebrand it.
+ *
+ * The address is the GitHub-provided noreply email for the dedicated
+ * @roxy-commits account (`<id>+<login>@users.noreply.github.com`). Using that
+ * exact form is what makes GitHub link the co-author to the profile and render
+ * its avatar — the same trick Copilot's `223556219+Copilot@users.noreply.github.com`
+ * trailer uses. (A branded address like `noreply@roxy.gg` would only show an
+ * avatar if it were added and verified on the account first.) So the avatar that
+ * appears is simply whatever profile picture is uploaded to @roxy-commits.
  */
-export const ROXY_COAUTHOR_TRAILER = 'Co-authored-by: Roxy <noreply@roxy.gg>'
+export const ROXY_COAUTHOR_TRAILER =
+  'Co-authored-by: Roxy <299891354+roxy-commits@users.noreply.github.com>'
 
 /**
  * The system-prompt instruction that tells the model to append {@link

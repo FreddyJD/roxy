@@ -854,6 +854,13 @@ console.log('\ngit commit co-author trailer\n')
 // The identity line is a well-formed Co-authored-by trailer that names Roxy.
 check('coauthor: trailer is a Co-authored-by line', /^Co-authored-by: .+ <[^>]+@[^>]+>$/.test(ROXY_COAUTHOR_TRAILER))
 check('coauthor: trailer names Roxy', /\bRoxy\b/.test(ROXY_COAUTHOR_TRAILER))
+// Must use GitHub's <id>+<login>@users.noreply.github.com form so GitHub links the
+// co-author to the @roxy-commits profile and renders its avatar (like Copilot's).
+// A plain vanity address (e.g. noreply@roxy.gg) would render no avatar/link.
+check(
+  'coauthor: trailer uses a GitHub noreply email (avatar + linked profile)',
+  /<\d+\+[^@>]+@users\.noreply\.github\.com>$/.test(ROXY_COAUTHOR_TRAILER)
+)
 // The prompt block wraps the trailer in <git_commit_trailer> tags and embeds the exact line.
 check(
   'coauthor: prompt block is tagged',
