@@ -8,4 +8,4 @@
  * tool calling lives inside the harness rather than as a standalone IPC.
  */
 export { runTool, killAllBackground, type ToolContext } from './tools'
-export { runAgentTurn, type RunTurnOptions } from './agent'
+export { runAgentTurn, setPromptText, setAgentPromptText, projectInstructions, type RunTurnOptions } from './agent'

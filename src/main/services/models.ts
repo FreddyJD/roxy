@@ -23,6 +23,43 @@ interface ModelsDevProvider {
 
 let cache: { at: number; data: Record<string, ModelsDevProvider> } | null = null
 
+/**
+ * Roxy's own inference gateway isn't in the models.dev catalog — it exposes its
+ * marked-up model list at /api/models (no key required). Fetch + cache that
+ * separately so the picker shows real, current Roxy models.
+ */
+const ROXY_CATALOG_URL = 'https://roxy.gg/api/models'
+let roxyCache: { at: number; data: ModelInfo[] } | null = null
+
+interface RoxyModel {
+  id: string
+  name?: string
+  context_length?: number
+}
+
+async function listRoxyModels(): Promise<ModelInfo[]> {
+  if (roxyCache && Date.now() - roxyCache.at < TTL_MS) return roxyCache.data
+  try {
+    const res = await fetch(ROXY_CATALOG_URL, { headers: { Accept: 'application/json' } })
+    if (!res.ok) throw new Error(`roxy.gg models returned ${res.status}`)
+    const body = (await res.json()) as { data?: RoxyModel[] }
+    const list = (body.data ?? [])
+      .map((m) => ({
+        id: m.id,
+        name: m.name || m.id,
+        reasoning: false,
+        toolCall: false,
+        contextLimit: m.context_length,
+        outputLimit: undefined
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    roxyCache = { at: Date.now(), data: list }
+    return list
+  } catch {
+    return roxyCache?.data ?? []
+  }
+}
+
 async function getCatalog(): Promise<Record<string, ModelsDevProvider>> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.data
   const res = await fetch(CATALOG_URL)
@@ -34,6 +71,7 @@ async function getCatalog(): Promise<Record<string, ModelsDevProvider>> {
 
 /** List the models models.dev knows for a provider id (newest first). */
 export async function listModels(providerId: string): Promise<ModelInfo[]> {
+  if (providerId === 'roxy') return listRoxyModels()
   try {
     const data = await getCatalog()
     const models = data[providerId]?.models

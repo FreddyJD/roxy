@@ -109,5 +109,15 @@ export const MIGRATIONS: string[] = [
   /* sql */ `
     ALTER TABLE chats ADD COLUMN description TEXT;
     ALTER TABLE chats ADD COLUMN tasks TEXT;
+  `,
+
+  // ---- v11: external MCP (Model Context Protocol) servers ----
+  /* sql */ `
+    CREATE TABLE mcp_servers (
+      id         TEXT PRIMARY KEY,
+      config     TEXT NOT NULL DEFAULT '{}',
+      enabled    INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
+    );
   `
 ]

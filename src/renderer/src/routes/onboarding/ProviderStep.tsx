@@ -95,6 +95,11 @@ function ProviderRow({
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
           <span className="truncate text-sm font-medium text-text">{seed.name}</span>
+          {seed.recommended && (
+            <span className="shrink-0 rounded-full border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+              Recommended
+            </span>
+          )}
           {connected && <Check className="h-3.5 w-3.5 shrink-0 text-success" />}
         </span>
         <span className="block truncate text-xs text-text-subtle">{AUTH_LABELS[seed.auth]}</span>
@@ -176,6 +181,7 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
                 <p className="mt-1 text-sm text-text-muted">
                   {needsKey ? 'Paste an API key to connect.' : 'Point Roxy at your local endpoint.'}
                 </p>
+                {seed.notes && <p className="mt-2 text-xs text-text-subtle">{seed.notes}</p>}
               </div>
               {needsKey && (
                 <Field label="API key">
@@ -183,10 +189,20 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
                     type="password"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="sk-…"
+                    placeholder={seed.id === 'roxy' ? 'rx-…' : 'sk-…'}
                     autoFocus
                   />
                 </Field>
+              )}
+              {seed.id === 'roxy' && (
+                <button
+                  type="button"
+                  onClick={() => void api.system.openExternal('https://roxy.gg/dashboard')}
+                  className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-accent transition hover:underline"
+                >
+                  Get an API key from your roxy.gg dashboard
+                  <ExternalLink className="h-3 w-3" />
+                </button>
               )}
               {showBaseURL && (
                 <Field label="Base URL">

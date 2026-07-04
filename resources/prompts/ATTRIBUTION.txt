@@ -1,4 +1,10 @@
-The system/agent prompts in this folder and the tool descriptions under tools/
-are copied from opencode (https://github.com/sst/opencode), used under the MIT
-License. Roxy mirrors opencode's agent + subagent system and its model-specific
-prompt selection. See the opencode repository for the full license text.
+Roxy is a fork of opencode (https://github.com/sst/opencode), created and
+maintained by Roxy, and used under the MIT License:
+
+    Copyright (c) 2025 opencode
+
+Roxy builds on opencode's foundation — including its agent + subagent system and
+its model-specific prompt selection — and layers Roxy's own modifications on top.
+
+The system/agent prompts in this folder are opencode's prompts, rebranded and
+modified for Roxy. See the opencode repository for the full MIT License text.

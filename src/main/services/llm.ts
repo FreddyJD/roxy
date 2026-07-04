@@ -12,6 +12,22 @@ import type { ReasoningEffort } from '../../shared/types'
 const COPILOT_TOKEN_URL = 'https://api.github.com/copilot_internal/v2/token'
 const COPILOT_CHAT_URL = 'https://api.githubcopilot.com/chat/completions'
 
+/**
+ * A failed model HTTP request that carries the status code, so the agent loop can
+ * decide whether to ride it out (429 rate-limit / 5xx / 408 = transient, retry
+ * forever during a long autonomous run) or surface it (other 4xx = fatal). The
+ * plain `Error` we used to throw hid the status, forcing every failure — even a
+ * momentary rate-limit — to kill the whole turn.
+ */
+export class ModelHttpError extends Error {
+  readonly status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ModelHttpError'
+    this.status = status
+  }
+}
+
 interface CopilotToken {
   token: string
   expiresAt: number
@@ -91,11 +107,15 @@ async function getCopilotToken(force = false): Promise<string> {
   if (!res.ok) {
     const body = await res.text().catch(() => '')
     if (res.status === 401 || res.status === 403) {
-      throw new Error(
+      throw new ModelHttpError(
+        res.status,
         `Copilot token exchange failed (${res.status}). Your GitHub account may not have an active Copilot subscription.`
       )
     }
-    throw new Error(`Copilot token exchange failed (${res.status}). ${body.slice(0, 200)}`)
+    throw new ModelHttpError(
+      res.status,
+      `Copilot token exchange failed (${res.status}). ${body.slice(0, 200)}`
+    )
   }
   const data = (await res.json()) as { token: string; expires_at: number }
   copilotCache = { token: data.token, expiresAt: data.expires_at * 1000 }

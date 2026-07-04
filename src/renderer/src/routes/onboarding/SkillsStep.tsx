@@ -9,7 +9,8 @@ export function SkillsStep(): JSX.Element {
         Pick your skills <span className="text-text-subtle">(optional)</span>
       </h1>
       <p className="mt-2 text-sm text-text-muted">
-        Tools Roxy can use. These are on the roadmap — they&apos;ll switch on as they land.
+        Tools Roxy can use. Some are ready now; the rest are on the roadmap and switch on as they
+        land.
       </p>
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
         {SKILLS.map((skill) => (

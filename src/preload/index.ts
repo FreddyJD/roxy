@@ -4,6 +4,7 @@ import { CHANNELS } from '../shared/ipc'
 import type {
   RoxyApi,
   LlmDelta,
+  TaskUpdate,
   BrowserState,
   BrowserTab,
   UpdateState
@@ -20,6 +21,7 @@ const roxy: RoxyApi = {
       ipcRenderer.invoke(CHANNELS.settingsSetActiveProvider, providerId, model),
     setReasoningEffort: (level) => ipcRenderer.invoke(CHANNELS.settingsSetReasoningEffort, level),
     setContextLimit: (limit) => ipcRenderer.invoke(CHANNELS.settingsSetContextLimit, limit),
+    setWebSearchApiKey: (key) => ipcRenderer.invoke(CHANNELS.settingsSetWebSearchApiKey, key),
     completeOnboarding: () => ipcRenderer.invoke(CHANNELS.settingsCompleteOnboarding),
     reset: () => ipcRenderer.invoke(CHANNELS.settingsReset)
   },
@@ -41,6 +43,22 @@ const roxy: RoxyApi = {
   integrations: {
     list: () => ipcRenderer.invoke(CHANNELS.integrationsList),
     setEnabled: (id, enabled) => ipcRenderer.invoke(CHANNELS.integrationsSetEnabled, id, enabled)
+  },
+  mcp: {
+    list: () => ipcRenderer.invoke(CHANNELS.mcpList),
+    upsert: (input) => ipcRenderer.invoke(CHANNELS.mcpUpsert, input),
+    remove: (id) => ipcRenderer.invoke(CHANNELS.mcpRemove, id),
+    setEnabled: (id, enabled) => ipcRenderer.invoke(CHANNELS.mcpSetEnabled, id, enabled),
+    reconnect: (id) => ipcRenderer.invoke(CHANNELS.mcpReconnect, id)
+  },
+  skills: {
+    list: (cwd) => ipcRenderer.invoke(CHANNELS.skillsList, cwd),
+    refresh: (cwd) => ipcRenderer.invoke(CHANNELS.skillsRefresh, cwd),
+    read: (name, cwd) => ipcRenderer.invoke(CHANNELS.skillsRead, name, cwd),
+    create: (input, cwd) => ipcRenderer.invoke(CHANNELS.skillsCreate, input, cwd),
+    update: (input, cwd) => ipcRenderer.invoke(CHANNELS.skillsUpdate, input, cwd),
+    remove: (name, cwd) => ipcRenderer.invoke(CHANNELS.skillsRemove, name, cwd),
+    install: (source, cwd) => ipcRenderer.invoke(CHANNELS.skillsInstall, source, cwd)
   },
   system: {
     getVersions: () => ipcRenderer.invoke(CHANNELS.systemGetVersions),
@@ -93,12 +111,23 @@ const roxy: RoxyApi = {
       return () => ipcRenderer.removeListener(CHANNELS.llmDelta, handler)
     }
   },
+  tasks: {
+    listRunning: (sessionId) => ipcRenderer.invoke(CHANNELS.tasksListRunning, sessionId),
+    cancel: (jobId) => ipcRenderer.invoke(CHANNELS.tasksCancel, jobId),
+    onUpdate: (callback) => {
+      const handler = (_event: Electron.IpcRendererEvent, update: TaskUpdate): void =>
+        callback(update)
+      ipcRenderer.on(CHANNELS.taskUpdate, handler)
+      return () => ipcRenderer.removeListener(CHANNELS.taskUpdate, handler)
+    }
+  },
   models: {
     list: (providerId) => ipcRenderer.invoke(CHANNELS.modelsList, providerId)
   },
   context: {
     compact: (chatId, providerId, model) =>
-      ipcRenderer.invoke(CHANNELS.contextCompact, chatId, providerId, model)
+      ipcRenderer.invoke(CHANNELS.contextCompact, chatId, providerId, model),
+    instructions: (cwd) => ipcRenderer.invoke(CHANNELS.contextInstructions, cwd)
   },
   browser: {
     open: (url) => ipcRenderer.invoke(CHANNELS.browserOpen, url),

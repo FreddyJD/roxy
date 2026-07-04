@@ -4,6 +4,7 @@ export const CHANNELS = {
   settingsSetActiveProvider: 'settings:setActiveProvider',
   settingsSetReasoningEffort: 'settings:setReasoningEffort',
   settingsSetContextLimit: 'settings:setContextLimit',
+  settingsSetWebSearchApiKey: 'settings:setWebSearchApiKey',
   settingsCompleteOnboarding: 'settings:completeOnboarding',
   settingsReset: 'settings:reset',
 
@@ -21,6 +22,20 @@ export const CHANNELS = {
 
   integrationsList: 'integrations:list',
   integrationsSetEnabled: 'integrations:setEnabled',
+
+  mcpList: 'mcp:list',
+  mcpUpsert: 'mcp:upsert',
+  mcpRemove: 'mcp:remove',
+  mcpSetEnabled: 'mcp:setEnabled',
+  mcpReconnect: 'mcp:reconnect',
+
+  skillsList: 'skills:list',
+  skillsRefresh: 'skills:refresh',
+  skillsRead: 'skills:read',
+  skillsCreate: 'skills:create',
+  skillsUpdate: 'skills:update',
+  skillsRemove: 'skills:remove',
+  skillsInstall: 'skills:install',
 
   systemGetVersions: 'system:getVersions',
   systemOpenExternal: 'system:openExternal',
@@ -49,9 +64,18 @@ export const CHANNELS = {
   /** main -> renderer event carrying a streamed completion chunk */
   llmDelta: 'llm:delta',
 
+  /** main -> renderer event when a background subagent task changes state */
+  taskUpdate: 'task:update',
+  /** renderer -> main: list a session's running background tasks */
+  tasksListRunning: 'tasks:listRunning',
+  /** renderer -> main: cancel a running background task */
+  tasksCancel: 'tasks:cancel',
+
   modelsList: 'models:list',
 
   contextCompact: 'context:compact',
+  /** Load project instruction files (AGENTS.md/CLAUDE.md/CONTEXT.md) for a cwd. */
+  contextInstructions: 'context:instructions',
 
   updateCheck: 'update:check',
   updateInstall: 'update:install',

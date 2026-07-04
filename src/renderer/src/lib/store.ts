@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { DEFAULT_AGENT_ID } from '@shared/agents'
+import { DEFAULT_AGENT_ID, getAgent } from '@shared/agents'
 import type {
   AppSettings,
   Chat,
@@ -10,7 +10,11 @@ import type {
   QueueItem,
   ReasoningEffort
 } from '@shared/types'
-import type { ChatMessage, CreateLoopInput, LlmEvent, ModelInfo } from '@shared/api'
+import type { ChatMessage, CreateLoopInput, LlmEvent, ModelInfo, TaskUpdate } from '@shared/api'
+import { selectPromptName, buildEnvironment, assembleSystemPrompt } from '@shared/prompt'
+import { PROMPT_TEXT, AGENT_PROMPT_TEXT } from '@shared/prompt-text'
+import { reconstructTurn, REPLAY_OUTPUT_CAP } from '@shared/tool-history'
+import { isOverflow, pruneToolMessages, KEEP_RECENT_TOKENS } from '@shared/context'
 import { api } from './api'
 import type { ComposerImage } from './images'
 
@@ -29,6 +33,8 @@ interface RoxyStore {
   streamingChats: Record<string, MessagePart[]>
   /** Active agent (mode) for the open session. */
   activeAgentId: string
+  /** Project instruction blocks (AGENTS.md etc.) cached per workspace path. */
+  projectInstructions: Record<string, string[]>
   loops: Loop[]
   /** Pending prompts queued on the active chat (FIFO). */
   queue: QueueItem[]
@@ -36,6 +42,8 @@ interface RoxyStore {
   stopChats: Record<string, boolean>
   /** Chats currently being compacted, keyed by chat id. */
   compactingChats: Record<string, boolean>
+  /** Running background subagent tasks, keyed by parent session id (Phase 11). */
+  runningTasks: Record<string, TaskUpdate[]>
 
   bootstrap: () => Promise<void>
   refreshChats: () => Promise<void>
@@ -46,6 +54,7 @@ interface RoxyStore {
   ensureModels: (providerId: string) => Promise<void>
   setReasoningEffort: (level: ReasoningEffort) => Promise<void>
   setContextLimit: (limit: number | null) => Promise<void>
+  setWebSearchApiKey: (key: string | null) => Promise<void>
   selectChat: (id: string) => Promise<void>
   clearActive: () => void
   newSession: () => Promise<void>
@@ -54,6 +63,8 @@ interface RoxyStore {
   setLoopEnabled: (id: string, enabled: boolean) => Promise<void>
   removeLoop: (id: string) => Promise<void>
   setActiveAgent: (id: string) => void
+  /** Load + cache a workspace's instruction files (AGENTS.md etc.) for sizing. */
+  ensureProjectInstructions: (workspacePath: string) => Promise<void>
   deleteChat: (id: string) => Promise<void>
   renameChat: (id: string, title: string) => Promise<void>
   submit: (content: string, images?: ComposerImage[]) => Promise<void>
@@ -63,12 +74,15 @@ interface RoxyStore {
   moveQueued: (id: string, direction: 'up' | 'down') => Promise<void>
   stop: () => void
   compactConversation: (chatId?: string) => Promise<void>
+  /** Handle a background subagent task state change (Phase 11). */
+  handleTaskUpdate: (update: TaskUpdate) => Promise<void>
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 let loopTickSubscribed = false
 let llmDeltaSubscribed = false
+let taskUpdateSubscribed = false
 /** Routes streamed completion events to the in-flight send for a request id. */
 const deltaHandlers = new Map<string, (event: LlmEvent) => void>()
 /** The active llm request id per chat, so stop() can abort the right stream. */
@@ -87,10 +101,12 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   sendingChats: {},
   streamingChats: {},
   activeAgentId: DEFAULT_AGENT_ID,
+  projectInstructions: {},
   loops: [],
   queue: [],
   stopChats: {},
   compactingChats: {},
+  runningTasks: {},
 
   bootstrap: async () => {
     const [settings, providers, chats, loops] = await Promise.all([
@@ -136,6 +152,18 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     if (!llmDeltaSubscribed) {
       llmDeltaSubscribed = true
       api.llm.onDelta(({ requestId, event }) => deltaHandlers.get(requestId)?.(event))
+    }
+
+    // Background subagent tasks (Phase 11) report state out-of-band — they can
+    // finish long after the launching turn's request has ended, so this global
+    // subscription (not the per-request delta handler) keeps the UI live: it
+    // tracks the running-count badge and reloads the parent/sub transcript when a
+    // detached task lands its report.
+    if (!taskUpdateSubscribed) {
+      taskUpdateSubscribed = true
+      api.tasks.onUpdate((update) => {
+        void get().handleTaskUpdate(update)
+      })
     }
 
     const firstSession = chats.find((c) => c.kind === 'main')
@@ -207,10 +235,17 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     set({ settings })
   },
 
+  setWebSearchApiKey: async (key) => {
+    const settings = await api.settings.setWebSearchApiKey(key)
+    set({ settings })
+  },
+
   selectChat: async (id) => {
     // Per-chat send state survives switching — just swap which chat is shown.
     // Clear messages/queue first so the previous chat's content never flashes.
     set({ activeChatId: id, messages: [], queue: [], activeAgentId: DEFAULT_AGENT_ID })
+    const workspace = get().chats.find((c) => c.id === id)?.workspacePath
+    if (workspace) void get().ensureProjectInstructions(workspace)
     const [messages, queue] = await Promise.all([api.messages.list(id), api.queue.list(id)])
     if (get().activeChatId === id) set({ messages, queue })
   },
@@ -224,6 +259,14 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     }),
 
   setActiveAgent: (id) => set({ activeAgentId: id }),
+
+  ensureProjectInstructions: async (workspacePath) => {
+    if (!workspacePath || get().projectInstructions[workspacePath]) return
+    const blocks = await api.context.instructions(workspacePath).catch(() => [])
+    set((s) => ({
+      projectInstructions: { ...s.projectInstructions, [workspacePath]: blocks }
+    }))
+  },
 
   newSession: async () => {
     const path = await api.dialog.openWorkspace()
@@ -285,6 +328,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     if (get().sendingChats[chatId]) return
     if (content.startsWith('!') && !content.slice(1).trim()) return
     const { settings } = get()
+
+    // Make sure the workspace's instruction files are cached before we size the
+    // window cut (the main process reads them fresh when it builds the prompt).
+    const workspacePath = get().chats.find((c) => c.id === chatId)?.workspacePath
+    if (workspacePath) await get().ensureProjectInstructions(workspacePath)
 
     // Send state is keyed by chat id, so switching chats (or running several
     // sessions at once) never crosses the streams or drops a reply.
@@ -443,15 +491,25 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         settings?.contextLimit ?? Math.min(modelContext, 200_000),
         modelContext
       )
-      // Auto-compact when the window is ~80% full so there's always headroom for
-      // this turn (depends on context size). Compaction summarizes the older
-      // turns; buildChatMessages then sends just the summary + recent messages.
+      // Auto-compact before the window overflows the model's *real* budget:
+      // trigger once used tokens pass contextBudget minus the larger of the
+      // reserved reply size or a safety buffer (mirrors opencode's
+      // `context - max(output, buffer)` rather than a flat 80%). Compaction
+      // summarizes older turns; buildChatMessages then sends summary + recent.
       if (!get().compactingChats[chatId]) {
-        const used = await estimateUsedTokens(chatId)
-        if (used > contextBudget * 0.8) await get().compactConversation(chatId)
+        const used = await estimateUsedTokens(chatId, model, get().activeAgentId)
+        if (isOverflow(used, contextBudget, info?.outputLimit ?? 4096)) {
+          await get().compactConversation(chatId)
+        }
       }
       const requestId = crypto.randomUUID()
-      const chatMessages = await buildChatMessages(chatId, contextBudget, info?.outputLimit ?? 4096)
+      const chatMessages = await buildChatMessages(
+        chatId,
+        contextBudget,
+        info?.outputLimit ?? 4096,
+        model,
+        get().activeAgentId
+      )
       // Build parts live from the agent's event stream: text grows the current
       // text part; each tool call adds a card that flips running→done/error.
       const callIndex = new Map<string, number>()
@@ -477,7 +535,17 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
           }
         } else if (event.type === 'tool-start') {
           callIndex.set(event.callId, parts.length)
-          parts = [...parts, { type: 'tool', tool: event.tool, state: 'running', title: event.title }]
+          parts = [
+            ...parts,
+            {
+              type: 'tool',
+              tool: event.tool,
+              state: 'running',
+              title: event.title,
+              callId: event.callId,
+              input: event.input
+            }
+          ]
           // A `task` just spawned a subagent (its own `sub` session was created
           // in main) — surface it under the parent in the sidebar immediately.
           if (event.tool === 'task') void get().refreshChats()
@@ -495,9 +563,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
             parts = parts.map((p, i) =>
               i === idx && p.type === 'tool'
                 ? {
-                    type: 'tool',
-                    tool: p.tool,
-                    title: p.title,
+                    ...p,
                     state: event.ok ? 'done' : 'error',
                     output: event.output,
                     image: event.image,
@@ -540,6 +606,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         providerId: provider.id,
         model,
         messages: chatMessages,
+        agentId: get().activeAgentId,
         reasoning: info?.reasoning ?? false,
         reasoningEffort: settings?.reasoningEffort ?? 'high',
         contextLimit: contextBudget
@@ -635,91 +702,136 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         return { compactingChats: next }
       })
     }
+  },
+
+  handleTaskUpdate: async (update) => {
+    // Track the per-session running set for the badge: a `running` update adds
+    // the job, a terminal one removes it.
+    set((s) => {
+      const current = s.runningTasks[update.sessionId] ?? []
+      const without = current.filter((t) => t.jobId !== update.jobId)
+      const nextForSession = update.state === 'running' ? [...without, update] : without
+      const runningTasks = { ...s.runningTasks }
+      if (nextForSession.length) runningTasks[update.sessionId] = nextForSession
+      else delete runningTasks[update.sessionId]
+      return { runningTasks }
+    })
+
+    // Keep the sidebar in sync (a sub-session appeared or, once done, may be
+    // pruned on the next turn) and reload whichever transcript the user is on:
+    // the parent gets the delivered report card; the sub session shows its work.
+    await get().refreshChats()
+    const active = get().activeChatId
+    if (!active) return
+    if (active === update.sessionId || active === update.subChatId) {
+      set({ messages: await api.messages.list(active) })
+    }
   }
 }))
 
-/** The agentic system prompt for a chat (incl. workspace + any compaction summary). */
-export function buildSystemPrompt(chat: Chat | undefined): string {
-  const system: string[] = [
-    'You are Roxy, an autonomous AI coding agent running inside a desktop app.',
-    'You have tools to read, write, and edit files, run shell commands (bash), search the workspace (list/glob/grep), and drive a browser.',
-    'When the user asks you to build, create, fix, or change something, USE THE TOOLS to actually do it — create the files and run the commands yourself. Do not just describe the steps; perform them, then give a short summary of what you did.',
-    'For large, parallelizable, or research-heavy work, delegate focused sub-tasks to subagents with the `task` tool — `subagent_type: "general"` for full multi-step work, or `"explore"` for read-only search. Each subagent starts blank, so give it all the context it needs; then build on the report it returns. Spin up several when work splits cleanly (e.g. one page or area each).'
-  ]
-  if (chat?.workspacePath) {
-    system.push(`The workspace folder is ${chat.workspacePath}. Tool paths are relative to it.`)
-  }
-  if (chat?.contextSummary) {
-    system.push(
-      `Summary of the earlier conversation (compacted to save context):\n${chat.contextSummary}`
-    )
-  }
-  return system.join('\n\n')
+/**
+ * The model-tuned system prompt for a chat, used for token estimation (the context
+ * meter + the window-cut reservation). The authoritative prompt is built in the
+ * main process at turn time (`agent.ts`); this mirror only needs to be the right
+ * size, so it omits main-only facts (git status, platform) that add just a line.
+ * Passing `agentId` folds in the agent's own prompt (e.g. Plan mode's reminder).
+ */
+export function buildSystemPrompt(chat: Chat | undefined, modelId?: string, agentId?: string): string {
+  const base = PROMPT_TEXT[selectPromptName(modelId)] ?? PROMPT_TEXT.default
+  const environment = buildEnvironment({
+    cwd: chat?.workspacePath || undefined,
+    modelId,
+    date: new Date().toDateString()
+  })
+  const agent = agentId ? getAgent(agentId) : undefined
+  const agentPrompt = agent?.promptFile ? AGENT_PROMPT_TEXT[agent.promptFile] : undefined
+  // Mirror the main process: project instructions (AGENTS.md etc.) then the agent
+  // prompt. Read from the per-workspace cache filled by ensureProjectInstructions;
+  // empty until loaded (the meter fills in once the IPC resolves).
+  const workspace = chat?.workspacePath
+  const instructions = workspace
+    ? useRoxyStore.getState().projectInstructions[workspace] ?? []
+    : []
+  const extra = [...instructions, ...(agentPrompt ? [agentPrompt] : [])]
+  return assembleSystemPrompt({
+    base,
+    environment,
+    extra: extra.length ? extra : undefined,
+    contextSummary: chat?.contextSummary ?? undefined
+  })
 }
 
-/** Build chat-completion messages: an agentic system prompt + workspace + history. */
+/** Build chat-completion messages: workspace history within the context budget.
+ *  The system prompt is prepended in the main process (see harness/agent.ts), so
+ *  it's only estimated here to reserve room in the window cut. Tool calls/results
+ *  are kept structured so multi-turn tool reasoning survives across turns. */
 async function buildChatMessages(
   chatId: string,
   contextBudget = 128_000,
-  outputReserve = 4096
+  outputReserve = 4096,
+  modelId?: string,
+  agentId?: string
 ): Promise<ChatMessage[]> {
   const chat = useRoxyStore.getState().chats.find((c) => c.id === chatId)
-  const systemText = buildSystemPrompt(chat)
+  const systemText = buildSystemPrompt(chat, modelId, agentId)
   const since = chat?.contextSummaryAt ?? 0
-  const all = (await api.messages.list(chatId))
+  // Each turn rebuilds into one or more chat messages; keeping them grouped means
+  // the window cut below can never split an assistant's tool_calls from the
+  // matching role:'tool' results (which would orphan them → provider 400s).
+  const groups = (await api.messages.list(chatId))
     .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.createdAt > since)
-    .map((m) => {
-      const content = m.parts
-        .map((p) =>
-          p.type === 'tool'
-            ? p.output
-              ? `\`\`\`\n${p.output}\n\`\`\``
-              : ''
-            : p.type === 'image' || p.type === 'reasoning'
-              ? ''
-              : p.text
-        )
-        .join('')
-        .trim()
-      const images = m.parts
-        .filter((p): p is Extract<MessagePart, { type: 'image' }> => p.type === 'image')
-        .map((p) => ({ dataUrl: p.dataUrl, mediaType: p.mediaType }))
-      return {
-        role: m.role as 'user' | 'assistant',
-        content,
-        ...(images.length ? { images } : {})
-      }
-    })
-    .filter((m) => m.content.length > 0 || (m.images && m.images.length > 0))
+    .map(reconstructTurn)
+    .filter((g) => g.length > 0)
+
+  // Prune older tool outputs to a head/tail preview *before* the window cut, so
+  // more turns of reasoning survive within budget instead of whole turns being
+  // dropped (Phase 9.2). Prune on the flattened list (recent-token aware), then
+  // zip back into the groups so tool_calls stay paired with their results.
+  const flatAll = groups.flat()
+  const prunedFlat = pruneToolMessages(flatAll, { keepRecentTokens: KEEP_RECENT_TOKENS })
+  let pk = 0
+  const prunedGroups = groups.map((g) => g.map(() => prunedFlat[pk++]))
 
   // The "window cut": keep the most recent turns whose estimated tokens fit the
   // chosen context budget, reserving room for the system prompt + model output
-  // (~4 chars/token; images counted at a flat ~800 tokens each).
+  // (~4 chars/token; tool-call args included; images at a flat ~800 tokens each).
   const cap = Math.max(2000, contextBudget - outputReserve - Math.ceil(systemText.length / 4))
-  const estimate = (m: { content: string; images?: { dataUrl: string }[] }): number =>
-    Math.ceil(m.content.length / 4) + (m.images?.length ?? 0) * 800
-  const kept: typeof all = []
+  const estimate = (m: ChatMessage): number =>
+    Math.ceil((m.content.length + (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0)) / 4) +
+    (m.images?.length ?? 0) * 800
+  const groupTokens = (g: ChatMessage[]): number => g.reduce((n, m) => n + estimate(m), 0)
+  const kept: ChatMessage[][] = []
   let used = 0
-  for (let i = all.length - 1; i >= 0; i--) {
-    const tokens = estimate(all[i])
+  for (let i = prunedGroups.length - 1; i >= 0; i--) {
+    const tokens = groupTokens(prunedGroups[i])
     if (used + tokens > cap && kept.length > 0) break
-    kept.unshift(all[i])
+    kept.unshift(prunedGroups[i])
     used += tokens
   }
-  return [{ role: 'system', content: systemText }, ...kept]
+  const flat = kept.flat()
+  // Normalize the window's leading edge to a user message: when the budget cut
+  // lands mid-history it can leave a dangling assistant turn (whose own user
+  // prompt was trimmed) or an orphaned role:'tool' result at the front. Both are
+  // invalid for Anthropic ("first message must be user") and orphan a tool_use
+  // from its tool_result. The current user turn is always at the tail, so this
+  // only ever trims stale boundary turns, never real recent context.
+  while (flat.length && flat[0].role !== 'user') flat.shift()
+  return flat
 }
 
 /** Rough estimate of tokens currently in a chat's live window (post-compaction). */
-async function estimateUsedTokens(chatId: string): Promise<number> {
+async function estimateUsedTokens(chatId: string, modelId?: string, agentId?: string): Promise<number> {
   const chat = useRoxyStore.getState().chats.find((c) => c.id === chatId)
   const since = chat?.contextSummaryAt ?? 0
   const msgs = (await api.messages.list(chatId)).filter((m) => m.createdAt > since)
-  let chars = buildSystemPrompt(chat).length
+  let chars = buildSystemPrompt(chat, modelId, agentId).length
   let images = 0
   for (const m of msgs)
     for (const p of m.parts) {
-      if (p.type === 'tool') chars += (p.output ?? '').length
-      else if (p.type === 'image') images += 1
+      if (p.type === 'tool') {
+        chars += Math.min((p.output ?? '').length, REPLAY_OUTPUT_CAP)
+        if (p.input) chars += JSON.stringify(p.input).length
+      } else if (p.type === 'image') images += 1
       else chars += p.text.length
     }
   return Math.ceil(chars / 4) + images * 800

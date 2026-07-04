@@ -1,7 +1,7 @@
 import { useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react'
 import { ArrowUp, Plus, Square, X } from 'lucide-react'
 import { ModelPicker } from './ModelPicker'
-import { ContextMeter, ContextPicker, ThinkingPicker } from './InferenceControls'
+import { ContextMeter, ContextPicker, ThinkingPicker, AgentPicker } from './InferenceControls'
 import { imageFilesFrom, readImageFile, type ComposerImage } from '../lib/images'
 
 export function Composer({
@@ -135,6 +135,7 @@ export function Composer({
               <Plus className="h-4 w-4" />
             </button>
             <ModelPicker />
+            <AgentPicker />
             <ThinkingPicker />
             <ContextPicker />
             <ContextMeter />

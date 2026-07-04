@@ -6,8 +6,13 @@ import { registerIpc } from './ipc'
 import { getDb } from './db/database'
 import { startLoopScheduler } from './services/loops'
 import { setAppIcon } from './services/browser'
+import { cleanupToolOutputs } from './services/tool-output-store'
+import { cancelAllBackgroundJobs } from './services/background-tasks'
+import { shutdownAllLsp } from './services/lsp'
+import { shutdownAllMcp } from './services/mcp'
 import { initAutoUpdater } from './services/updater'
-import { killAllBackground } from './harness'
+import { killAllBackground, setPromptText, setAgentPromptText } from './harness'
+import { PROMPT_TEXT, AGENT_PROMPT_TEXT } from '../shared/prompt-text'
 
 function createWindow(): BrowserWindow {
   const isMac = process.platform === 'darwin'
@@ -58,6 +63,11 @@ app.whenReady().then(() => {
   // Give the agent's browser window the Roxy icon too (no asset import in the
   // browser service so the smoke's esbuild bundle stays happy).
   setAppIcon(icon)
+  // Inject the tuned per-model + per-agent prompt text into the harness (imported
+  // via `?raw` here in the Vite-built entry, so the esbuild smoke bundle never
+  // sees it).
+  setPromptText(PROMPT_TEXT)
+  setAgentPromptText(AGENT_PROMPT_TEXT)
 
   if (process.platform === 'darwin') {
     app.dock?.setIcon(icon)
@@ -71,6 +81,8 @@ app.whenReady().then(() => {
   getDb()
   registerIpc()
   startLoopScheduler()
+  // Sweep tool-output spill files older than the retention window (best-effort).
+  void cleanupToolOutputs()
 
   const mainWindow = createWindow()
   initAutoUpdater(mainWindow)
@@ -86,7 +98,12 @@ app.on('window-all-closed', () => {
   }
 })
 
-// Kill any agent-started background processes (dev servers/watchers) on quit.
+// Kill any agent-started background processes (dev servers/watchers) on quit,
+// cancel any in-flight background subagent tasks (Phase 11), and shut down any
+// warm language servers (Phase 12).
 app.on('will-quit', () => {
   killAllBackground()
+  cancelAllBackgroundJobs()
+  shutdownAllLsp()
+  void shutdownAllMcp()
 })

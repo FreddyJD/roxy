@@ -3,8 +3,10 @@
 > An open-source AI coding agent for engineers — built as a cross-platform desktop app.
 
 Roxy is an [Electron](https://www.electronjs.org/) application written in **TypeScript** with a
-**React** renderer. This repository is the foundation; the agent tooling and capabilities are layered
-on top of this scaffold.
+**React** renderer. It ships a full agent **harness** in the main process: a provider-agnostic
+tool-calling loop, per-model tuned system prompts, Plan/Build agents and subagents, disk-backed
+context management, and integrations for MCP servers, language-server diagnostics, and `SKILL.md`
+skills.
 
 ## Tech stack
 
@@ -14,6 +16,9 @@ on top of this scaffold.
 | Build tool   | electron-vite (Vite 5)                  |
 | UI           | React 18 + TypeScript                   |
 | Styling      | Tailwind CSS v4                         |
+| Tool-calling | Vercel AI SDK (Anthropic + Google)      |
+| Integrations | Model Context Protocol SDK              |
+| Storage      | better-sqlite3                          |
 | Packaging    | electron-builder                        |
 | Formatting   | Prettier                                |
 
@@ -22,20 +27,20 @@ on top of this scaffold.
 ```
 roxy/
 ├── build/                  # Packaging resources (icons, entitlements)
-├── resources/              # Static assets bundled with the app (app icon)
+├── resources/              # Static assets bundled with the app
+│   └── prompts/            # Tuned per-model + agent system prompts (inlined at build via ?raw)
 ├── src/
 │   ├── main/               # Electron main process (Node.js)
-│   │   └── index.ts        # App lifecycle, window creation, IPC handlers
-│   ├── preload/            # Secure bridge between main and renderer
-│   │   ├── index.ts        # contextBridge API surface (window.api)
-│   │   └── index.d.ts      # Renderer-side type definitions
-│   └── renderer/           # React app (Chromium)
-│       ├── index.html
-│       └── src/
-│           ├── main.tsx    # React entry point
-│           ├── App.tsx     # Root component
-│           ├── assets/     # CSS and images
-│           └── components/ # UI components
+│   │   ├── index.ts        # App lifecycle, window creation, service startup
+│   │   ├── harness/        # The agent loop: agent.ts (loop + tool schemas), tools.ts (dispatch)
+│   │   ├── services/       # llm.ts, aisdk.ts, mcp.ts, lsp.ts, skills.ts, browser.ts, loops.ts, …
+│   │   ├── db/             # better-sqlite3 store: schema, migrations, repo
+│   │   └── ipc/            # ipcMain handlers wiring the renderer to the harness/services
+│   ├── preload/            # Secure bridge between main and renderer (window.api)
+│   ├── renderer/           # React app (Chromium): routes, components, store
+│   └── shared/             # Pure, cross-process modules: tools, agents, prompt/prompt-text,
+│                           #   providers, context, tool-history, mcp, lsp, skills, web, types
+├── test/                   # smoke.ts (Electron) + shared.ts (pure Node) validation suites
 ├── electron.vite.config.ts # Main / preload / renderer build config
 └── electron-builder.yml    # Distribution config
 ```
@@ -57,6 +62,7 @@ npm run dev
 | `npm run dev`           | Start the app with hot reload                  |
 | `npm run build`         | Type-check and build for production            |
 | `npm run typecheck`     | Type-check main, preload, and renderer         |
+| `npm run smoke`         | Run the shared (Node) + app (Electron) suites  |
 | `npm run format`        | Format the codebase with Prettier              |
 | `npm run build:win`     | Build a Windows installer                      |
 | `npm run build:mac`     | Build a macOS app                              |
@@ -66,9 +72,42 @@ npm run dev
 
 - **Context isolation is enabled** and `nodeIntegration` is off. The renderer talks to the main
   process only through the typed `window.api` bridge defined in [`src/preload`](src/preload/index.ts).
-- IPC handlers live in [`src/main/index.ts`](src/main/index.ts). Add new agent capabilities by
-  registering an `ipcMain.handle(...)` there and exposing a matching method in the preload bridge.
+- IPC handlers live in [`src/main/ipc`](src/main/ipc/index.ts). Add a new renderer-facing capability
+  by registering an `ipcMain.handle(...)` there and exposing a matching method in the preload bridge.
+
+### Agent harness
+
+The main process runs a single provider-agnostic agent loop; the renderer only streams events.
+
+- **Tool loop** — [`src/main/harness/agent.ts`](src/main/harness/agent.ts) owns the turn loop, the
+  tool JSON-schemas (`BASE_SCHEMAS`), context trimming, and subagent dispatch.
+  [`tools.ts`](src/main/harness/tools.ts) is the authoritative `runTool` dispatcher. The user-facing
+  catalog in [`src/shared/tools.ts`](src/shared/tools.ts) mirrors it (the "Skills & Tools" page) and
+  is guarded against drift by the shared smoke suite.
+- **Providers** — the hand-rolled OpenAI/Copilot SSE path (with Copilot's short-lived-token refresh)
+  lives in [`services/llm.ts`](src/main/services/llm.ts); Anthropic + Google route through the Vercel
+  AI SDK in [`services/aisdk.ts`](src/main/services/aisdk.ts) so every family gets tool-calling.
+- **Prompts & agents** — tuned per-model prompts are selected in
+  [`src/shared/prompt.ts`](src/shared/prompt.ts) and inlined from `resources/prompts/*.txt` via `?raw`
+  in [`prompt-text.ts`](src/shared/prompt-text.ts). Plan/Build agents + subagents are defined in
+  [`src/shared/agents.ts`](src/shared/agents.ts); an agent's `tools` allowlist and `promptFile` are
+  what make Plan genuinely read-only.
+- **Context management** — overflow is measured against the model's real limit
+  ([`src/shared/context.ts`](src/shared/context.ts)); large tool outputs spill to disk with a preview
+  pointer ([`services/tool-output-store.ts`](src/main/services/tool-output-store.ts)); older turns are
+  summarized by [`services/compaction.ts`](src/main/services/compaction.ts).
+- **Ecosystem** — external tool servers via the MCP client
+  ([`services/mcp.ts`](src/main/services/mcp.ts)), language-server diagnostics fed back after edits
+  ([`services/lsp.ts`](src/main/services/lsp.ts)), and on-demand `SKILL.md` skills
+  ([`services/skills.ts`](src/main/services/skills.ts)). Roxy's own differentiators — the persistent
+  browser toolset ([`services/browser.ts`](src/main/services/browser.ts)) and recurring "loops"
+  ([`services/loops.ts`](src/main/services/loops.ts)) — run through the same loop.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © Roxy.
+
+Roxy is a fork of [opencode](https://github.com/sst/opencode) (also MIT) and
+retains opencode's copyright alongside Roxy's own. See [LICENSE](LICENSE) and
+[`resources/prompts/ATTRIBUTION.txt`](resources/prompts/ATTRIBUTION.txt) for
+details.

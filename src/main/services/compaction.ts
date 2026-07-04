@@ -7,11 +7,24 @@
  */
 import * as repo from '../db/repo'
 import { streamChat } from './llm'
+import { getAgent } from '../../shared/agents'
+import { AGENT_PROMPT_TEXT } from '../../shared/prompt-text'
 import type { Chat, Message } from '../../shared/types'
 
-const COMPACT_SYSTEM = [
-  'You are a context-compaction engine for an autonomous coding agent.',
-  'Produce a dense, structured summary of the conversation so the assistant can continue with no loss of essential context.',
+/**
+ * The compaction agent's tuned system prompt (resources/prompts/agent-compaction.txt,
+ * resolved via its `promptFile`), with a terse inline fallback if the asset is ever
+ * missing. The agent-compaction prompt is an anchored summarizer: it honors a
+ * `<previous-summary>` block and follows the output structure the user prompt asks for.
+ */
+const COMPACT_SYSTEM =
+  AGENT_PROMPT_TEXT[getAgent('compaction')?.promptFile ?? ''] ??
+  'You are an anchored context-summarization assistant for coding sessions. Summarize only the conversation history you are given, preserving the essential context needed to continue. Output only the summary.'
+
+/** The output structure the summary must follow (lives in the user prompt so the
+ * anchored agent-compaction system prompt stays generic). */
+const COMPACT_STRUCTURE = [
+  'Summarize the conversation below so the assistant can continue with no loss of essential context.',
   'Preserve: the user’s goals and constraints, decisions made, files created or edited (with exact paths), key code, commands run and their results or errors, the current state, and any open tasks or questions.',
   'Drop greetings and redundant detail. Use terse markdown bullet points grouped by topic. Output ONLY the summary.'
 ].join(' ')
@@ -50,7 +63,9 @@ export async function compactChat(
     .map((m) => `${m.role.toUpperCase()}: ${flatten(m)}`)
     .join('\n\n')
     .slice(-120_000)
-  const prior = existing.contextSummary ? `Previous summary:\n${existing.contextSummary}\n\n` : ''
+  const prior = existing.contextSummary
+    ? `<previous-summary>\n${existing.contextSummary}\n</previous-summary>\n\n`
+    : ''
 
   let summary = ''
   await streamChat({
@@ -58,7 +73,7 @@ export async function compactChat(
     model,
     messages: [
       { role: 'system', content: COMPACT_SYSTEM },
-      { role: 'user', content: `${prior}Conversation to compact:\n\n${convo}` }
+      { role: 'user', content: `${COMPACT_STRUCTURE}\n\n${prior}Conversation to compact:\n\n${convo}` }
     ],
     signal: new AbortController().signal,
     onDelta: (t) => {

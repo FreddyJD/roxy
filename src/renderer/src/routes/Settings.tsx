@@ -7,6 +7,7 @@ import { AUTH_LABELS } from '@shared/providers'
 import { api } from '../lib/api'
 import { Button } from '../components/ui'
 import { PageShell } from '../components/PageShell'
+import { McpServers } from '../components/McpServers'
 import { ProviderLogo } from '../lib/providerLogos'
 import { useRoxyStore } from '../lib/store'
 
@@ -15,12 +16,19 @@ export default function Settings(): JSX.Element {
   const providers = useRoxyStore((s) => s.providers)
   const settings = useRoxyStore((s) => s.settings)
   const refreshProviders = useRoxyStore((s) => s.refreshProviders)
+  const setWebSearchApiKey = useRoxyStore((s) => s.setWebSearchApiKey)
   const bootstrap = useRoxyStore((s) => s.bootstrap)
   const clearActive = useRoxyStore((s) => s.clearActive)
   const [versions, setVersions] = useState<AppVersions | null>(null)
   const [update, setUpdate] = useState<UpdateInfo | null>(null)
   const [confirmingReset, setConfirmingReset] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [searchKey, setSearchKey] = useState('')
+  const [searchKeySaved, setSearchKeySaved] = useState(false)
+
+  useEffect(() => {
+    setSearchKey(settings?.webSearchApiKey ?? '')
+  }, [settings?.webSearchApiKey])
 
   useEffect(() => {
     refreshProviders()
@@ -43,6 +51,12 @@ export default function Settings(): JSX.Element {
     clearActive()
     await bootstrap()
     navigate('/onboarding')
+  }
+
+  const saveSearchKey = async (): Promise<void> => {
+    await setWebSearchApiKey(searchKey.trim() || null)
+    setSearchKeySaved(true)
+    setTimeout(() => setSearchKeySaved(false), 2000)
   }
 
   const us = update?.state
@@ -105,6 +119,55 @@ export default function Settings(): JSX.Element {
             <Globe className="h-3.5 w-3.5" /> Open browser
           </Button>
         </div>
+      </section>
+
+      <section className="mb-8">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          Web search
+        </h2>
+        <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-text">Exa API key (optional)</div>
+            <p className="mt-0.5 text-xs text-text-muted">
+              The <code>websearch</code> tool works out of the box on Exa&apos;s free public endpoint.
+              Add a key to lift rate limits.{' '}
+              <a
+                href="https://dashboard.exa.ai/api-keys"
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent hover:underline"
+              >
+                Get a key
+              </a>
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              type="password"
+              value={searchKey}
+              onChange={(e) => setSearchKey(e.target.value)}
+              placeholder="exa_…"
+              className="min-w-0 flex-1 rounded-lg border border-border bg-surface-strong px-3 py-2 text-sm text-text outline-none placeholder:text-text-subtle focus:border-border-strong"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <Button
+              variant="secondary"
+              className="shrink-0"
+              disabled={searchKey.trim() === (settings?.webSearchApiKey ?? '')}
+              onClick={() => void saveSearchKey()}
+            >
+              {searchKeySaved ? 'Saved' : 'Save'}
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <section className="mb-8">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          MCP servers
+        </h2>
+        <McpServers />
       </section>
 
       <section>

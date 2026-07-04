@@ -42,6 +42,8 @@ export interface SeedProvider {
   env?: string[]
   /** GPT-5+ on this provider routes to the Responses API instead of chat. */
   responsesForGpt5?: boolean
+  /** Surface this provider prominently (badge + top of the list) in onboarding. */
+  recommended?: boolean
   notes?: string
 }
 
@@ -133,6 +135,15 @@ export type MessagePart =
       /** Tool id, e.g. 'bash', 'read', 'list', 'task'. */
       tool: string
       state: 'running' | 'done' | 'error'
+      /**
+       * The model's tool-call id (correlates the call with its result). Stored so
+       * the turn can be replayed as structured `assistant.tool_calls` + `role:'tool'`
+       * messages on later turns instead of a flattened text blob. Absent on legacy
+       * rows and manual `!verb` tool cards (those fall back to text flattening).
+       */
+      callId?: string
+      /** The arguments the model passed to the tool — rebuilds `tool_calls[].function.arguments`. */
+      input?: Record<string, unknown>
       /** One-line summary shown on the tool card (e.g. the command run). */
       title?: string
       /** Result body, shown when the card is expanded. */
@@ -269,6 +280,8 @@ export interface AppSettings {
   reasoningEffort: ReasoningEffort
   /** Chosen context-window budget in tokens; null = use the model default. */
   contextLimit: number | null
+  /** Optional Exa API key for `websearch` (empty = use the keyless public endpoint). */
+  webSearchApiKey: string | null
 }
 
 export interface AppVersions {

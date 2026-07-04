@@ -20,6 +20,9 @@ export const PROVIDER_GROUPS: { id: ProviderGroup; label: string }[] = [
 ]
 
 export const SEED_PROVIDERS: SeedProvider[] = [
+  // ---- Roxy's own inference (featured first) ----
+  { id: 'roxy', name: 'Roxy.gg Inference', wire: 'openai-chat', auth: 'api-key', group: 'gateway', baseURL: 'https://roxy.gg/v1', env: ['ROXY_API_KEY'], recommended: true, notes: "Roxy's own inference gateway — one key for 300+ models, billed to your roxy.gg balance. Paste an rx-… key from your dashboard." },
+
   // ---- A. Frontier labs ----
   { id: 'openai', name: 'OpenAI', wire: 'openai', auth: 'api-key', group: 'frontier', baseURL: 'https://api.openai.com/v1', env: ['OPENAI_API_KEY'] },
   { id: 'anthropic', name: 'Anthropic', wire: 'anthropic', auth: 'api-key', group: 'frontier', baseURL: 'https://api.anthropic.com', env: ['ANTHROPIC_API_KEY'] },
@@ -88,6 +91,7 @@ export const SEED_PROVIDERS: SeedProvider[] = [
 
 /** Providers surfaced prominently at the top of onboarding. */
 export const FEATURED_PROVIDER_IDS = [
+  'roxy',
   'openai',
   'anthropic',
   'google',

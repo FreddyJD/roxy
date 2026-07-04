@@ -1,17 +1,52 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { CHANNELS } from '../../shared/ipc'
-import type { CreateChatInput, CreateLoopInput, LlmStartInput } from '../../shared/api'
+import type { CreateChatInput, CreateLoopInput, LlmStartInput, McpServerView, SkillView, SkillWriteInput, UpsertMcpServerInput } from '../../shared/api'
 import type { AddMessageInput, ConnectProviderInput, QueueImage, ReasoningEffort } from '../../shared/types'
 import * as repo from '../db/repo'
 import * as copilot from '../services/copilot'
 import * as browser from '../services/browser'
 import { listModels } from '../services/models'
 import { compactChat } from '../services/compaction'
-import { runTool, runAgentTurn } from '../harness'
+import { runTool, runAgentTurn, projectInstructions } from '../harness'
 import { checkForUpdates, quitAndInstall, getUpdateState } from '../services/updater'
+import {
+  activeBackgroundSubChatIds,
+  cancelBackgroundJob,
+  cancelSessionBackgroundJobs,
+  listRunningBackgroundJobs
+} from '../services/background-tasks'
+import { mcpServerSummaries, reconnectMcpServer, disposeConnection } from '../services/mcp'
+import { listSkills, refreshSkills, readSkill, writeSkill, deleteSkill, installSkillFromSource } from '../services/skills'
 
 /** In-flight streamed completions, keyed by requestId, so they can be aborted. */
 const llmControllers = new Map<string, AbortController>()
+
+/** Merge persisted MCP server rows with their live connection status for the UI. */
+function listMcpServersWithStatus(): McpServerView[] {
+  const statusById = new Map(mcpServerSummaries().map((s) => [s.id, s]))
+  return repo.listMcpServers().map((rec) => {
+    const live = statusById.get(rec.id)
+    return {
+      id: rec.id,
+      config: rec.config,
+      enabled: rec.enabled,
+      status: live?.status ?? 'disabled',
+      tools: live?.tools ?? [],
+      error: live?.error
+    }
+  })
+}
+
+/**
+ * Discover skills for the Skills page. With no cwd we scan the user's global
+ * skill roots (~/.roxy/skills etc.); a workspace path additionally surfaces that
+ * project's skills. Returns metadata only (bodies load on demand via the tool).
+ */
+async function discoverSkillViews(cwd?: string): Promise<SkillView[]> {
+  const base = cwd || app.getPath('home')
+  const skills = await listSkills(base)
+  return skills.map(({ name, description, location, source }) => ({ name, description, location, source }))
+}
 
 /**
  * Register every IPC handler. Each maps 1:1 to a method on the `window.roxy`
@@ -31,6 +66,9 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.settingsSetContextLimit, (_e, limit: number | null) =>
     repo.setContextLimit(limit)
   )
+  ipcMain.handle(CHANNELS.settingsSetWebSearchApiKey, (_e, key: string | null) =>
+    repo.setWebSearchApiKey(key)
+  )
   ipcMain.handle(CHANNELS.settingsCompleteOnboarding, () => repo.completeOnboarding())
   ipcMain.handle(CHANNELS.settingsReset, () => repo.resetAll())
 
@@ -47,7 +85,12 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.chatsRename, (_e, id: string, title: string) =>
     repo.renameChat(id, title)
   )
-  ipcMain.handle(CHANNELS.chatsRemove, (_e, id: string) => repo.removeChat(id))
+  ipcMain.handle(CHANNELS.chatsRemove, (_e, id: string) => {
+    // Cancel any background subagents this session launched before it's deleted,
+    // so detached work doesn't keep running against a gone parent.
+    cancelSessionBackgroundJobs(id)
+    return repo.removeChat(id)
+  })
 
   // ---- messages ----
   ipcMain.handle(CHANNELS.messagesList, (_e, chatId: string) => repo.listMessages(chatId))
@@ -58,6 +101,74 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.integrationsSetEnabled, (_e, id: string, enabled: boolean) =>
     repo.setIntegrationEnabled(id, enabled)
   )
+
+  // ---- MCP servers (Phase 13) ----
+  ipcMain.handle(CHANNELS.mcpList, () => listMcpServersWithStatus())
+  ipcMain.handle(CHANNELS.mcpUpsert, (_e, input: UpsertMcpServerInput) => {
+    repo.upsertMcpServer(input)
+    return listMcpServersWithStatus()
+  })
+  ipcMain.handle(CHANNELS.mcpRemove, async (_e, id: string) => {
+    await disposeConnection(id)
+    repo.deleteMcpServer(id)
+    return listMcpServersWithStatus()
+  })
+  ipcMain.handle(CHANNELS.mcpSetEnabled, async (_e, id: string, enabled: boolean) => {
+    repo.setMcpServerEnabled(id, enabled)
+    // Disabling should immediately tear down the live connection; enabling connects
+    // lazily on the next agent turn (or via an explicit reconnect).
+    if (!enabled) await disposeConnection(id)
+    return listMcpServersWithStatus()
+  })
+  ipcMain.handle(CHANNELS.mcpReconnect, async (_e, id: string) => {
+    const rec = repo.listMcpServers().find((r) => r.id === id)
+    if (rec) await reconnectMcpServer(rec, app.getPath('home'))
+    return listMcpServersWithStatus()
+  })
+
+  // ---- skills (SKILL.md discovery) ----
+  ipcMain.handle(CHANNELS.skillsList, (_e, cwd?: string) => discoverSkillViews(cwd))
+  ipcMain.handle(CHANNELS.skillsRefresh, (_e, cwd?: string) => {
+    refreshSkills(cwd || undefined)
+    return discoverSkillViews(cwd)
+  })
+  ipcMain.handle(CHANNELS.skillsRead, async (_e, name: string, cwd?: string) => {
+    const skill = await readSkill(name, cwd || app.getPath('home'))
+    if (!skill) return null
+    const { name: n, description, location, source, content } = skill
+    return { name: n, description, location, source, body: content }
+  })
+  // The Skills page has no workspace context, so it authors GLOBAL skills by
+  // default (~/.roxy/skills); the agent's `skill_manage` tool can target either
+  // scope. Both go through the same writeSkill/deleteSkill service.
+  ipcMain.handle(CHANNELS.skillsCreate, async (_e, input: SkillWriteInput, cwd?: string) => {
+    await writeSkill({ ...input, scope: input.scope ?? 'global' }, cwd || '', { mode: 'create' })
+    return discoverSkillViews(cwd)
+  })
+  ipcMain.handle(CHANNELS.skillsUpdate, async (_e, input: SkillWriteInput, cwd?: string) => {
+    await writeSkill({ ...input, scope: input.scope ?? 'global' }, cwd || '', { mode: 'edit' })
+    return discoverSkillViews(cwd)
+  })
+  ipcMain.handle(CHANNELS.skillsRemove, async (_e, name: string, cwd?: string) => {
+    await deleteSkill(name, cwd || '')
+    return discoverSkillViews(cwd)
+  })
+  // Install skill(s) from a remote source (GitHub repo/URL or a direct SKILL.md).
+  // The Skills page has no workspace context, so it installs GLOBAL skills; the
+  // agent's `skill_manage` install action can target the workspace.
+  ipcMain.handle(CHANNELS.skillsInstall, async (_e, source: string, cwd?: string) => {
+    const res = await installSkillFromSource(source, {
+      scope: cwd ? 'workspace' : 'global',
+      cwd: cwd || undefined
+    })
+    return {
+      ok: res.ok,
+      installed: res.installed.map(({ name, location }) => ({ name, location })),
+      skipped: res.skipped,
+      error: res.error,
+      skills: await discoverSkillViews(cwd)
+    }
+  })
 
   // ---- system ----
   ipcMain.handle(CHANNELS.systemGetVersions, () => ({
@@ -152,6 +263,7 @@ export function registerIpc(): void {
         providerId: input.providerId,
         model: input.model,
         messages: input.messages,
+        agentId: input.agentId,
         reasoning: input.reasoning,
         reasoningEffort: input.reasoningEffort,
         contextLimit: input.contextLimit,
@@ -165,8 +277,9 @@ export function registerIpc(): void {
         }
       })
       // The turn's subagents are one-shot — drop any with nothing queued so they
-      // don't linger in the sidebar after the work is done.
-      repo.pruneSubchats(input.sessionId)
+      // don't linger in the sidebar after the work is done. Sub-sessions with a
+      // still-running background task are kept (Phase 11) until it reports back.
+      repo.pruneSubchats(input.sessionId, activeBackgroundSubChatIds())
       return { ok: true }
     } catch (e) {
       if (controller.signal.aborted) return { ok: false, error: 'Stopped.' }
@@ -179,6 +292,12 @@ export function registerIpc(): void {
     llmControllers.get(requestId)?.abort()
   })
 
+  // ---- background subagent tasks (Phase 11) ----
+  ipcMain.handle(CHANNELS.tasksListRunning, (_e, sessionId: string) =>
+    listRunningBackgroundJobs(sessionId)
+  )
+  ipcMain.handle(CHANNELS.tasksCancel, (_e, jobId: string) => cancelBackgroundJob(jobId))
+
   // ---- models (models.dev catalog) ----
   ipcMain.handle(CHANNELS.modelsList, (_e, providerId: string) => listModels(providerId))
 
@@ -186,6 +305,7 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.contextCompact, (_e, chatId: string, providerId: string, model: string) =>
     compactChat(chatId, providerId, model)
   )
+  ipcMain.handle(CHANNELS.contextInstructions, (_e, cwd: string) => projectInstructions(cwd))
 
   // ---- browser (URL bar + manual control) ----
   ipcMain.handle(CHANNELS.browserOpen, async (_e, url?: string) => {

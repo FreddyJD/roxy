@@ -4,9 +4,11 @@ import {
   ChevronRight,
   FolderOpen,
   Hammer,
+  Lightbulb,
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
+  Plug,
   Plus,
   Repeat,
   Settings as SettingsIcon,
@@ -14,6 +16,7 @@ import {
 } from 'lucide-react'
 import type { Chat, Loop } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
+import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import { HeartbeatDot, NewLoopDialog } from './LoopsSection'
 import { UpdateCard } from './UpdateCard'
@@ -144,19 +147,35 @@ export function Sidebar(): JSX.Element {
           </button>
           <button
             onClick={newSession}
-            title="New session"
+            title="New project"
             className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
           >
             <FolderOpen className="h-4 w-4" />
           </button>
         </div>
-        <button
-          onClick={() => navigate('/settings')}
-          title="Settings"
-          className="mb-3 mt-auto flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
-        >
-          <SettingsIcon className="h-4 w-4" />
-        </button>
+        <div className="mb-3 mt-auto flex flex-col items-center gap-1">
+          <button
+            onClick={() => navigate('/skills')}
+            title="Skills"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          >
+            <Lightbulb className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => navigate('/mcp')}
+            title="MCP Servers"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          >
+            <Plug className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => navigate('/settings')}
+            title="Settings"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          >
+            <SettingsIcon className="h-4 w-4" />
+          </button>
+        </div>
       </aside>
     )
   }
@@ -167,7 +186,7 @@ export function Sidebar(): JSX.Element {
       className="relative flex h-full shrink-0 flex-col border-r border-border bg-surface"
     >
       <div className="titlebar reserve-controls-left flex items-center justify-between px-4 py-3.5">
-        <div className="flex items-center gap-2.5">
+        <div className="hide-on-mac flex items-center gap-2.5">
           <img
             src={roxy}
             alt="Roxy"
@@ -175,7 +194,7 @@ export function Sidebar(): JSX.Element {
           />
           <span className="text-sm font-semibold tracking-tight">Roxy</span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1">
           <button
             onClick={() => navigate('/settings')}
             title="Settings"
@@ -196,9 +215,10 @@ export function Sidebar(): JSX.Element {
       <div className="px-3">
         <button
           onClick={newSession}
+          title="Open a folder as a new project"
           className="flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-white text-sm font-medium text-black transition hover:bg-white/90"
         >
-          <FolderOpen className="h-4 w-4" /> New session
+          <FolderOpen className="h-4 w-4" /> New project
         </button>
       </div>
 
@@ -395,6 +415,8 @@ export function Sidebar(): JSX.Element {
         />
       )}
 
+      <CustomizeNav />
+
       <UpdateCard />
 
       {/* Drag the right edge to resize; double-click to reset to the default width. */}
@@ -405,5 +427,64 @@ export function Sidebar(): JSX.Element {
         className="absolute inset-y-0 right-0 z-20 w-1 cursor-col-resize transition hover:bg-accent/50"
       />
     </aside>
+  )
+}
+
+/** Counts of discovered skills + configured MCP servers, refreshed when focused. */
+function useCustomizeCounts(): { skills: number; mcp: number } {
+  const [counts, setCounts] = useState<{ skills: number; mcp: number }>({ skills: 0, mcp: 0 })
+  useEffect(() => {
+    let alive = true
+    const load = (): void => {
+      Promise.all([api.skills.list(), api.mcp.list()])
+        .then(([skills, mcp]) => {
+          if (alive) setCounts({ skills: skills.length, mcp: mcp.length })
+        })
+        .catch(() => {})
+    }
+    load()
+    // Re-count when the window regains focus (the user may have edited skills/MCP on a page).
+    window.addEventListener('focus', load)
+    return () => {
+      alive = false
+      window.removeEventListener('focus', load)
+    }
+  }, [])
+  return counts
+}
+
+/**
+ * The "Customize" section pinned to the bottom of the sidebar — quick access to
+ * the Skills and MCP Servers pages (à la VS Code's Customizations panel), with a
+ * live count on each.
+ */
+function CustomizeNav(): JSX.Element {
+  const navigate = useNavigate()
+  const counts = useCustomizeCounts()
+  const items = [
+    { label: 'Skills', icon: Lightbulb, to: '/skills', count: counts.skills },
+    { label: 'MCP Servers', icon: Plug, to: '/mcp', count: counts.mcp }
+  ]
+  return (
+    <div className="border-t border-border px-3 py-2">
+      <span className="px-1 text-[10px] font-semibold uppercase tracking-wide text-text-subtle">
+        Customize
+      </span>
+      <div className="mt-1 flex flex-col gap-0.5">
+        {items.map((it) => (
+          <button
+            key={it.to}
+            onClick={() => navigate(it.to)}
+            className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm text-text-muted transition hover:bg-white/5 hover:text-text"
+          >
+            <it.icon className="h-4 w-4 shrink-0 opacity-80" />
+            <span className="flex-1 text-left">{it.label}</span>
+            {it.count > 0 && (
+              <span className="shrink-0 text-[10px] tabular-nums text-text-subtle">{it.count}</span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }

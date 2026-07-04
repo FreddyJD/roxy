@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Brain, Check, Loader2 } from 'lucide-react'
 import type { MessagePart, ReasoningEffort } from '@shared/types'
 import type { ModelInfo } from '@shared/api'
+import { PRIMARY_AGENTS, getAgent, DEFAULT_AGENT_ID } from '@shared/agents'
 import { buildSystemPrompt, useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
 
@@ -127,6 +128,79 @@ export function ThinkingPicker(): JSX.Element | null {
   )
 }
 
+// ---- Agent (Build vs Plan) ---------------------------------------------------
+
+/**
+ * Primary-agent selector. Switching to Plan makes the next turn read-only: the
+ * harness resolves this agent id, layers its `plan.txt` reminder onto the system
+ * prompt, and narrows the tool allowlist (no write/edit). Build is the default.
+ */
+export function AgentPicker(): JSX.Element {
+  const activeAgentId = useRoxyStore((s) => s.activeAgentId)
+  const setActiveAgent = useRoxyStore((s) => s.setActiveAgent)
+  const { open, setOpen, ref } = usePopover()
+
+  const active = getAgent(activeAgentId) ?? getAgent(DEFAULT_AGENT_ID)!
+
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen(!open)} className={triggerClass} title="Agent mode">
+        <span
+          className="h-2 w-2 shrink-0 rounded-full"
+          style={{ backgroundColor: active.color }}
+        />
+        <span>{active.name}</span>
+      </button>
+      {open && (
+        <div className={popoverClass}>
+          <div className="border-b border-border px-3 py-2 text-[11px] font-medium text-text-subtle">
+            Agent
+          </div>
+          <div className="py-1">
+            {PRIMARY_AGENTS.map((a) => {
+              const selected = a.id === active.id
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveAgent(a.id)
+                    setOpen(false)
+                  }}
+                  className={cn(
+                    'flex w-full items-start gap-2 px-3 py-1.5 text-left transition',
+                    selected ? 'bg-accent/15' : 'hover:bg-white/5'
+                  )}
+                >
+                  <Check
+                    className={cn('mt-0.5 h-3.5 w-3.5 shrink-0', selected ? 'text-accent' : 'opacity-0')}
+                  />
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5 text-xs font-medium text-text">
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: a.color }}
+                      />
+                      {a.name}
+                      {a.id === DEFAULT_AGENT_ID && (
+                        <span className="text-text-subtle">(default)</span>
+                      )}
+                    </span>
+                    <span className="block text-[11px] text-text-subtle">{a.description}</span>
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          <div className="border-t border-border px-3 py-1.5 text-[11px] text-text-subtle">
+            Plan is read-only — it explores and proposes without editing files.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ---- Context window ----------------------------------------------------------
 
 function formatTokens(n: number): string {
@@ -238,11 +312,19 @@ export function ContextMeter(): JSX.Element {
     s.activeChatId ? s.streamingChats[s.activeChatId] : undefined
   )
   const chats = useRoxyStore((s) => s.chats)
+  const activeAgentId = useRoxyStore((s) => s.activeAgentId)
+  const projectInstructions = useRoxyStore((s) => s.projectInstructions)
+  const ensureProjectInstructions = useRoxyStore((s) => s.ensureProjectInstructions)
   const compactConversation = useRoxyStore((s) => s.compactConversation)
   const compacting = useRoxyStore((s) => (activeChatId ? !!s.compactingChats[activeChatId] : false))
   const [open, setOpen] = useState(false)
 
   const chat = chats.find((c) => c.id === activeChatId)
+  // Load the workspace's instruction files so systemTokens counts them; the
+  // subscription above re-renders the meter once they resolve.
+  useEffect(() => {
+    if (chat?.workspacePath) void ensureProjectInstructions(chat.workspacePath)
+  }, [chat?.workspacePath, ensureProjectInstructions])
   const since = chat?.contextSummaryAt ?? 0
   // Count only what actually goes to the model: turns after the compaction point.
   const counted = messages.filter((m) => m.createdAt > since)
@@ -259,7 +341,12 @@ export function ContextMeter(): JSX.Element {
   // Fold in the in-flight assistant turn so the meter fills live as the agent's
   // text, reasoning, and tool results stream in — not only after the turn ends.
   if (streaming) for (const p of streaming) countPart(p)
-  const systemTokens = Math.ceil(buildSystemPrompt(chat).length / 4)
+  // Recomputes when the workspace's instructions resolve (projectInstructions dep),
+  // so the meter reflects AGENTS.md/CLAUDE.md size once loaded.
+  const systemTokens = useMemo(
+    () => Math.ceil(buildSystemPrompt(chat, info?.id, activeAgentId).length / 4),
+    [chat, info?.id, activeAgentId, projectInstructions]
+  )
   const toolDefsTokens = chat?.workspacePath ? 1100 : 0
   const used = messagesTokens + toolTokens + otherTokens + systemTokens + toolDefsTokens
 

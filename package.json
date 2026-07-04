@@ -1,9 +1,9 @@
 {
   "name": "roxy",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "Roxy — an open-source AI coding agent for engineers.",
   "main": "./out/main/index.js",
-  "author": "",
+  "author": "Roxy (https://github.com/FreddyJD/roxy)",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -37,11 +37,15 @@
     "smoke": "npm run smoke:shared && npm run smoke:app"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.85",
+    "@ai-sdk/google": "^2.0.78",
     "@electron-toolkit/preload": "^3.0.1",
     "@electron-toolkit/utils": "^3.0.0",
     "@fontsource-variable/geist": "^5.2.9",
     "@fontsource-variable/geist-mono": "^5.2.8",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@pierre/diffs": "^1.2.11",
+    "ai": "^5.0.210",
     "better-sqlite3": "^12.11.1",
     "clsx": "^2.1.1",
     "electron-updater": "^6.3.9",

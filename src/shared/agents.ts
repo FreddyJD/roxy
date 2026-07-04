@@ -14,14 +14,13 @@ export interface AgentDef {
   name: string
   description: string
   mode: AgentMode
-  /** Utility agents (compaction/title/summary) — not shown to the user. */
+  /** Utility agents (e.g. compaction) — not shown to the user. */
   hidden: boolean
   color: string
   /** Tool ids this agent may use, or 'all'. */
   tools: string[] | 'all'
   /** Agent-specific prompt file in resources/prompts, when it overrides the default. */
   promptFile?: string
-  temperature?: number
 }
 
 export const AGENTS: AgentDef[] = [
@@ -41,7 +40,7 @@ export const AGENTS: AgentDef[] = [
     mode: 'primary',
     hidden: false,
     color: '#3fb950',
-    tools: ['read', 'grep', 'glob', 'list', 'bash', 'webfetch', 'websearch', 'todowrite', 'question'],
+    tools: ['read', 'grep', 'glob', 'list', 'bash', 'webfetch', 'websearch', 'skill'],
     promptFile: 'plan.txt'
   },
   {
@@ -61,7 +60,7 @@ export const AGENTS: AgentDef[] = [
     mode: 'subagent',
     hidden: false,
     color: '#f0883e',
-    tools: ['grep', 'glob', 'list', 'bash', 'webfetch', 'websearch', 'read'],
+    tools: ['grep', 'glob', 'list', 'bash', 'webfetch', 'websearch', 'read', 'skill'],
     promptFile: 'agent-explore.txt'
   },
   {
@@ -73,27 +72,6 @@ export const AGENTS: AgentDef[] = [
     color: '#8b8b93',
     tools: [],
     promptFile: 'agent-compaction.txt'
-  },
-  {
-    id: 'title',
-    name: 'Title',
-    description: 'Generates a short session title.',
-    mode: 'primary',
-    hidden: true,
-    color: '#8b8b93',
-    tools: [],
-    promptFile: 'agent-title.txt',
-    temperature: 0.5
-  },
-  {
-    id: 'summary',
-    name: 'Summary',
-    description: 'Writes a PR-style summary of the session.',
-    mode: 'primary',
-    hidden: true,
-    color: '#8b8b93',
-    tools: [],
-    promptFile: 'agent-summary.txt'
   }
 ]
 

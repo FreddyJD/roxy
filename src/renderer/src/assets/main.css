@@ -106,3 +106,10 @@ body {
 [data-platform='linux'] .reserve-controls-right {
   padding-right: 144px;
 }
+
+/* On macOS the native traffic lights already sit in the top-left, so hide the
+   in-app brand (Roxy logo + name) there to avoid crowding them. Other platforms
+   keep the brand, since their window controls are on the right. */
+[data-platform='darwin'] .hide-on-mac {
+  display: none;
+}

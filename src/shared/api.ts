@@ -20,6 +20,62 @@ import type {
   ToolDiff,
   ToolResult
 } from './types'
+import type { McpServerConfig } from './mcp'
+
+/** A configured MCP server merged with its live connection status (for Settings). */
+export interface McpServerView {
+  id: string
+  config: McpServerConfig
+  enabled: boolean
+  status: 'connected' | 'error' | 'disabled'
+  /** Unqualified tool names exposed by the server when connected. */
+  tools: string[]
+  error?: string
+}
+
+/** Payload to create/replace an MCP server entry. */
+export interface UpsertMcpServerInput {
+  id: string
+  config: McpServerConfig
+  enabled?: boolean
+}
+
+/** A skill discovered on disk (metadata only — the body is loaded on demand by the tool). */
+export interface SkillView {
+  name: string
+  description?: string
+  /** Absolute path to the source SKILL.md / <name>.md. */
+  location: string
+  /** 'workspace' (a project source) or 'global' (under the user's home). */
+  source: 'workspace' | 'global'
+}
+
+/** A skill plus its full markdown body — returned by `skills.read` for the editor. */
+export interface SkillDetail extends SkillView {
+  body: string
+}
+
+/** Payload to create/edit a skill from the UI (mirrors the `skill_manage` tool). */
+export interface SkillWriteInput {
+  name: string
+  description?: string
+  body?: string
+  /** Where to write it — defaults to 'global' from the Skills page (no workspace context). */
+  scope?: 'workspace' | 'global'
+}
+
+/** Outcome of installing skill(s) from a remote source (`skills.install`). */
+export interface SkillInstallResult {
+  ok: boolean
+  /** The skills written to disk (folder name + SKILL.md path). */
+  installed: { name: string; location: string }[]
+  /** Sources that were found but not installed, with a reason. */
+  skipped?: { name: string; reason: string }[]
+  /** A friendly error when nothing installed. */
+  error?: string
+  /** The refreshed discovered-skills list, so the caller can update its view. */
+  skills: SkillView[]
+}
 
 export interface CreateChatInput {
   title?: string
@@ -48,10 +104,18 @@ export interface ChatImage {
 
 /** A single chat-completion message sent to the model. */
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
   /** Images to send alongside the text (user messages only). */
   images?: ChatImage[]
+  /**
+   * Structured tool calls this assistant turn made (name + JSON-string args),
+   * so multi-turn tool history survives instead of being flattened to text.
+   * Each id pairs with a following `role:'tool'` message's `toolCallId`.
+   */
+  toolCalls?: { id: string; name: string; arguments: string }[]
+  /** For `role:'tool'` messages — which assistant tool call this result answers. */
+  toolCallId?: string
 }
 
 export interface LlmStartInput {
@@ -60,6 +124,8 @@ export interface LlmStartInput {
   providerId: string
   model: string
   messages: ChatMessage[]
+  /** Which primary agent to run (e.g. "build" or "plan"). Defaults to build. */
+  agentId?: string
   /** Thinking effort for reasoning-capable models. */
   reasoningEffort?: ReasoningEffort
   /** Whether the model supports reasoning (gates sending the effort param). */
@@ -77,13 +143,27 @@ export interface LlmResult {
 export type LlmEvent =
   | { type: 'text'; delta: string }
   | { type: 'reasoning'; delta: string }
-  | { type: 'tool-start'; callId: string; tool: string; title?: string }
+  | { type: 'tool-start'; callId: string; tool: string; title?: string; input?: Record<string, unknown> }
   | { type: 'tool-delta'; callId: string; chunk: string }
   | { type: 'tool-end'; callId: string; output: string; ok: boolean; image?: string; diff?: ToolDiff }
 
 export interface LlmDelta {
   requestId: string
   event: LlmEvent
+}
+
+/** A background subagent task's lifecycle state, broadcast to all windows. */
+export interface TaskUpdate {
+  jobId: string
+  /** The parent session that launched the task. */
+  sessionId: string
+  /** The subagent's own `sub` session, when persisted. */
+  subChatId: string | null
+  description: string
+  subagentType: string
+  state: 'running' | 'completed' | 'error'
+  startedAt: number
+  finishedAt?: number
 }
 
 /** A model offered by a provider (from models.dev). */
@@ -140,6 +220,7 @@ export interface RoxyApi {
     setActiveProvider(providerId: string, model: string | null): Promise<AppSettings>
     setReasoningEffort(level: ReasoningEffort): Promise<AppSettings>
     setContextLimit(limit: number | null): Promise<AppSettings>
+    setWebSearchApiKey(key: string | null): Promise<AppSettings>
     completeOnboarding(): Promise<AppSettings>
     reset(): Promise<void>
   }
@@ -161,6 +242,38 @@ export interface RoxyApi {
   integrations: {
     list(): Promise<IntegrationConnection[]>
     setEnabled(id: string, enabled: boolean): Promise<void>
+  }
+  mcp: {
+    /** List configured MCP servers merged with their live connection status. */
+    list(): Promise<McpServerView[]>
+    /** Create or replace a server entry (persisted; connects lazily on next turn). */
+    upsert(input: UpsertMcpServerInput): Promise<McpServerView[]>
+    /** Delete a server entry and close any open connection. */
+    remove(id: string): Promise<McpServerView[]>
+    /** Enable/disable a server; disabling closes its connection. */
+    setEnabled(id: string, enabled: boolean): Promise<McpServerView[]>
+    /** Force a fresh connection attempt (to validate config); returns updated list. */
+    reconnect(id: string): Promise<McpServerView[]>
+  }
+  skills: {
+    /** Discovered SKILL.md skills (workspace when a cwd is given, else the user's global skills). */
+    list(cwd?: string): Promise<SkillView[]>
+    /** Re-scan from disk (drops the cache) and return the fresh list. */
+    refresh(cwd?: string): Promise<SkillView[]>
+    /** Read one skill in full (including its body) for editing; null if not found. */
+    read(name: string, cwd?: string): Promise<SkillDetail | null>
+    /** Create a new skill on disk; returns the updated list. Rejects duplicate names. */
+    create(input: SkillWriteInput, cwd?: string): Promise<SkillView[]>
+    /** Edit an existing skill (omitted fields are kept); returns the updated list. */
+    update(input: SkillWriteInput, cwd?: string): Promise<SkillView[]>
+    /** Delete a skill by name; returns the updated list. */
+    remove(name: string, cwd?: string): Promise<SkillView[]>
+    /**
+     * Install skill(s) from a remote source — a GitHub `owner/repo`, a github.com
+     * URL, or a direct SKILL.md URL (Roxy's in-app `npx skills add`). Writes global
+     * skills by default (or workspace when a cwd is given).
+     */
+    install(source: string, cwd?: string): Promise<SkillInstallResult>
   }
   system: {
     getVersions(): Promise<AppVersions>
@@ -207,6 +320,14 @@ export interface RoxyApi {
     abort(requestId: string): Promise<void>
     onDelta(callback: (payload: LlmDelta) => void): () => void
   }
+  tasks: {
+    /** The background subagent tasks still running for a session. */
+    listRunning(sessionId: string): Promise<TaskUpdate[]>
+    /** Cancel a running background task by its job id. */
+    cancel(jobId: string): Promise<void>
+    /** Subscribe to background-task state changes; returns an unsubscribe fn. */
+    onUpdate(callback: (update: TaskUpdate) => void): () => void
+  }
   models: {
     /** Live model list for a provider id, from models.dev. */
     list(providerId: string): Promise<ModelInfo[]>
@@ -214,6 +335,8 @@ export interface RoxyApi {
   context: {
     /** Summarize a chat's history into a compaction summary; returns the chat. */
     compact(chatId: string, providerId: string, model: string): Promise<Chat>
+    /** Load project instruction files (AGENTS.md/CLAUDE.md/CONTEXT.md) for a cwd. */
+    instructions(cwd: string): Promise<string[]>
   }
   browser: {
     /** Open/focus the browser window (optionally navigating to a URL). */

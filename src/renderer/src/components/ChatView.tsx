@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, ChevronUp, FolderOpen, ListTree, Repeat, Settings, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, FolderOpen, ListTree, Loader2, Repeat, Settings, X } from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
 import { MessageBubble } from './MessageBubble'
@@ -44,6 +44,9 @@ export function ChatView(): JSX.Element {
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const chats = useRoxyStore((s) => s.chats)
   const loops = useRoxyStore((s) => s.loops)
+  const backgroundTaskCount = useRoxyStore((s) =>
+    s.activeChatId ? (s.runningTasks[s.activeChatId]?.length ?? 0) : 0
+  )
 
   const scrollRef = useRef<HTMLDivElement>(null)
   // Follow the conversation only while you're already at the bottom. If you've
@@ -161,6 +164,15 @@ export function ChatView(): JSX.Element {
                   className={cn('h-3 w-3 transition-transform', infoOpen && 'rotate-90')}
                 />
               </button>
+            )}
+            {backgroundTaskCount > 0 && (
+              <span
+                title={`${backgroundTaskCount} background subagent${backgroundTaskCount === 1 ? '' : 's'} running`}
+                className="flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent"
+              >
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span className="tabular-nums">{backgroundTaskCount}</span>
+              </span>
             )}
           </div>
         )}

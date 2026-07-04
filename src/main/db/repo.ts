@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { resolveSeed } from '../../shared/providers'
+import { normalizeServerConfig, type McpServerConfig, type McpServerRecord } from '../../shared/mcp'
 import type {
   AddMessageInput,
   AppSettings,
@@ -88,7 +89,8 @@ export function getSettings(): AppSettings {
         ? v
         : 'high'
     })(),
-    contextLimit: map.get('context_limit') ? Number(map.get('context_limit')) : null
+    contextLimit: map.get('context_limit') ? Number(map.get('context_limit')) : null,
+    webSearchApiKey: map.get('web_search_api_key') ?? null
   }
 }
 
@@ -120,6 +122,12 @@ export function setContextLimit(limit: number | null): AppSettings {
   return getSettings()
 }
 
+export function setWebSearchApiKey(key: string | null): AppSettings {
+  const trimmed = key?.trim()
+  setSetting('web_search_api_key', trimmed ? trimmed : null)
+  return getSettings()
+}
+
 export function completeOnboarding(): AppSettings {
   setSetting('onboarding_completed', '1')
   return getSettings()
@@ -136,6 +144,7 @@ export function resetAll(): void {
        DELETE FROM credentials;
        DELETE FROM providers;
        DELETE FROM integrations;
+       DELETE FROM mcp_servers;
        DELETE FROM settings;`
     )
   })
@@ -380,7 +389,7 @@ export function listSubchats(parentId: string): Chat[] {
 
 /** Drop a chat's finished subagent sessions that have nothing queued — they're
  *  one-shot by nature and shouldn't pile up in the sidebar after a turn. */
-export function pruneSubchats(parentId: string): void {
+export function pruneSubchats(parentId: string, keepIds?: ReadonlySet<string>): void {
   const db = getDb()
   const subs = db
     .prepare("SELECT id FROM chats WHERE parent_id = ? AND kind = 'sub'")
@@ -388,6 +397,9 @@ export function pruneSubchats(parentId: string): void {
   const queued = db.prepare('SELECT COUNT(*) AS n FROM queue WHERE chat_id = ?')
   const del = db.prepare('DELETE FROM chats WHERE id = ?')
   for (const s of subs) {
+    // Keep sub-sessions with a still-running background task (Phase 11) — pruning
+    // one out from under a detached subagent would orphan its work.
+    if (keepIds?.has(s.id)) continue
     if ((queued.get(s.id) as { n: number }).n === 0) del.run(s.id)
   }
 }
@@ -703,4 +715,56 @@ function safeParse(json: string): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+// ---- MCP servers -------------------------------------------------------------
+
+interface McpServerRow {
+  id: string
+  config: string
+  enabled: number
+  created_at: number
+}
+
+/** Every configured MCP server (a bad/legacy config row is skipped, not thrown). */
+export function listMcpServers(): McpServerRecord[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM mcp_servers ORDER BY created_at ASC')
+    .all() as McpServerRow[]
+  const out: McpServerRecord[] = []
+  for (const row of rows) {
+    const config = normalizeServerConfig(safeParse(row.config))
+    if (!config) continue
+    out.push({ id: row.id, config, enabled: row.enabled > 0 })
+  }
+  return out
+}
+
+/** Create or replace a server by id (name). Returns the stored record. */
+export function upsertMcpServer(input: {
+  id: string
+  config: McpServerConfig
+  enabled?: boolean
+}): McpServerRecord {
+  const id = input.id.trim()
+  if (!id) throw new Error('MCP server id is required')
+  const config = normalizeServerConfig(input.config)
+  if (!config) throw new Error('Invalid MCP server config')
+  const enabled = input.enabled === false ? 0 : 1
+  getDb()
+    .prepare(
+      `INSERT INTO mcp_servers(id, config, enabled, created_at)
+       VALUES(?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET config = excluded.config, enabled = excluded.enabled`
+    )
+    .run(id, JSON.stringify(config), enabled, Date.now())
+  return { id, config, enabled: enabled > 0 }
+}
+
+export function deleteMcpServer(id: string): void {
+  getDb().prepare('DELETE FROM mcp_servers WHERE id = ?').run(id)
+}
+
+export function setMcpServerEnabled(id: string, enabled: boolean): void {
+  getDb().prepare('UPDATE mcp_servers SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id)
 }
