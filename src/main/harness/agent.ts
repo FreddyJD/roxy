@@ -13,7 +13,12 @@
 import type { ChatMessage, LlmEvent } from '../../shared/api'
 import type { MessagePart, ReasoningEffort } from '../../shared/types'
 import { getAgent, DEFAULT_AGENT_ID, type AgentDef } from '../../shared/agents'
-import { selectPromptName, buildEnvironment, assembleSystemPrompt } from '../../shared/prompt'
+import {
+  selectPromptName,
+  buildEnvironment,
+  assembleSystemPrompt,
+  GIT_COMMIT_TRAILER_PROMPT
+} from '../../shared/prompt'
 import { flattenToolHistory } from '../../shared/tool-history'
 import { pruneToolMessages, KEEP_RECENT_TOKENS } from '../../shared/context'
 import {
@@ -722,6 +727,15 @@ function agentAllowsSkill(agent: AgentDef): boolean {
   return agent.tools === 'all' || agent.tools.includes(SKILL_TOOL_NAME)
 }
 
+/**
+ * Whether a subagent can actually run `git commit` (it has the `bash` tool). Used
+ * to decide whether to give it the co-author trailer instruction — read-only
+ * agents (e.g. explore) never commit, so they don't need it.
+ */
+function agentCanCommit(agent: AgentDef): boolean {
+  return agent.tools === 'all' || agent.tools.includes('bash')
+}
+
 interface OpenAiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | OpenAiContentPart[] | null
@@ -1350,6 +1364,8 @@ function subagentSystemPrompt(agent: AgentDef, cwd: string, skillInfo?: string):
   }
   // Surface any discovered skills so the subagent can load one when it allows the tool.
   if (skillInfo && agentAllowsSkill(agent)) lines.push(skillInfo)
+  // Attribute Roxy on any commit a bash-capable subagent makes (mirrors the lead agent).
+  if (agentCanCommit(agent)) lines.push(GIT_COMMIT_TRAILER_PROMPT)
   if (cwd) lines.push(`The workspace folder is ${cwd}. Tool paths are relative to it.`)
   return lines.join('\n\n')
 }

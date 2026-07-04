@@ -6,6 +6,13 @@ import { TOOLS, getTool, resolveToolIds, TOOL_CATEGORIES } from '../src/shared/t
 import { AGENTS, getAgent, PRIMARY_AGENTS, SUBAGENTS, DEFAULT_AGENT_ID } from '../src/shared/agents'
 import { SEED_PROVIDERS, resolveSeed, isConnectableNow } from '../src/shared/providers'
 import {
+  selectPromptName,
+  buildEnvironment,
+  assembleSystemPrompt,
+  ROXY_COAUTHOR_TRAILER,
+  GIT_COMMIT_TRAILER_PROMPT
+} from '../src/shared/prompt'
+import {
   reconstructAssistant,
   reconstructTurn,
   flattenToolHistory,
@@ -841,6 +848,47 @@ check('skill sanitize: strips leading non-alnum', sanitizeSkillName('__weird--na
 check('skill sanitize: neutralizes ..', sanitizeSkillName('a..b') === 'a.b')
 check('skill sanitize: empty/invalid → null', sanitizeSkillName('///') === null)
 check('skill sanitize: caps length at 64', (sanitizeSkillName('a'.repeat(200)) ?? '').length === 64)
+
+// ---- Git commit co-author trailer (Roxy attribution, mirrors Copilot) ----
+console.log('\ngit commit co-author trailer\n')
+// The identity line is a well-formed Co-authored-by trailer that names Roxy.
+check('coauthor: trailer is a Co-authored-by line', /^Co-authored-by: .+ <[^>]+@[^>]+>$/.test(ROXY_COAUTHOR_TRAILER))
+check('coauthor: trailer names Roxy', /\bRoxy\b/.test(ROXY_COAUTHOR_TRAILER))
+// The prompt block wraps the trailer in <git_commit_trailer> tags and embeds the exact line.
+check(
+  'coauthor: prompt block is tagged',
+  GIT_COMMIT_TRAILER_PROMPT.startsWith('<git_commit_trailer>') &&
+    GIT_COMMIT_TRAILER_PROMPT.trimEnd().endsWith('</git_commit_trailer>')
+)
+check('coauthor: prompt block embeds the exact trailer', GIT_COMMIT_TRAILER_PROMPT.includes(ROXY_COAUTHOR_TRAILER))
+// The instruction is conditional so it never conflicts with "never commit unless asked".
+check(
+  'coauthor: instruction is conditional',
+  /when you create a git commit/i.test(GIT_COMMIT_TRAILER_PROMPT) && /unless the user/i.test(GIT_COMMIT_TRAILER_PROMPT)
+)
+
+// assembleSystemPrompt injects the block exactly once into every full prompt…
+const asmFull = assembleSystemPrompt({
+  base: 'BASE PROMPT',
+  environment: buildEnvironment({ modelId: 'claude-sonnet-4', cwd: '/w' }),
+  extra: ['AGENTS.md guidance'],
+  contextSummary: 'earlier stuff'
+})
+check('coauthor: assembled prompt includes the trailer block', asmFull.includes('<git_commit_trailer>'))
+check('coauthor: assembled prompt includes the trailer line', asmFull.includes(ROXY_COAUTHOR_TRAILER))
+check('coauthor: trailer block appears exactly once', asmFull.split('<git_commit_trailer>').length - 1 === 1)
+// …and keeps the compaction summary last (the trailer sits above it).
+check(
+  'coauthor: trailer precedes the context summary',
+  asmFull.indexOf('<git_commit_trailer>') < asmFull.indexOf('Summary of the earlier conversation')
+)
+// Even a minimal prompt (base only) still carries the attribution instruction.
+check('coauthor: minimal prompt still includes the trailer', assembleSystemPrompt({ base: 'ONLY BASE' }).includes(ROXY_COAUTHOR_TRAILER))
+
+// selectPromptName sanity — the trailer rides on top of whichever family is picked.
+check('prompt select: gpt-4 → beast', selectPromptName('gpt-4o') === 'beast')
+check('prompt select: claude → anthropic', selectPromptName('claude-sonnet-4') === 'anthropic')
+check('prompt select: unknown → default', selectPromptName('some-random-model') === 'default')
 
 // ---- Remote Workspace IPC parity (Part 6) ----
 // The remote:* channels span four files that must agree: the channel catalog

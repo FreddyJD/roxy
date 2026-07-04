@@ -106,12 +106,42 @@ export interface AssembleInput {
   extra?: string[]
 }
 
+/**
+ * Roxy's commit co-author identity. Mirrors how GitHub Copilot attributes its
+ * work with a `Co-authored-by` trailer, so commits Roxy helps write render as
+ * "<you> and Roxy" on GitHub. This is the single source of truth for the
+ * identity — change this one line to rebrand it (e.g. swap in a GitHub bot
+ * account's `<id>+roxy@users.noreply.github.com` noreply address to get an
+ * avatar + linked profile on GitHub, the way Copilot's trailer does).
+ */
+export const ROXY_COAUTHOR_TRAILER = 'Co-authored-by: Roxy <noreply@roxy.gg>'
+
+/**
+ * The system-prompt instruction that tells the model to append {@link
+ * ROXY_COAUTHOR_TRAILER} to commits it authors — the same mechanism Copilot CLI
+ * uses to co-author every commit. Kept as a standalone block so it reads clearly
+ * in the assembled prompt and can be reused by the subagent prompt path. Phrased
+ * conditionally ("When you create a git commit") so it never conflicts with the
+ * tuned prompts that forbid committing unless the user asks.
+ */
+export const GIT_COMMIT_TRAILER_PROMPT = [
+  '<git_commit_trailer>',
+  'When you create a git commit, add the following Co-authored-by trailer at the end of the commit message so the work is attributed to Roxy, unless the user explicitly asks you not to:',
+  '',
+  ROXY_COAUTHOR_TRAILER,
+  '</git_commit_trailer>'
+].join('\n')
+
 /** Join the base prompt, environment, any extra sections, and a compaction summary. */
 export function assembleSystemPrompt(input: AssembleInput): string {
   const sections: (string | undefined)[] = [
     input.base,
     input.environment,
     ...(input.extra ?? []),
+    // Attribute Roxy on every commit the model writes (mirrors Copilot). Placed
+    // after the base/env/extra so it sits with the standing instructions, and
+    // before the compaction summary so the summary stays last.
+    GIT_COMMIT_TRAILER_PROMPT,
     input.contextSummary
       ? `Summary of the earlier conversation (compacted to save context):\n${input.contextSummary}`
       : undefined
