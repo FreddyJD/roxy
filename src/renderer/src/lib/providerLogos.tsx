@@ -1,3 +1,5 @@
+import roxyBrand from '../assets/roxy.png'
+
 /** Company brand logos for providers, copied into assets/providers/ via
  *  `npm run icons:providers`. Falls back to a lettered badge when missing. */
 const modules = import.meta.glob('../assets/providers/*.svg', {
@@ -11,6 +13,9 @@ for (const [path, url] of Object.entries(modules)) {
   const id = path.split('/').pop()?.replace('.svg', '')
   if (id) LOGOS[id] = url
 }
+
+// Roxy's own inference wears the actual Roxy brand mark, not a lettered badge.
+LOGOS.roxy = roxyBrand
 
 export function hasProviderLogo(id: string): boolean {
   return id in LOGOS
@@ -31,7 +36,7 @@ export function ProviderLogo({
       <img
         src={logo}
         alt=""
-        className="object-contain"
+        className={id === 'roxy' ? 'rounded-[22%] object-cover' : 'object-contain'}
         style={{ width: size, height: size }}
         draggable={false}
       />

@@ -1,11 +1,14 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, Loader2, Search } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, ChevronRight, Copy, ExternalLink, Loader2, Search } from 'lucide-react'
 import { AUTH_LABELS, SEED_PROVIDERS, isConnectableNow, resolveSeed } from '@shared/providers'
 import type { DeviceFlowStart, SeedProvider } from '@shared/types'
 import { api } from '../../lib/api'
 import { useRoxyStore } from '../../lib/store'
 import { Button, Input } from '../../components/ui'
 import { ProviderLogo } from '../../lib/providerLogos'
+
+// Everything except Roxy's own inference, which gets a featured card of its own.
+const OTHER_PROVIDERS = SEED_PROVIDERS.filter((p) => p.id !== 'roxy')
 
 export function ProviderStep(): JSX.Element {
   const providers = useRoxyStore((s) => s.providers)
@@ -15,16 +18,16 @@ export function ProviderStep(): JSX.Element {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return SEED_PROVIDERS
-    return SEED_PROVIDERS.filter((p) => p.name.toLowerCase().includes(q) || p.id.includes(q))
+    if (!q) return OTHER_PROVIDERS
+    return OTHER_PROVIDERS.filter((p) => p.name.toLowerCase().includes(q) || p.id.includes(q))
   }, [query])
 
   return (
     <div>
       <h1 className="text-2xl font-semibold tracking-tight">Connect a provider</h1>
       <p className="mt-2 text-sm text-text-muted">
-        Roxy talks to every major AI provider. Search the list and pick one — add more anytime in
-        Settings.
+        Start with Roxy&rsquo;s own inference — one key for 300+ models — or bring your own provider.
+        Add more anytime in Settings.
       </p>
 
       {providers.length > 0 && (
@@ -40,18 +43,25 @@ export function ProviderStep(): JSX.Element {
         </div>
       )}
 
-      <div className="relative mt-6">
+      <RoxyHero connected={connectedIds.has('roxy')} onClick={() => setSetupId('roxy')} />
+
+      <div className="my-6 flex items-center gap-3">
+        <span className="h-px flex-1 bg-border" />
+        <span className="text-xs font-medium uppercase tracking-wide text-text-subtle">or</span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+
+      <div className="relative">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-subtle" />
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={`Search ${SEED_PROVIDERS.length} providers…`}
+          placeholder={`Search ${OTHER_PROVIDERS.length} other providers…`}
           className="pl-9"
-          autoFocus
         />
       </div>
 
-      <div className="mt-3 max-h-[360px] overflow-y-auto rounded-xl border border-border bg-surface">
+      <div className="mt-3 max-h-[320px] overflow-y-auto rounded-xl border border-border bg-surface">
         {filtered.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-text-subtle">
             No providers match “{query}”.
@@ -72,6 +82,45 @@ export function ProviderStep(): JSX.Element {
 
       {setupId && <ProviderSetup seed={resolveSeed(setupId)} onClose={() => setSetupId(null)} />}
     </div>
+  )
+}
+
+function RoxyHero({
+  connected,
+  onClick
+}: {
+  connected: boolean
+  onClick: () => void
+}): JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      className="group mt-6 flex w-full items-center gap-4 overflow-hidden rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 via-accent/5 to-transparent p-5 text-left transition hover:border-accent/70 hover:from-accent/25"
+    >
+      <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-accent/30 bg-surface-2 shadow-sm">
+        <ProviderLogo id="roxy" name="Roxy" size={44} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="text-base font-semibold text-text">Roxy Inference</span>
+          <span className="shrink-0 rounded-full border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+            Recommended
+          </span>
+        </span>
+        <span className="mt-1 block text-sm text-text-muted">
+          One key for 300+ models, billed to your roxy.gg balance — the fastest way to start.
+        </span>
+      </span>
+      {connected ? (
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-sm font-medium text-success">
+          <Check className="h-4 w-4" /> Connected
+        </span>
+      ) : (
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-white transition group-hover:brightness-110">
+          Use Roxy <ArrowRight className="h-4 w-4" />
+        </span>
+      )}
+    </button>
   )
 }
 
