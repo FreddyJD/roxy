@@ -102,7 +102,7 @@ export function ChatView(): JSX.Element {
   if (!activeChat) {
     return (
       <div className="flex h-full min-w-0 flex-1 flex-col bg-bg">
-        <div className="titlebar reserve-controls-right h-12 shrink-0" />
+        <div className="titlebar reserve-controls-right h-12 shrink-0 border-b border-border bg-surface" />
         <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
           <img
             src={roxy}
@@ -125,7 +125,7 @@ export function ChatView(): JSX.Element {
 
   return (
     <div className="relative flex h-full min-w-0 flex-1 flex-col bg-bg">
-      <header className="titlebar reserve-controls-right flex h-12 shrink-0 items-center justify-between gap-3 px-4">
+      <header className="titlebar reserve-controls-right flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border bg-surface px-4">
         {activeLoop ? (
           <div className="flex min-w-0 items-center gap-2">
             <Repeat className="h-4 w-4 shrink-0 text-text-muted" />

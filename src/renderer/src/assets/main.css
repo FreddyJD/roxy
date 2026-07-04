@@ -8,16 +8,18 @@
   --font-sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', 'JetBrains Mono', monospace;
 
-  /* Cursor-inspired dark palette (near-black, high contrast, hairline borders) */
-  --color-bg: #0a0a0a;
-  --color-surface: #0f0f10;
-  --color-surface-2: #161618;
-  --color-elevated: #1d1d20;
-  --color-border: #232326;
-  --color-border-strong: #303035;
-  --color-text: #ededed;
-  --color-text-muted: #9a9aa3;
-  --color-text-subtle: #6a6a73;
+  /* Roxy dark palette — deep cool "ink" with a faint indigo tint (matches the
+     Roxy blue brand). Surfaces step up in clear, intentional layers so the
+     sidebar and panels read as distinct chrome instead of a flat black void. */
+  --color-bg: #0a0c11;
+  --color-surface: #10131b;
+  --color-surface-2: #171b26;
+  --color-elevated: #1e2330;
+  --color-border: #262c3a;
+  --color-border-strong: #343c4e;
+  --color-text: #edeef2;
+  --color-text-muted: #9a9dac;
+  --color-text-subtle: #686c7b;
   --color-accent: #4d8dff;
   --color-accent-hover: #6aa0ff;
   --color-success: #3fb950;
