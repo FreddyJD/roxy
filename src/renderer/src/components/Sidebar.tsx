@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ChevronRight,
@@ -46,6 +46,7 @@ export function Sidebar(): JSX.Element {
   const newSession = useRoxyStore((s) => s.newSession)
   const newSessionInProject = useRoxyStore((s) => s.newSessionInProject)
   const deleteChat = useRoxyStore((s) => s.deleteChat)
+  const renameChat = useRoxyStore((s) => s.renameChat)
   const sendingChats = useRoxyStore((s) => s.sendingChats)
   const loops = useRoxyStore((s) => s.loops)
   const removeLoop = useRoxyStore((s) => s.removeLoop)
@@ -73,6 +74,42 @@ export function Sidebar(): JSX.Element {
   useEffect(() => {
     localStorage.setItem(COLLAPSED_KEY, railed ? '1' : '0')
   }, [railed])
+
+  // Double-click a session name to rename it inline. Enter / click-away saves,
+  // Escape cancels. `cancelRef` lets the shared blur handler tell the two apart.
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [draftTitle, setDraftTitle] = useState('')
+  const cancelRef = useRef(false)
+
+  const beginRename = (chat: Chat): void => {
+    cancelRef.current = false
+    setDraftTitle(chat.title)
+    setEditingId(chat.id)
+  }
+
+  const commitRename = (): void => {
+    const id = editingId
+    if (!id) return
+    setEditingId(null)
+    if (cancelRef.current) {
+      cancelRef.current = false
+      return
+    }
+    const next = draftTitle.trim()
+    const current = chats.find((c) => c.id === id)
+    if (next && current && next !== current.title) void renameChat(id, next)
+  }
+
+  const onRenameKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      e.currentTarget.blur()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      cancelRef.current = true
+      e.currentTarget.blur()
+    }
+  }
 
   // Drag the right edge to resize; the window listeners live only during a drag.
   const startResize = (e: ReactMouseEvent): void => {
@@ -364,13 +401,27 @@ export function Sidebar(): JSX.Element {
                                 ) : (
                                   <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-text-subtle/50" />
                                 )}
-                                <button
-                                  onClick={() => selectChat(chat.id)}
-                                  title={chat.title}
-                                  className="min-w-0 flex-1 truncate text-left"
-                                >
-                                  {chat.title}
-                                </button>
+                                {editingId === chat.id ? (
+                                  <input
+                                    autoFocus
+                                    value={draftTitle}
+                                    onChange={(e) => setDraftTitle(e.target.value)}
+                                    onKeyDown={onRenameKeyDown}
+                                    onBlur={commitRename}
+                                    onFocus={(e) => e.currentTarget.select()}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="min-w-0 flex-1 rounded border border-accent/60 bg-bg px-1.5 py-0.5 text-sm text-text outline-none"
+                                  />
+                                ) : (
+                                  <button
+                                    onClick={() => selectChat(chat.id)}
+                                    onDoubleClick={() => beginRename(chat)}
+                                    title={chat.title}
+                                    className="min-w-0 flex-1 truncate text-left"
+                                  >
+                                    {chat.title}
+                                  </button>
+                                )}
                                 {subs.length > 0 && (
                                   <button
                                     onClick={() => toggleSubs(chat.id)}
@@ -401,13 +452,27 @@ export function Sidebar(): JSX.Element {
                                         )}
                                       >
                                         <Hammer className="h-3 w-3 shrink-0 opacity-70" />
-                                        <button
-                                          onClick={() => selectChat(sub.id)}
-                                          title={sub.title}
-                                          className="min-w-0 flex-1 truncate text-left"
-                                        >
-                                          {sub.title}
-                                        </button>
+                                        {editingId === sub.id ? (
+                                          <input
+                                            autoFocus
+                                            value={draftTitle}
+                                            onChange={(e) => setDraftTitle(e.target.value)}
+                                            onKeyDown={onRenameKeyDown}
+                                            onBlur={commitRename}
+                                            onFocus={(e) => e.currentTarget.select()}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="min-w-0 flex-1 rounded border border-accent/60 bg-bg px-1.5 py-0.5 text-xs text-text outline-none"
+                                          />
+                                        ) : (
+                                          <button
+                                            onClick={() => selectChat(sub.id)}
+                                            onDoubleClick={() => beginRename(sub)}
+                                            title={sub.title}
+                                            className="min-w-0 flex-1 truncate text-left"
+                                          >
+                                            {sub.title}
+                                          </button>
+                                        )}
                                         <button
                                           onClick={() => deleteChat(sub.id)}
                                           title="Delete subagent session"
