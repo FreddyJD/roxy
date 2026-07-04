@@ -131,13 +131,17 @@ Windows job).
    bash script/setup-mac-ci-secrets.sh ~/Desktop/roxy-cert.p12
    ```
 
-   Or set them individually:
+   Or set them individually. **Use this empty‑proof pattern** — a bare
+   `gh secret set NAME` will happily store a *blank* value if the paste doesn't
+   register, and because secrets are write‑only you won't notice until the mac
+   build fails (see Troubleshooting):
 
    ```sh
    base64 -i roxy-cert.p12 | tr -d '\n' | gh secret set MAC_CSC_LINK
-   gh secret set MAC_CSC_KEY_PASSWORD          # paste the .p12 password
-   gh secret set APPLE_ID                       # your Apple ID email
-   gh secret set APPLE_APP_SPECIFIC_PASSWORD    # app-specific password
+   set_secret() { read -rsp "$1: " v; echo; [ -n "$v" ] && printf '%s' "$v" | gh secret set "$1" && echo "✓ $1" || echo "✗ $1 empty — skipped"; unset v; }
+   set_secret MAC_CSC_KEY_PASSWORD          # the .p12 password
+   set_secret APPLE_ID                      # your Apple ID email
+   set_secret APPLE_APP_SPECIFIC_PASSWORD   # app-specific password (abcd-efgh-ijkl-mnop)
    printf '%s' MA46PKHWXH | gh secret set APPLE_TEAM_ID
    ```
 
@@ -154,6 +158,33 @@ Windows job).
    ```sh
    spctl -a -vvv -t install /Applications/roxy.app   # accepted, Notarized Developer ID
    ```
+
+### Troubleshooting
+
+**`⨯ APPLE_APP_SPECIFIC_PASSWORD env var needs to be set`** (mac job signs the
+app, then fails) — one of the notarization secrets is **empty**. The workflow's
+_“Verify macOS signing secrets”_ preflight now catches this in ~1s and names the
+blank secret. Re‑set it with the empty‑proof pattern above, e.g.:
+
+```sh
+read -rsp 'app-specific password: ' v; echo; printf '%s' "$v" | gh secret set APPLE_APP_SPECIFIC_PASSWORD; unset v
+```
+
+A secret showing up in `gh secret list` only means it *exists* — not that it's
+non‑empty. When in doubt, re‑set it.
+
+**Finish a release whose mac job failed** — when Windows/Linux succeeded but mac
+failed, the `vX.Y.Z` GitHub Release is left as a **Draft** (nothing ships until
+all three platforms pass). After fixing the secret, re‑run just the failed job —
+no version bump needed, and it picks up the corrected secret at runtime:
+
+```sh
+gh run rerun <run-id> --failed   # re-runs the mac job + the downstream publish
+gh run watch  <run-id>
+```
+
+Get `<run-id>` from `gh run list`. Once mac passes, the `publish` job flips the
+draft to Latest automatically.
 
 ## Windows
 
