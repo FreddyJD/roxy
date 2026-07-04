@@ -96,7 +96,13 @@ export const CHANNELS = {
   /** main -> browser toolbar: navigation state */
   browserState: 'browser:state',
   /** main -> browser toolbar: open tab list */
-  browserTabs: 'browser:tabs'
+  browserTabs: 'browser:tabs',
+
+  remoteStart: 'remote:start',
+  remoteStop: 'remote:stop',
+  remoteStatus: 'remote:status',
+  /** main -> renderer: Remote Workspace sharing status changed */
+  remoteState: 'remote:state'
 } as const
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS]

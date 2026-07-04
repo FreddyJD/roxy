@@ -1,22 +1,23 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { CHANNELS } from '../../shared/ipc'
-import type { CreateChatInput, CreateLoopInput, LlmStartInput, McpServerView, SkillView, SkillWriteInput, UpsertMcpServerInput } from '../../shared/api'
+import type { CreateChatInput, CreateLoopInput, LlmStartInput, McpServerView, RemoteStartInput, SkillView, SkillWriteInput, UpsertMcpServerInput } from '../../shared/api'
 import type { AddMessageInput, ConnectProviderInput, QueueImage, ReasoningEffort } from '../../shared/types'
 import * as repo from '../db/repo'
 import * as copilot from '../services/copilot'
 import * as browser from '../services/browser'
 import { listModels } from '../services/models'
 import { compactChat } from '../services/compaction'
-import { runTool, runAgentTurn, projectInstructions } from '../harness'
+import { runTool, projectInstructions } from '../harness'
 import { checkForUpdates, quitAndInstall, getUpdateState } from '../services/updater'
 import {
-  activeBackgroundSubChatIds,
   cancelBackgroundJob,
   cancelSessionBackgroundJobs,
   listRunningBackgroundJobs
 } from '../services/background-tasks'
 import { mcpServerSummaries, reconnectMcpServer, disposeConnection } from '../services/mcp'
 import { listSkills, refreshSkills, readSkill, writeSkill, deleteSkill, installSkillFromSource } from '../services/skills'
+import { runSessionTurn } from '../services/session-turn'
+import * as remote from '../services/remote'
 
 /** In-flight streamed completions, keyed by requestId, so they can be aborted. */
 const llmControllers = new Map<string, AbortController>()
@@ -254,36 +255,22 @@ export function registerIpc(): void {
   )
 
   // ---- llm (streamed model completions) ----
+  // The turn body lives in runSessionTurn so the remote host (phone-driven)
+  // path runs the exact same code. Here we just own the AbortController (for
+  // llm:abort) and stream each event to the renderer that started the turn.
   ipcMain.handle(CHANNELS.llmStart, async (event, input: LlmStartInput) => {
     const controller = new AbortController()
     llmControllers.set(input.requestId, controller)
-    const cwd = repo.getChatWorkspace(input.sessionId) ?? ''
     try {
-      await runAgentTurn({
-        providerId: input.providerId,
-        model: input.model,
-        messages: input.messages,
-        agentId: input.agentId,
-        reasoning: input.reasoning,
-        reasoningEffort: input.reasoningEffort,
-        contextLimit: input.contextLimit,
-        cwd,
-        chatId: input.sessionId,
-        signal: controller.signal,
-        emit: (llmEvent) => {
+      return await runSessionTurn(
+        input,
+        (llmEvent) => {
           if (!event.sender.isDestroyed()) {
             event.sender.send(CHANNELS.llmDelta, { requestId: input.requestId, event: llmEvent })
           }
-        }
-      })
-      // The turn's subagents are one-shot — drop any with nothing queued so they
-      // don't linger in the sidebar after the work is done. Sub-sessions with a
-      // still-running background task are kept (Phase 11) until it reports back.
-      repo.pruneSubchats(input.sessionId, activeBackgroundSubChatIds())
-      return { ok: true }
-    } catch (e) {
-      if (controller.signal.aborted) return { ok: false, error: 'Stopped.' }
-      return { ok: false, error: e instanceof Error ? e.message : String(e) }
+        },
+        controller.signal
+      )
     } finally {
       llmControllers.delete(input.requestId)
     }
@@ -323,4 +310,9 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.browserMoveTab, (_e, id: string, toIndex: number) =>
     browser.moveTab(id, toIndex)
   )
+
+  // ---- remote (Remote Workspace: share a session to a phone via roxy.gg) ----
+  ipcMain.handle(CHANNELS.remoteStart, (_e, input: RemoteStartInput) => remote.start(input))
+  ipcMain.handle(CHANNELS.remoteStop, () => remote.stop())
+  ipcMain.handle(CHANNELS.remoteStatus, () => remote.status())
 }

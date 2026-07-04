@@ -214,6 +214,55 @@ export interface UpdateInfo {
   state: UpdateState
 }
 
+/**
+ * Remote Workspace — take the running desktop session to a phone via roxy.gg.
+ * The desktop stays authoritative (it runs the model + tools); the phone is a
+ * thin remote control + live viewer paired through the relay.
+ */
+
+/** Lifecycle of the desktop's connection to the Remote Workspace relay. */
+export type RemotePhase =
+  | 'idle' // not sharing
+  | 'starting' // minting the room + dialing the relay
+  | 'live' // host socket connected; phones may pair
+  | 'offline' // lost the relay; retrying with the same token
+  | 'error' // gave up (see `error`)
+
+/**
+ * Sharing status pushed to the renderer (via `remote:state`) and returned by
+ * start/stop/status. Holds everything the dialog needs: the safe URL + PIN to
+ * show, which session is live, and the current phone count.
+ */
+export interface RemoteState {
+  phase: RemotePhase
+  /** Room id on roxy.gg (present once minted). */
+  brokerId?: string
+  /** Safe URL to open on the phone — guest token lives in the fragment. */
+  url?: string
+  /** PIN shown on the desktop; the phone must enter it to pair. */
+  pin?: string
+  /** The workspace session currently shared + prompted from the phone. */
+  sessionId?: string
+  /** Number of phones currently paired. */
+  guests: number
+  /** Epoch ms when the room/token expires. */
+  expiresAt?: number
+  /** Human-readable failure, when `phase === 'error'`. */
+  error?: string
+  /**
+   * Bumped on every state change *and* on shared-session activity (a remote
+   * prompt or reply landed), so the renderer can cheaply decide when to reload
+   * the shared chat without diffing message lists.
+   */
+  rev: number
+}
+
+/** Which session to share when starting a Remote Workspace. */
+export interface RemoteStartInput {
+  sessionId: string
+}
+
+
 export interface RoxyApi {
   settings: {
     getAll(): Promise<AppSettings>
@@ -356,5 +405,15 @@ export interface RoxyApi {
     onState(callback: (state: BrowserState) => void): () => void
     /** Subscribe to the open tab list; returns an unsubscribe fn. */
     onTabs(callback: (tabs: BrowserTab[]) => void): () => void
+  }
+  remote: {
+    /** Mint a room on roxy.gg + open the host relay socket for a session. */
+    start(input: RemoteStartInput): Promise<RemoteState>
+    /** Tear down the room + revoke the tokens (Stop sharing). */
+    stop(): Promise<RemoteState>
+    /** Current sharing status. */
+    status(): Promise<RemoteState>
+    /** Subscribe to sharing status changes; returns an unsubscribe fn. */
+    onState(callback: (state: RemoteState) => void): () => void
   }
 }

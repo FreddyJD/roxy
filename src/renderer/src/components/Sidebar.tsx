@@ -6,6 +6,7 @@ import {
   Hammer,
   Lightbulb,
   Loader2,
+  MonitorSmartphone,
   PanelLeftClose,
   PanelLeftOpen,
   Plug,
@@ -19,6 +20,7 @@ import { useRoxyStore } from '../lib/store'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import { HeartbeatDot, NewLoopDialog } from './LoopsSection'
+import { RemoteWorkspaceDialog } from './RemoteWorkspaceDialog'
 import { UpdateCard } from './UpdateCard'
 import roxy from '../assets/roxy.png'
 
@@ -55,6 +57,15 @@ export function Sidebar(): JSX.Element {
   })
   const [railed, setRailed] = useState<boolean>(() => localStorage.getItem(COLLAPSED_KEY) === '1')
   const [loopDialogFor, setLoopDialogFor] = useState<{ path: string; name: string } | null>(null)
+  const [remoteOpen, setRemoteOpen] = useState(false)
+  const remotePhase = useRoxyStore((s) => s.remote.phase)
+  // Green only when truly live; amber while spinning up or reconnecting.
+  const remoteDot: 'green' | 'amber' | null =
+    remotePhase === 'live'
+      ? 'green'
+      : remotePhase === 'starting' || remotePhase === 'offline'
+        ? 'amber'
+        : null
 
   useEffect(() => {
     localStorage.setItem(WIDTH_KEY, String(width))
@@ -155,6 +166,21 @@ export function Sidebar(): JSX.Element {
         </div>
         <div className="mb-3 mt-auto flex flex-col items-center gap-1">
           <button
+            onClick={() => setRemoteOpen(true)}
+            title="Remote Workspace"
+            className="relative flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          >
+            <MonitorSmartphone className="h-4 w-4" />
+            {remoteDot && (
+              <span
+                className={cn(
+                  'absolute right-1 top-1 h-1.5 w-1.5 rounded-full ring-2 ring-surface',
+                  remoteDot === 'green' ? 'bg-success' : 'bg-warning'
+                )}
+              />
+            )}
+          </button>
+          <button
             onClick={() => navigate('/skills')}
             title="Skills"
             className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
@@ -176,6 +202,7 @@ export function Sidebar(): JSX.Element {
             <SettingsIcon className="h-4 w-4" />
           </button>
         </div>
+        {remoteOpen && <RemoteWorkspaceDialog onClose={() => setRemoteOpen(false)} />}
       </aside>
     )
   }
@@ -415,7 +442,9 @@ export function Sidebar(): JSX.Element {
         />
       )}
 
-      <CustomizeNav />
+      {remoteOpen && <RemoteWorkspaceDialog onClose={() => setRemoteOpen(false)} />}
+
+      <CustomizeNav onOpenRemote={() => setRemoteOpen(true)} remoteDot={remoteDot} />
 
       <UpdateCard />
 
@@ -455,15 +484,28 @@ function useCustomizeCounts(): { skills: number; mcp: number } {
 
 /**
  * The "Customize" section pinned to the bottom of the sidebar — quick access to
- * the Skills and MCP Servers pages (à la VS Code's Customizations panel), with a
- * live count on each.
+ * Remote Workspace (share to phone), plus the Skills and MCP Servers pages
+ * (à la VS Code's Customizations panel), with a live count/indicator on each.
  */
-function CustomizeNav(): JSX.Element {
+function CustomizeNav({
+  onOpenRemote,
+  remoteDot
+}: {
+  onOpenRemote: () => void
+  remoteDot: 'green' | 'amber' | null
+}): JSX.Element {
   const navigate = useNavigate()
   const counts = useCustomizeCounts()
-  const items = [
-    { label: 'Skills', icon: Lightbulb, to: '/skills', count: counts.skills },
-    { label: 'MCP Servers', icon: Plug, to: '/mcp', count: counts.mcp }
+  const items: {
+    label: string
+    icon: typeof Lightbulb
+    onClick: () => void
+    count?: number
+    dot?: 'green' | 'amber' | null
+  }[] = [
+    { label: 'Remote Workspace', icon: MonitorSmartphone, onClick: onOpenRemote, dot: remoteDot },
+    { label: 'Skills', icon: Lightbulb, onClick: () => navigate('/skills'), count: counts.skills },
+    { label: 'MCP Servers', icon: Plug, onClick: () => navigate('/mcp'), count: counts.mcp }
   ]
   return (
     <div className="border-t border-border px-3 py-2">
@@ -473,14 +515,37 @@ function CustomizeNav(): JSX.Element {
       <div className="mt-1 flex flex-col gap-0.5">
         {items.map((it) => (
           <button
-            key={it.to}
-            onClick={() => navigate(it.to)}
+            key={it.label}
+            onClick={it.onClick}
             className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm text-text-muted transition hover:bg-white/5 hover:text-text"
           >
             <it.icon className="h-4 w-4 shrink-0 opacity-80" />
             <span className="flex-1 text-left">{it.label}</span>
-            {it.count > 0 && (
-              <span className="shrink-0 text-[10px] tabular-nums text-text-subtle">{it.count}</span>
+            {it.dot ? (
+              <span
+                className="relative flex h-2 w-2 shrink-0"
+                title={it.dot === 'green' ? 'Sharing — live' : 'Sharing — connecting'}
+              >
+                <span
+                  className={cn(
+                    'absolute inline-flex h-full w-full animate-ping rounded-full opacity-70',
+                    it.dot === 'green' ? 'bg-success' : 'bg-warning'
+                  )}
+                />
+                <span
+                  className={cn(
+                    'relative inline-flex h-2 w-2 rounded-full',
+                    it.dot === 'green' ? 'bg-success' : 'bg-warning'
+                  )}
+                />
+              </span>
+            ) : (
+              it.count !== undefined &&
+              it.count > 0 && (
+                <span className="shrink-0 text-[10px] tabular-nums text-text-subtle">
+                  {it.count}
+                </span>
+              )
             )}
           </button>
         ))}

@@ -11,6 +11,7 @@ import { cleanupToolOutputs } from './services/tool-output-store'
 import { cancelAllBackgroundJobs } from './services/background-tasks'
 import { shutdownAllLsp } from './services/lsp'
 import { shutdownAllMcp } from './services/mcp'
+import { shutdownRemote } from './services/remote'
 import { initAutoUpdater } from './services/updater'
 import { killAllBackground, setPromptText, setAgentPromptText } from './harness'
 import { PROMPT_TEXT, AGENT_PROMPT_TEXT } from '../shared/prompt-text'
@@ -109,4 +110,5 @@ app.on('will-quit', () => {
   cancelAllBackgroundJobs()
   shutdownAllLsp()
   void shutdownAllMcp()
+  shutdownRemote()
 })

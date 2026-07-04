@@ -7,6 +7,7 @@ import type {
   TaskUpdate,
   BrowserState,
   BrowserTab,
+  RemoteState,
   UpdateState
 } from '../shared/api'
 
@@ -151,6 +152,17 @@ const roxy: RoxyApi = {
         callback(tabs)
       ipcRenderer.on(CHANNELS.browserTabs, handler)
       return () => ipcRenderer.removeListener(CHANNELS.browserTabs, handler)
+    }
+  },
+  remote: {
+    start: (input) => ipcRenderer.invoke(CHANNELS.remoteStart, input),
+    stop: () => ipcRenderer.invoke(CHANNELS.remoteStop),
+    status: () => ipcRenderer.invoke(CHANNELS.remoteStatus),
+    onState: (callback) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: RemoteState): void =>
+        callback(state)
+      ipcRenderer.on(CHANNELS.remoteState, handler)
+      return () => ipcRenderer.removeListener(CHANNELS.remoteState, handler)
     }
   }
 }

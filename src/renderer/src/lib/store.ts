@@ -10,7 +10,14 @@ import type {
   QueueItem,
   ReasoningEffort
 } from '@shared/types'
-import type { ChatMessage, CreateLoopInput, LlmEvent, ModelInfo, TaskUpdate } from '@shared/api'
+import type {
+  ChatMessage,
+  CreateLoopInput,
+  LlmEvent,
+  ModelInfo,
+  RemoteState,
+  TaskUpdate
+} from '@shared/api'
 import { selectPromptName, buildEnvironment, assembleSystemPrompt } from '@shared/prompt'
 import { PROMPT_TEXT, AGENT_PROMPT_TEXT } from '@shared/prompt-text'
 import { reconstructTurn, REPLAY_OUTPUT_CAP } from '@shared/tool-history'
@@ -44,6 +51,8 @@ interface RoxyStore {
   compactingChats: Record<string, boolean>
   /** Running background subagent tasks, keyed by parent session id (Phase 11). */
   runningTasks: Record<string, TaskUpdate[]>
+  /** Remote Workspace sharing status — mirrors the main process's RemoteState. */
+  remote: RemoteState
 
   bootstrap: () => Promise<void>
   refreshChats: () => Promise<void>
@@ -73,6 +82,12 @@ interface RoxyStore {
   removeQueued: (id: string) => Promise<void>
   moveQueued: (id: string, direction: 'up' | 'down') => Promise<void>
   stop: () => void
+  /** Start sharing the active session to a phone via the roxy.gg relay. */
+  startRemote: () => Promise<void>
+  /** Stop sharing + revoke the room/token (Stop sharing). */
+  stopRemote: () => Promise<void>
+  /** Sync the current sharing status from main (e.g. after a window reload). */
+  refreshRemote: () => Promise<void>
   compactConversation: (chatId?: string) => Promise<void>
   /** Handle a background subagent task state change (Phase 11). */
   handleTaskUpdate: (update: TaskUpdate) => Promise<void>
@@ -83,12 +98,33 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 let loopTickSubscribed = false
 let llmDeltaSubscribed = false
 let taskUpdateSubscribed = false
+let remoteStateSubscribed = false
 /** Routes streamed completion events to the in-flight send for a request id. */
 const deltaHandlers = new Map<string, (event: LlmEvent) => void>()
 /** The active llm request id per chat, so stop() can abort the right stream. */
 const chatRequests = new Map<string, string>()
 /** Cross-render cache of models.dev lists so we fetch each provider once. */
 const modelCatalogCache = new Map<string, ModelInfo[]>()
+/** Set when a remote turn lands while a local send streams into the shared chat. */
+const remoteMirror = { deferred: false }
+
+/**
+ * Desktop live-mirror: reload the shared chat's transcript from disk after a
+ * remote (phone) turn, but only if it's still the chat on screen, no local send
+ * is streaming into it, and no *newer* remote rev has superseded this one — the
+ * rev guard makes concurrent reloads resolve last-writer-wins instead of racing.
+ */
+async function mirrorSharedChat(sessionId: string, rev: number): Promise<void> {
+  const messages = await api.messages.list(sessionId)
+  const s = useRoxyStore.getState()
+  if (s.activeChatId !== sessionId || s.remote.rev !== rev) return
+  if (s.sendingChats[sessionId]) {
+    // A local send began mid-reload — reconcile once it finishes (finishTurn).
+    remoteMirror.deferred = true
+    return
+  }
+  useRoxyStore.setState({ messages })
+}
 
 export const useRoxyStore = create<RoxyStore>((set, get) => ({
   ready: false,
@@ -107,6 +143,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   stopChats: {},
   compactingChats: {},
   runningTasks: {},
+  remote: { phase: 'idle', guests: 0, rev: 0 },
 
   bootstrap: async () => {
     const [settings, providers, chats, loops] = await Promise.all([
@@ -166,6 +203,29 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       })
     }
 
+    // Remote Workspace: keep the sharing badge live and mirror remote activity.
+    // The main process bumps RemoteState.rev whenever the shared session's
+    // transcript changes (a phone prompt or reply landed), so we reload that
+    // chat on-screen — the "one source of truth" desktop mirror.
+    if (!remoteStateSubscribed) {
+      remoteStateSubscribed = true
+      api.remote.onState((state) => {
+        const prevRev = get().remote.rev
+        set({ remote: state })
+        const shared = state.sessionId
+        // Only mirror when the shared chat is on screen and it actually changed.
+        if (!shared || shared !== get().activeChatId || state.rev === prevRev) return
+        if (get().sendingChats[shared]) {
+          // Don't clobber an in-flight local stream — reconcile after it lands.
+          remoteMirror.deferred = true
+          return
+        }
+        void mirrorSharedChat(shared, state.rev)
+      })
+      // A share may already be live from before this window (re)loaded.
+      void get().refreshRemote()
+    }
+
     const firstSession = chats.find((c) => c.kind === 'main')
     if (!get().activeChatId && firstSession) {
       await get().selectChat(firstSession.id)
@@ -211,6 +271,41 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       api.settings.getAll()
     ])
     set({ providers, settings })
+  },
+
+  startRemote: async () => {
+    const sessionId = get().activeChatId
+    if (!sessionId) return
+    const cur = get().remote
+    // Don't double-mint: a start is already in flight, or we're already sharing
+    // this same session (re-opening the dialog shouldn't churn the URL/PIN).
+    if (cur.phase === 'starting') return
+    if ((cur.phase === 'live' || cur.phase === 'offline') && cur.sessionId === sessionId) return
+    // Clean 'starting' — never surface a previous share's stale url/pin/guests.
+    set((s) => ({ remote: { phase: 'starting', sessionId, guests: 0, rev: s.remote.rev } }))
+    try {
+      set({ remote: await api.remote.start({ sessionId }) })
+    } catch (err) {
+      set((s) => ({
+        remote: {
+          ...s.remote,
+          phase: 'error',
+          error: err instanceof Error ? err.message : 'Failed to start sharing.'
+        }
+      }))
+    }
+  },
+
+  stopRemote: async () => {
+    set({ remote: await api.remote.stop() })
+  },
+
+  refreshRemote: async () => {
+    try {
+      set({ remote: await api.remote.status() })
+    } catch {
+      // Status is best-effort — keep the current state if main isn't ready.
+    }
   },
 
   selectModel: async (providerId, model) => {
@@ -412,6 +507,12 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       setStreaming(null)
       setSending(false)
       clearStop()
+      // If a remote (phone) turn landed while this local send was streaming, we
+      // deferred the mirror to avoid clobbering the stream — reconcile it now.
+      if (remoteMirror.deferred && get().remote.sessionId === chatId) {
+        remoteMirror.deferred = false
+        void mirrorSharedChat(chatId, get().remote.rev)
+      }
       await get().refreshChats()
       // Completed subagent sessions get pruned in main — if we were viewing one
       // (now gone), fall back to this turn's chat so the pane isn't left empty.

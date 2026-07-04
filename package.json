@@ -1,6 +1,6 @@
 {
   "name": "roxy",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "description": "Roxy — an open-source AI coding agent for engineers.",
   "main": "./out/main/index.js",
   "author": "Roxy (https://github.com/FreddyJD/roxy)",
@@ -52,10 +52,12 @@
     "clsx": "^2.1.1",
     "electron-updater": "^6.3.9",
     "lucide-react": "^1.21.0",
+    "qrcode.react": "^4.2.0",
     "react-router-dom": "^7.18.0",
     "streamdown": "^2.5.0",
     "tailwind-merge": "^3.6.0",
     "tinyglobby": "^0.2.17",
+    "ws": "^8.21.0",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
@@ -66,6 +68,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",

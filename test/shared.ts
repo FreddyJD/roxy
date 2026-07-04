@@ -89,6 +89,9 @@ import {
   renderSkillContent,
   type SkillInfo
 } from '../src/shared/skills'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { CHANNELS } from '../src/shared/ipc'
 
 let pass = 0
 const fails: string[] = []
@@ -838,6 +841,52 @@ check('skill sanitize: strips leading non-alnum', sanitizeSkillName('__weird--na
 check('skill sanitize: neutralizes ..', sanitizeSkillName('a..b') === 'a.b')
 check('skill sanitize: empty/invalid → null', sanitizeSkillName('///') === null)
 check('skill sanitize: caps length at 64', (sanitizeSkillName('a'.repeat(200)) ?? '').length === 64)
+
+// ---- Remote Workspace IPC parity (Part 6) ----
+// The remote:* channels span four files that must agree: the channel catalog
+// (ipc.ts), the preload bridge (renderer surface), the main handlers/emitter,
+// and the RoxyApi type. A drift in any one silently breaks "share to phone", so
+// we assert the wiring statically from source — no Electron runtime needed.
+console.log('\nremote workspace ipc parity\n')
+{
+  const root = process.cwd()
+  const read = (rel: string): string => readFileSync(join(root, rel), 'utf8')
+  const preload = read('src/preload/index.ts')
+  const handlers = read('src/main/ipc/index.ts')
+  const service = read('src/main/services/remote.ts')
+  const api = read('src/shared/api.ts')
+  // `remote` is the last member of both the preload bridge and RoxyApi, so
+  // slicing from its marker to EOF isolates just that block for method checks.
+  const preloadRemote = preload.slice(preload.indexOf('remote: {'))
+  const apiRemote = api.slice(api.indexOf('remote: {'))
+
+  // Channel string values are the contract both the client and roxy.gg encode.
+  check('remote:start channel value', CHANNELS.remoteStart === 'remote:start')
+  check('remote:stop channel value', CHANNELS.remoteStop === 'remote:stop')
+  check('remote:status channel value', CHANNELS.remoteStatus === 'remote:status')
+  check('remote:state channel value', CHANNELS.remoteState === 'remote:state')
+
+  // Each invoke channel is wired end-to-end: preload bridge + a main handler.
+  for (const key of ['remoteStart', 'remoteStop', 'remoteStatus'] as const) {
+    check(`preload bridges CHANNELS.${key}`, preload.includes(`CHANNELS.${key}`))
+    check(`main handles CHANNELS.${key}`, handlers.includes(`ipcMain.handle(CHANNELS.${key}`))
+  }
+
+  // The push event: preload subscribes *and* unsubscribes; main emits it.
+  check('preload subscribes to remote:state', preload.includes('ipcRenderer.on(CHANNELS.remoteState'))
+  check('preload unsubscribes from remote:state', preload.includes('removeListener(CHANNELS.remoteState'))
+  check('main emits remote:state', service.includes('CHANNELS.remoteState'))
+
+  // window.roxy.remote.* must match the RoxyApi type surface exactly.
+  check('preload exposes remote.start', /\bstart:/.test(preloadRemote))
+  check('preload exposes remote.stop', /\bstop:/.test(preloadRemote))
+  check('preload exposes remote.status', /\bstatus:/.test(preloadRemote))
+  check('preload exposes remote.onState', /\bonState:/.test(preloadRemote))
+  check('api declares remote.start', /\bstart\(/.test(apiRemote))
+  check('api declares remote.stop', /\bstop\(/.test(apiRemote))
+  check('api declares remote.status', /\bstatus\(/.test(apiRemote))
+  check('api declares remote.onState', /\bonState\(/.test(apiRemote))
+}
 
 async function main(): Promise<void> {
   // mapWithConcurrency: empty input is a no-op empty array.

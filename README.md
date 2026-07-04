@@ -103,6 +103,32 @@ The main process runs a single provider-agnostic agent loop; the renderer only s
   browser toolset ([`services/browser.ts`](src/main/services/browser.ts)) and recurring "loops"
   ([`services/loops.ts`](src/main/services/loops.ts)) — run through the same loop.
 
+### Remote Workspace
+
+Take a running session to your phone. **Remote Workspace** (bottom-left **CUSTOMIZE** group in the
+sidebar) mints a room on roxy.gg, shows a QR + safe URL + PIN, and keeps the desktop as the
+authoritative host while a phone drives it as a thin client — **your code and files never leave the
+machine**; only the chat transcript and streamed agent events are relayed.
+
+- **Host service** — [`main/services/remote.ts`](src/main/services/remote.ts) mints via
+  `POST https://roxy.gg/api/remote/sessions`, holds the **host token**, and keeps a host WebSocket
+  alive (auto-reconnect w/ backoff). On a guest `hello` it sends a transcript snapshot; on a guest
+  `prompt` it persists the message and runs the turn, fanning every `LlmEvent` to the phone **and**
+  the local renderer. **Stop sharing** revokes the room (host-token `DELETE`).
+- **One loop, no drift** — both the local `llm:start` IPC path and a remote prompt call the shared
+  [`main/services/session-turn.ts`](src/main/services/session-turn.ts) `runSessionTurn`, so a phone
+  prompt behaves identically to a local one.
+- **IPC** — `remote:start | remote:stop | remote:status` + a `remote:state` push
+  ([`src/shared/ipc.ts`](src/shared/ipc.ts)), handlers in
+  [`src/main/ipc`](src/main/ipc/index.ts), bridge in [`src/preload`](src/preload/index.ts), types in
+  [`src/shared/api.ts`](src/shared/api.ts). The QR popup is
+  [`renderer/src/components/RemoteWorkspaceDialog.tsx`](src/renderer/src/components/RemoteWorkspaceDialog.tsx)
+  (offline QR via `qrcode.react` — nothing leaves the machine).
+- **Security** — no login: a short-lived HMAC guest token rides in the URL fragment and the phone
+  must also enter the **PIN** shown on the desktop. The room (and its tokens) is revoked on Stop, on
+  too many wrong PINs, at the TTL, or shortly after the desktop disconnects. See the relay + protocol
+  details in the [roxy.gg README](../roxy.gg/README.md#remote-workspace).
+
 ## License
 
 [MIT](LICENSE) © Roxy.
