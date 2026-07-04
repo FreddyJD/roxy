@@ -21,6 +21,8 @@
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux",
+    "dist:mac": "bash script/build-mac.sh",
+    "dist:mac:publish": "bash script/build-mac.sh --publish always",
     "release": "npm run build && electron-builder --publish always",
     "release:win": "npm run build && electron-builder --win --publish always",
     "release:mac": "npm run build && electron-builder --mac --publish always",

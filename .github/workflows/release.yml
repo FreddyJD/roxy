@@ -83,17 +83,24 @@ jobs:
         env:
           # Provided automatically by Actions; lets electron-builder upload assets.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # ----- Add later, once you have signing credentials -----
-          # Windows code signing (Azure Trusted Signing):
+
+          # ----- macOS signing + notarization (Apple Developer ID) -----
+          # Scoped to the macOS runner on purpose: CSC_LINK is ALSO the Windows
+          # signing variable, so exposing the mac .p12 to the Windows job would
+          # make it try to sign the .exe with a mac cert and fail. The APPLE_*
+          # trio drives notarytool (all three must be set together or the mac
+          # build errors; if none are set, notarization is skipped with a warning).
+          # Set these once via `bash script/setup-mac-ci-secrets.sh` — see SIGNING.md.
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+
+          # ----- Windows code signing (Azure Artifact Signing) — TODO -----
           # AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           # AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           # AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          # macOS signing + notarization (Apple Developer ID):
-          # CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          # CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
   # Every platform uploaded successfully → make the release live (creates the
   # vX.Y.Z tag and lets the auto-updater pick it up). If any build failed, the

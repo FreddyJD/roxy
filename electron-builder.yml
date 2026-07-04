@@ -19,8 +19,13 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  notarize: false
+  # Notarization runs only when Apple credentials are present in the environment
+  # (APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID, or an APPLE_API_KEY
+  # set). See SIGNING.md. Use `npm run dist:mac` to load them from .env.
+  notarize: true
   target:
     - dmg
     - zip
