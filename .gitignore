@@ -10,3 +10,6 @@ out
 
 # smoke-test build output
 test/.out/
+
+# TypeScript incremental build info
+*.tsbuildinfo

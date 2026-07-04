@@ -277,10 +277,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const sessionId = get().activeChatId
     if (!sessionId) return
     const cur = get().remote
-    // Don't double-mint: a start is already in flight, or we're already sharing
-    // this same session (re-opening the dialog shouldn't churn the URL/PIN).
+    // Don't double-mint: a start is already in flight, or the workspace is already
+    // shared (the phone can roam every session through the one live room, so we
+    // never re-mint just because it moved to a different session than the active one).
     if (cur.phase === 'starting') return
-    if ((cur.phase === 'live' || cur.phase === 'offline') && cur.sessionId === sessionId) return
+    if (cur.phase === 'live' || cur.phase === 'offline') return
     // Clean 'starting' — never surface a previous share's stale url/pin/guests.
     set((s) => ({ remote: { phase: 'starting', sessionId, guests: 0, rev: s.remote.rev } }))
     try {

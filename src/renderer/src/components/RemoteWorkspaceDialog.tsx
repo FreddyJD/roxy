@@ -22,7 +22,8 @@ export function RemoteWorkspaceDialog({ onClose }: { onClose: () => void }): JSX
   const [copied, setCopied] = useState(false)
   const [stopping, setStopping] = useState(false)
 
-  const sharedName =
+  // The session the phone is currently viewing (it can switch between all of them).
+  const viewingName =
     chats.find((c) => c.id === (remote.sessionId ?? activeChatId))?.title ?? 'this session'
 
   // On open, sync the real sharing status first (a share may already be live
@@ -94,8 +95,8 @@ export function RemoteWorkspaceDialog({ onClose }: { onClose: () => void }): JSX
               )}
             </div>
             <p className="mt-0.5 truncate text-xs text-text-muted">
-              Take <span className="text-text">{sharedName}</span> to your phone — scan, enter the
-              PIN, and prompt from anywhere.
+              Take your whole workspace to your phone — scan, enter the PIN, and switch between any
+              session from anywhere.
             </p>
           </div>
           <button
@@ -120,6 +121,7 @@ export function RemoteWorkspaceDialog({ onClose }: { onClose: () => void }): JSX
               url={remote.url}
               pin={remote.pin}
               guests={remote.guests}
+              viewingName={viewingName}
               copied={copied}
               onCopy={() => void copyUrl()}
             />
@@ -171,12 +173,14 @@ function ShareView({
   url,
   pin,
   guests,
+  viewingName,
   copied,
   onCopy
 }: {
   url?: string
   pin?: string
   guests: number
+  viewingName: string
   copied: boolean
   onCopy: () => void
 }): JSX.Element {
@@ -226,12 +230,17 @@ function ShareView({
       </div>
 
       {/* Device indicator */}
-      <div className="flex items-center gap-2 text-xs">
+      <div className="flex flex-col items-center gap-1 text-xs">
         {guests > 0 ? (
-          <span className="inline-flex items-center gap-1.5 font-medium text-success">
-            <Smartphone className="h-3.5 w-3.5" />
-            {guests} device{guests === 1 ? '' : 's'} connected
-          </span>
+          <>
+            <span className="inline-flex items-center gap-1.5 font-medium text-success">
+              <Smartphone className="h-3.5 w-3.5" />
+              {guests} device{guests === 1 ? '' : 's'} connected
+            </span>
+            <span className="text-[11px] text-text-subtle">
+              Viewing <span className="text-text-muted">{viewingName}</span>
+            </span>
+          </>
         ) : (
           <span className="inline-flex items-center gap-1.5 text-text-muted">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-subtle" />

@@ -241,7 +241,7 @@ export interface RemoteState {
   url?: string
   /** PIN shown on the desktop; the phone must enter it to pair. */
   pin?: string
-  /** The workspace session currently shared + prompted from the phone. */
+  /** The workspace session the phone is currently viewing (it can switch between all). */
   sessionId?: string
   /** Number of phones currently paired. */
   guests: number

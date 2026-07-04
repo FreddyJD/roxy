@@ -30,32 +30,69 @@ export interface AbortFrame {
   t: 'abort'
 }
 
+/** Ask us for the full workspace session list (we answer with `sessions`). */
+export interface ListFrame {
+  t: 'list'
+}
+
+/** Switch the phone to a different session; we reply with meta + snapshot + turn. */
+export interface SwitchFrame {
+  t: 'switch'
+  sessionId: string
+}
+
 /** Frames a guest can send that the relay forwards to us. */
-export type GuestFrame = PromptFrame | AbortFrame
+export type GuestFrame = PromptFrame | AbortFrame | ListFrame | SwitchFrame
 
 // --- Host (desktop) → Guest (phone), sent by us ---------------------------
 
-/** Full transcript sent to a guest right after it joins. */
+/**
+ * One session in this workspace, for the phone's session switcher. `project` is
+ * the workspace folder basename (mirrors the desktop sidebar); `cwd` is the path.
+ */
+export interface RemoteSessionInfo {
+  id: string
+  title: string
+  project: string
+  cwd?: string
+  updatedAt: number
+  messageCount: number
+}
+
+/** The workspace's sessions + which one the phone is currently viewing. */
+export interface SessionsFrame {
+  t: 'sessions'
+  sessions: RemoteSessionInfo[]
+  currentId: string
+}
+
+/** Full transcript sent to a guest right after it joins (or switches session). */
 export interface SnapshotFrame {
   t: 'snapshot'
+  sessionId?: string
   messages: unknown[]
 }
 
 /** One streamed agent event (an `LlmEvent`), relayed verbatim. */
 export interface DeltaFrame {
   t: 'delta'
+  sessionId?: string
   event: unknown
 }
 
 /** Whether the desktop is currently running a turn (drives the phone spinner). */
 export interface TurnFrame {
   t: 'turn'
+  sessionId?: string
   state: 'running' | 'idle'
+  /** In-flight assistant parts, sent when a guest joins/switches mid-turn. */
+  parts?: unknown[]
 }
 
 /** Session metadata (title / working dir) for the phone header. */
 export interface MetaFrame {
   t: 'meta'
+  sessionId?: string
   title?: string
   cwd?: string
 }
@@ -67,7 +104,7 @@ export interface HostErrorFrame {
 }
 
 /** Frames we send toward the guests. */
-export type HostFrame = SnapshotFrame | DeltaFrame | TurnFrame | MetaFrame | HostErrorFrame
+export type HostFrame = SnapshotFrame | DeltaFrame | TurnFrame | MetaFrame | SessionsFrame | HostErrorFrame
 
 // --- Relay (roxy.gg) → host (control) -------------------------------------
 

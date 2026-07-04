@@ -8,9 +8,11 @@
  * exact same `runSessionTurn` a local prompt uses, and every streamed event is
  * relayed back to the phone. Code and files never leave the machine.
  *
- * State is a single active share (the "entire workspace" is shared through one
- * session at a time). `start` mints + connects, `stop` tears down + revokes, and
- * `remote:state` pushes keep the desktop dialog live.
+ * State is a single active share: the desktop mints one room and dials the relay
+ * once, but the phone can roam the **entire workspace** — it lists every session
+ * and switches between them freely, while the desktop's own active session stays
+ * put. `start` mints + connects, `stop` tears down + revokes, and `remote:state`
+ * pushes keep the desktop dialog live.
  */
 import { randomUUID } from 'node:crypto'
 import { BrowserWindow } from 'electron'
@@ -32,7 +34,7 @@ import { DEFAULT_AGENT_ID } from '../../shared/agents'
 import * as repo from '../db/repo'
 import { listModels } from './models'
 import { runSessionTurn } from './session-turn'
-import { MAX_FRAME_BYTES, parseFrame, type HostFrame } from './remote-protocol'
+import { MAX_FRAME_BYTES, parseFrame, type HostFrame, type RemoteSessionInfo } from './remote-protocol'
 
 /**
  * Relay base. Prod dials roxy.gg; a dev build defaults to the local roxy.gg
@@ -68,13 +70,17 @@ interface Share {
   url: string
   pin: string
   expiresAt: number
-  sessionId: string
+  /** The session the phone is currently viewing + prompting (it can switch). */
+  currentSessionId: string
   socket: WebSocket | null
   guests: number
   phase: RemotePhase
   error?: string
-  /** Abort handle for the in-flight remote turn, if any. */
-  turnController: AbortController | null
+  /** Abort handles for in-flight remote turns, keyed by sessionId (one per session). */
+  turns: Map<string, AbortController>
+  /** Live parts accumulators for in-flight turns, so a guest that joins/switches
+   *  mid-turn can be seeded with the reply-so-far (keyed by sessionId). */
+  liveTurns: Map<string, PartsAccumulator>
   reconnectAttempts: number
   reconnectTimer: ReturnType<typeof setTimeout> | null
   /** True once we intentionally tear down, so `close` doesn't try to reconnect. */
@@ -96,7 +102,7 @@ function toState(): RemoteState {
     brokerId: share.brokerId,
     url: share.url,
     pin: share.pin,
-    sessionId: share.sessionId,
+    sessionId: share.currentSessionId,
     guests: share.guests,
     expiresAt: share.expiresAt,
     error: share.error,
@@ -145,8 +151,10 @@ function bumpFor(active: Share): void {
 }
 
 /**
- * Send the transcript snapshot, trimming the oldest messages until it fits the
- * relay's frame cap (a fresh phone still gets the recent, most relevant history).
+ * Send the transcript snapshot for `sessionId`, trimming the oldest messages
+ * until it fits the relay's frame cap (a fresh phone still gets the recent, most
+ * relevant history). Tagged with `sessionId` so the phone can drop a snapshot
+ * for a session it already switched away from.
  */
 function sendSnapshot(sessionId: string): void {
   const sock = share?.socket
@@ -154,7 +162,7 @@ function sendSnapshot(sessionId: string): void {
   const messages = repo.listMessages(sessionId)
   for (let start = 0; start < messages.length; start += 1) {
     const slice = messages.slice(start)
-    const raw = JSON.stringify({ t: 'snapshot', messages: slice })
+    const raw = JSON.stringify({ t: 'snapshot', sessionId, messages: slice })
     if (Buffer.byteLength(raw) <= MAX_FRAME_BYTES) {
       sock.send(raw)
       return
@@ -162,12 +170,12 @@ function sendSnapshot(sessionId: string): void {
     // A single trailing message that alone exceeds the cap: send a truncated
     // copy so the phone still gets a usable tail instead of an oversized (dropped) frame.
     if (slice.length === 1) {
-      sock.send(JSON.stringify({ t: 'snapshot', messages: [truncateMessage(slice[0])] }))
+      sock.send(JSON.stringify({ t: 'snapshot', sessionId, messages: [truncateMessage(slice[0])] }))
       return
     }
   }
   // No messages yet — send an empty snapshot so the phone leaves its loading state.
-  sock.send(JSON.stringify({ t: 'snapshot', messages: [] }))
+  sock.send(JSON.stringify({ t: 'snapshot', sessionId, messages: [] }))
 }
 
 /** Shrink one message so a snapshot of just it fits under the frame cap. */
@@ -189,7 +197,75 @@ function truncateMessage(m: Message): Message {
 /** Session title + workspace dir for the phone header. */
 function sendMeta(sessionId: string): void {
   const chat = repo.getChat(sessionId)
-  sendFrame({ t: 'meta', title: chat?.title, cwd: repo.getChatWorkspace(sessionId) ?? undefined })
+  sendFrame({
+    t: 'meta',
+    sessionId,
+    title: chat?.title,
+    cwd: repo.getChatWorkspace(sessionId) ?? undefined
+  })
+}
+
+/** Folder basename used to group sessions on the phone (mirrors the desktop sidebar). */
+function projectName(workspacePath: string | null): string {
+  if (!workspacePath) return '(no folder)'
+  return workspacePath.split(/[\\/]/).filter(Boolean).pop() ?? workspacePath
+}
+
+/**
+ * Build the workspace's session list for the phone switcher: every top-level
+ * (`main`) session, most-recently-updated first, grouped by project on the phone.
+ */
+function buildSessionList(): RemoteSessionInfo[] {
+  return repo
+    .listChats()
+    .filter((c) => c.kind === 'main')
+    .map((c) => ({
+      id: c.id,
+      title: c.title,
+      project: projectName(c.workspacePath),
+      cwd: c.workspacePath ?? undefined,
+      updatedAt: c.updatedAt,
+      messageCount: repo.listMessages(c.id).length
+    }))
+}
+
+/** Push the workspace session list + the current selection to the phone(s). */
+function sendSessions(): void {
+  if (!share) return
+  sendFrame({ t: 'sessions', sessions: buildSessionList(), currentId: share.currentSessionId })
+}
+
+/**
+ * Push a session's current turn state to the phone(s). If a turn is in flight we
+ * include its accumulated parts so a guest that just joined/switched sees the
+ * whole reply-so-far, not only the tail of subsequent deltas.
+ */
+function sendTurnState(sessionId: string): void {
+  if (!share) return
+  const acc = share.liveTurns.get(sessionId)
+  if (acc) sendFrame({ t: 'turn', sessionId, state: 'running', parts: acc.parts })
+  else sendFrame({ t: 'turn', sessionId, state: 'idle' })
+}
+
+/**
+ * Switch the phone(s) to a different session. Only the phone view moves — the
+ * desktop's own active session is untouched. We re-emit the list (to update the
+ * highlighted current), then meta + snapshot + the target's live turn state.
+ */
+function switchSession(sessionId: string): void {
+  const active = share
+  if (!active) return
+  if (!repo.getChat(sessionId)) {
+    sendFrame({ t: 'error', message: 'That session no longer exists.' })
+    return
+  }
+  active.currentSessionId = sessionId
+  sendSessions()
+  sendMeta(sessionId)
+  sendSnapshot(sessionId)
+  sendTurnState(sessionId)
+  // Surface the phone's current session to the desktop dialog + mirror logic.
+  bump()
 }
 
 // --- Turn assembly (mirrors the renderer's buildChatMessages) --------------
@@ -304,24 +380,32 @@ function partsToContent(parts: MessagePart[]): string {
 
 // --- The crux: run a guest's prompt exactly like a local one ---------------
 
-async function handlePrompt(text: string): Promise<void> {
+async function handlePrompt(sessionId: string, text: string): Promise<void> {
   const active = share
   if (!active || !text.trim()) return
-  // Serialize turns: claim the slot synchronously so two quick prompts can't
-  // start concurrent turns on the same session (mirrors the renderer's guard).
-  if (active.turnController) {
+  if (!repo.getChat(sessionId)) {
+    sendFrame({ t: 'error', message: 'That session no longer exists.' })
+    return
+  }
+  // Serialize turns *per session*: claim the slot synchronously so two quick
+  // prompts can't start concurrent turns on the same session (mirrors the
+  // renderer's guard). Different sessions can still run independently.
+  if (active.turns.has(sessionId)) {
     sendFrame({ t: 'error', message: 'A turn is already running — wait for it to finish.' })
     return
   }
   const controller = new AbortController()
-  active.turnController = controller
-  const sessionId = active.sessionId
+  active.turns.set(sessionId, controller)
+  // Register the live accumulator up-front so a guest that joins/switches during
+  // this turn (even mid provider-resolution) is seeded with the reply-so-far.
+  const acc = new PartsAccumulator()
+  active.liveTurns.set(sessionId, acc)
 
   try {
     // Persist the user's message as if typed locally, then nudge the desktop.
     repo.addMessage({ chatId: sessionId, role: 'user', content: text })
     bumpFor(active)
-    sendFrameFor(active, { t: 'turn', state: 'running' })
+    sendFrameFor(active, { t: 'turn', sessionId, state: 'running' })
 
     // Reproduce the renderer's provider/model/budget resolution in the main process.
     const settings = repo.getSettings()
@@ -349,8 +433,6 @@ async function handlePrompt(text: string): Promise<void> {
     )
     const messages = buildRemoteMessages(sessionId, contextBudget, info?.outputLimit ?? 4096)
 
-    const acc = new PartsAccumulator()
-
     const result = await runSessionTurn(
       {
         requestId: randomUUID(),
@@ -365,7 +447,7 @@ async function handlePrompt(text: string): Promise<void> {
       },
       (event) => {
         acc.apply(event)
-        sendFrameFor(active, { t: 'delta', event })
+        sendFrameFor(active, { t: 'delta', sessionId, event })
       },
       controller.signal
     )
@@ -383,8 +465,9 @@ async function handlePrompt(text: string): Promise<void> {
   } finally {
     // Always release the turn slot (even on an unexpected throw) so future
     // prompts aren't permanently rejected; only clear if we still own it.
-    if (active.turnController === controller) active.turnController = null
-    sendFrameFor(active, { t: 'turn', state: 'idle' })
+    if (active.turns.get(sessionId) === controller) active.turns.delete(sessionId)
+    if (active.liveTurns.get(sessionId) === acc) active.liveTurns.delete(sessionId)
+    sendFrameFor(active, { t: 'turn', sessionId, state: 'idle' })
   }
 }
 
@@ -440,11 +523,14 @@ function onFrame(raw: string): void {
   if (!frame || typeof frame.t !== 'string' || !share) return
   switch (frame.t) {
     case 'guest-joined': {
-      // A phone entered the PIN and paired — send it the current transcript.
+      // A phone entered the PIN and paired — send it the workspace session list
+      // plus the current session's transcript + live turn state.
       share.guests = typeof frame.guests === 'number' ? frame.guests : share.guests
-      sendMeta(share.sessionId)
-      sendSnapshot(share.sessionId)
-      sendFrame({ t: 'turn', state: share.turnController ? 'running' : 'idle' })
+      const current = share.currentSessionId
+      sendSessions()
+      sendMeta(current)
+      sendSnapshot(current)
+      sendTurnState(current)
       bump()
       break
     }
@@ -453,12 +539,23 @@ function onFrame(raw: string): void {
       bump()
       break
     }
+    case 'list': {
+      // Phone asked for a fresh workspace session list (opened the switcher).
+      sendSessions()
+      break
+    }
+    case 'switch': {
+      // Phone tapped a different session in the switcher.
+      if (typeof frame.sessionId === 'string') switchSession(frame.sessionId)
+      break
+    }
     case 'prompt': {
-      if (typeof frame.text === 'string') void handlePrompt(frame.text)
+      // Prompts run against whatever session the phone is currently viewing.
+      if (typeof frame.text === 'string') void handlePrompt(share.currentSessionId, frame.text)
       break
     }
     case 'abort': {
-      share.turnController?.abort()
+      share.turns.get(share.currentSessionId)?.abort()
       break
     }
     case 'bye': {
@@ -500,8 +597,9 @@ function teardown(): void {
     clearTimeout(active.reconnectTimer)
     active.reconnectTimer = null
   }
-  active.turnController?.abort()
-  active.turnController = null
+  for (const controller of active.turns.values()) controller.abort()
+  active.turns.clear()
+  active.liveTurns.clear()
   const sock = active.socket
   active.socket = null
   if (sock) {
@@ -556,9 +654,16 @@ export function stop(): Promise<RemoteState> {
 }
 
 async function startInternal(input: RemoteStartInput): Promise<RemoteState> {
-  const sessionId = input.sessionId
-  if (!repo.getChat(sessionId)) {
-    return { ...IDLE_STATE, phase: 'error', error: 'That session no longer exists.' }
+  // Seed the phone's initial session with the desktop's active chat; if that's
+  // gone (or none was passed), fall back to the most-recently-updated session so
+  // the phone always opens onto something real and can switch from there.
+  let sessionId = input.sessionId
+  if (!sessionId || !repo.getChat(sessionId)) {
+    const fallback = repo.listChats().find((c) => c.kind === 'main')
+    if (!fallback) {
+      return { ...IDLE_STATE, phase: 'error', error: 'Open a session first, then share your workspace.' }
+    }
+    sessionId = fallback.id
   }
   // Only one active share — stop any previous one first (internal, already serialized).
   if (share) await stopInternal()
@@ -585,11 +690,12 @@ async function startInternal(input: RemoteStartInput): Promise<RemoteState> {
     url: mint.url,
     pin: mint.pin,
     expiresAt: mint.expiresAt,
-    sessionId,
+    currentSessionId: sessionId,
     socket: null,
     guests: 0,
     phase: 'starting',
-    turnController: null,
+    turns: new Map(),
+    liveTurns: new Map(),
     reconnectAttempts: 0,
     reconnectTimer: null,
     closing: false,
