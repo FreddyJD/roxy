@@ -215,6 +215,9 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         const shared = state.sessionId
         // Only mirror when the shared chat is on screen and it actually changed.
         if (!shared || shared !== get().activeChatId || state.rev === prevRev) return
+        // The queue may have changed from the phone (a prompt was queued, removed,
+        // or drained) — keep the desktop's queue view in sync with the shared one.
+        void get().refreshQueue()
         if (get().sendingChats[shared]) {
           // Don't clobber an in-flight local stream — reconcile after it lands.
           remoteMirror.deferred = true

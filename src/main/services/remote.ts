@@ -35,7 +35,6 @@ import * as repo from '../db/repo'
 import { listModels } from './models'
 import { runSessionTurn } from './session-turn'
 import { MAX_FRAME_BYTES, parseFrame, type HostFrame, type RemoteSessionInfo } from './remote-protocol'
-
 /**
  * Relay base. Prod dials roxy.gg; a dev build defaults to the local roxy.gg
  * (localhost:3000). Override with `ROXY_REMOTE_BASE` (e.g. a staging URL).
@@ -205,6 +204,20 @@ function sendMeta(sessionId: string): void {
   })
 }
 
+/**
+ * Mirror a session's pending prompt queue to the phone(s). The queue is the same
+ * persisted `repo` queue the desktop uses, so both ends see one FIFO. Sent on
+ * join/switch and whenever the queue changes (phone/desktop enqueue, dequeue, or
+ * drain). Text-only — no image blobs cross the wire.
+ */
+function sendQueue(sessionId: string): void {
+  sendFrame({
+    t: 'queue',
+    sessionId,
+    items: repo.listQueue(sessionId).map((q) => ({ id: q.id, text: q.content }))
+  })
+}
+
 /** Folder basename used to group sessions on the phone (mirrors the desktop sidebar). */
 function projectName(workspacePath: string | null): string {
   if (!workspacePath) return '(no folder)'
@@ -264,6 +277,7 @@ function switchSession(sessionId: string): void {
   sendMeta(sessionId)
   sendSnapshot(sessionId)
   sendTurnState(sessionId)
+  sendQueue(sessionId)
   // Surface the phone's current session to the desktop dialog + mirror logic.
   bump()
 }
@@ -380,6 +394,13 @@ function partsToContent(parts: MessagePart[]): string {
 
 // --- The crux: run a guest's prompt exactly like a local one ---------------
 
+/**
+ * Handle a prompt typed on the phone. Mirrors the desktop's `submit`: if a turn
+ * is already running for this session — or prompts are already queued — append
+ * it to the shared FIFO instead of starting a second turn. Otherwise run it now.
+ * The queue is the same persisted `repo` queue the desktop uses, so the pending
+ * list stays identical on both ends.
+ */
 async function handlePrompt(sessionId: string, text: string): Promise<void> {
   const active = share
   if (!active || !text.trim()) return
@@ -387,11 +408,39 @@ async function handlePrompt(sessionId: string, text: string): Promise<void> {
     sendFrame({ t: 'error', message: 'That session no longer exists.' })
     return
   }
+  // A turn is already running for this session → queue it (FIFO), mirror the
+  // updated queue to the phone(s), and nudge the desktop so its queue view
+  // refreshes too. Draining happens automatically when the current turn ends.
+  // (Matches the desktop's single gate: queue only while a turn is in flight.)
+  if (active.turns.has(sessionId)) {
+    repo.enqueue(sessionId, text.trim())
+    sendQueue(sessionId)
+    bumpFor(active)
+    return
+  }
+  await runTurn(active, sessionId, text.trim(), false)
+}
+
+/**
+ * Run one turn for a guest's prompt, exactly like a local one, then drain the
+ * next queued prompt (if any). Called by `handlePrompt` for a fresh prompt and
+ * by `drainRemoteQueue` for each dequeued one — neither re-checks the busy guard,
+ * so a drained prompt actually runs rather than re-queuing behind itself.
+ *
+ * `announce` is true for a drained queue item: the phone never echoed it (it only
+ * had it in the pending list), so the host sends the user text on `turn:running`
+ * for the phone to show its bubble. A direct phone send echoes locally, so it's
+ * false there to avoid a double bubble.
+ */
+async function runTurn(active: Share, sessionId: string, text: string, announce: boolean): Promise<void> {
   // Serialize turns *per session*: claim the slot synchronously so two quick
   // prompts can't start concurrent turns on the same session (mirrors the
   // renderer's guard). Different sessions can still run independently.
   if (active.turns.has(sessionId)) {
-    sendFrame({ t: 'error', message: 'A turn is already running — wait for it to finish.' })
+    // A turn slipped in first — fall back to queuing so nothing is lost.
+    repo.enqueue(sessionId, text)
+    sendQueue(sessionId)
+    bumpFor(active)
     return
   }
   const controller = new AbortController()
@@ -405,7 +454,10 @@ async function handlePrompt(sessionId: string, text: string): Promise<void> {
     // Persist the user's message as if typed locally, then nudge the desktop.
     repo.addMessage({ chatId: sessionId, role: 'user', content: text })
     bumpFor(active)
-    sendFrameFor(active, { t: 'turn', sessionId, state: 'running' })
+    // Announce the prompt text for a drained queue item so the phone shows its
+    // bubble (a direct send already echoed it locally). `sendQueue` above already
+    // removed it from the pending list, so it moves cleanly from queue → turn.
+    sendFrameFor(active, { t: 'turn', sessionId, state: 'running', userText: announce ? text : undefined })
 
     // Reproduce the renderer's provider/model/budget resolution in the main process.
     const settings = repo.getSettings()
@@ -468,7 +520,40 @@ async function handlePrompt(sessionId: string, text: string): Promise<void> {
     if (active.turns.get(sessionId) === controller) active.turns.delete(sessionId)
     if (active.liveTurns.get(sessionId) === acc) active.liveTurns.delete(sessionId)
     sendFrameFor(active, { t: 'turn', sessionId, state: 'idle' })
+    // A turn stopped by the user shouldn't auto-run the backlog — a phone abort
+    // leaves the queued prompts in place (the phone can drain them with a fresh
+    // send, mirroring the desktop's Stop). Otherwise drain the next queued prompt.
+    if (!controller.signal.aborted) void drainRemoteQueue(active, sessionId)
   }
+}
+
+/**
+ * Run the next pending prompt for a session, chaining until the queue is empty.
+ * Each dequeued prompt runs through `runTurn`, which drains again when it ends —
+ * so the whole backlog streams to the phone one turn at a time. A no-op if the
+ * share was replaced, a turn is already running, or the queue is empty.
+ */
+async function drainRemoteQueue(active: Share, sessionId: string): Promise<void> {
+  if (share !== active || active.turns.has(sessionId)) return
+  const items = repo.listQueue(sessionId)
+  if (items.length === 0) {
+    sendQueue(sessionId)
+    return
+  }
+  const next = items[0]
+  repo.removeQueueItem(next.id)
+  sendQueue(sessionId)
+  bumpFor(active)
+  await runTurn(active, sessionId, next.content, true)
+}
+
+/**
+ * Re-broadcast the shared queue to the phone(s) after a *desktop-side* change
+ * (the renderer added/removed/reordered a queued prompt). Called from the queue
+ * IPC handlers so both ends stay in sync regardless of who edited the queue.
+ */
+export function notifyQueueChanged(): void {
+  if (share) sendQueue(share.currentSessionId)
 }
 
 // --- Socket lifecycle ------------------------------------------------------
@@ -531,6 +616,7 @@ function onFrame(raw: string): void {
       sendMeta(current)
       sendSnapshot(current)
       sendTurnState(current)
+      sendQueue(current)
       bump()
       break
     }
@@ -556,6 +642,16 @@ function onFrame(raw: string): void {
     }
     case 'abort': {
       share.turns.get(share.currentSessionId)?.abort()
+      break
+    }
+    case 'dequeue': {
+      // Phone tapped × on a queued prompt — drop it from the shared queue and
+      // re-broadcast so both ends update. `bump` refreshes the desktop's view.
+      if (typeof frame.id === 'string') {
+        repo.removeQueueItem(frame.id)
+        sendQueue(share.currentSessionId)
+        bump()
+      }
       break
     }
     case 'bye': {

@@ -41,8 +41,14 @@ export interface SwitchFrame {
   sessionId: string
 }
 
+/** Remove a pending prompt from the shared queue (the phone's × on a queued item). */
+export interface DequeueFrame {
+  t: 'dequeue'
+  id: string
+}
+
 /** Frames a guest can send that the relay forwards to us. */
-export type GuestFrame = PromptFrame | AbortFrame | ListFrame | SwitchFrame
+export type GuestFrame = PromptFrame | AbortFrame | ListFrame | SwitchFrame | DequeueFrame
 
 // --- Host (desktop) → Guest (phone), sent by us ---------------------------
 
@@ -87,6 +93,8 @@ export interface TurnFrame {
   state: 'running' | 'idle'
   /** In-flight assistant parts, sent when a guest joins/switches mid-turn. */
   parts?: unknown[]
+  /** The user's text when starting a drained queue item (so the phone shows it). */
+  userText?: string
 }
 
 /** Session metadata (title / working dir) for the phone header. */
@@ -97,6 +105,19 @@ export interface MetaFrame {
   cwd?: string
 }
 
+/** One pending prompt in the shared queue, mirrored to the phone. */
+export interface RemoteQueueItem {
+  id: string
+  text: string
+}
+
+/** The pending prompt queue for a session, mirrored from our persisted queue. */
+export interface QueueFrame {
+  t: 'queue'
+  sessionId?: string
+  items: RemoteQueueItem[]
+}
+
 /** A host-side error surfaced to the guest. */
 export interface HostErrorFrame {
   t: 'error'
@@ -104,7 +125,7 @@ export interface HostErrorFrame {
 }
 
 /** Frames we send toward the guests. */
-export type HostFrame = SnapshotFrame | DeltaFrame | TurnFrame | MetaFrame | SessionsFrame | HostErrorFrame
+export type HostFrame = SnapshotFrame | DeltaFrame | TurnFrame | MetaFrame | QueueFrame | SessionsFrame | HostErrorFrame
 
 // --- Relay (roxy.gg) → host (control) -------------------------------------
 

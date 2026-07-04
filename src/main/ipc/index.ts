@@ -245,14 +245,22 @@ export function registerIpc(): void {
   )
 
   // ---- queue ----
+  // Each mutation re-mirrors the shared queue to any paired phone (remote is a
+  // no-op when nothing is shared), so desktop-side edits stay in sync on both ends.
   ipcMain.handle(CHANNELS.queueList, (_e, chatId: string) => repo.listQueue(chatId))
-  ipcMain.handle(CHANNELS.queueAdd, (_e, chatId: string, content: string, images?: QueueImage[]) =>
-    repo.enqueue(chatId, content, images)
-  )
-  ipcMain.handle(CHANNELS.queueRemove, (_e, id: string) => repo.removeQueueItem(id))
-  ipcMain.handle(CHANNELS.queueReorder, (_e, chatId: string, ids: string[]) =>
+  ipcMain.handle(CHANNELS.queueAdd, (_e, chatId: string, content: string, images?: QueueImage[]) => {
+    const item = repo.enqueue(chatId, content, images)
+    remote.notifyQueueChanged()
+    return item
+  })
+  ipcMain.handle(CHANNELS.queueRemove, (_e, id: string) => {
+    repo.removeQueueItem(id)
+    remote.notifyQueueChanged()
+  })
+  ipcMain.handle(CHANNELS.queueReorder, (_e, chatId: string, ids: string[]) => {
     repo.reorderQueue(chatId, ids)
-  )
+    remote.notifyQueueChanged()
+  })
 
   // ---- llm (streamed model completions) ----
   // The turn body lives in runSessionTurn so the remote host (phone-driven)
