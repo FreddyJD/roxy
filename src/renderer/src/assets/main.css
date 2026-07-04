@@ -109,9 +109,13 @@ body {
   padding-right: 144px;
 }
 
-/* On macOS the native traffic lights already sit in the top-left, so hide the
-   in-app brand (Roxy logo + name) there to avoid crowding them. Other platforms
-   keep the brand, since their window controls are on the right. */
-[data-platform='darwin'] .hide-on-mac {
-  display: none;
+/* On macOS the native traffic lights own the top-left, so slide the in-app
+   brand (Roxy logo + name) to the right of the sidebar header — next to the
+   window controls — instead of crowding them. Other platforms keep the brand
+   on the left, since their window controls sit on the right. */
+[data-platform='darwin'] .sidebar-brand {
+  margin-left: auto;
+}
+[data-platform='darwin'] .sidebar-controls {
+  margin-left: 0;
 }

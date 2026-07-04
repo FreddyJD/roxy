@@ -185,8 +185,8 @@ export function Sidebar(): JSX.Element {
       style={{ width }}
       className="relative flex h-full shrink-0 flex-col border-r border-border bg-surface"
     >
-      <div className="titlebar reserve-controls-left flex items-center justify-between px-4 py-3.5">
-        <div className="hide-on-mac flex items-center gap-2.5">
+      <div className="titlebar reserve-controls-left flex items-center gap-2 px-4 py-3.5">
+        <div className="sidebar-brand flex items-center gap-2.5">
           <img
             src={roxy}
             alt="Roxy"
@@ -194,7 +194,7 @@ export function Sidebar(): JSX.Element {
           />
           <span className="text-sm font-semibold tracking-tight">Roxy</span>
         </div>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="sidebar-controls ml-auto flex items-center gap-1">
           <button
             onClick={() => navigate('/settings')}
             title="Settings"
