@@ -78,6 +78,43 @@ jobs:
       - name: Build renderer + main
         run: npm run build
 
+      - name: Verify macOS signing secrets
+        # Fail fast (in ~1s) with a clear message if the mac signing/notarization
+        # secrets are misconfigured, instead of dying 60s deep in electron-builder
+        # with a cryptic "APPLE_* env var needs to be set". All five must be set
+        # together (or none, for unsigned fork builds); a partial set is the usual
+        # mistake — e.g. `gh secret set X` that stored an empty value.
+        if: runner.os == 'macOS'
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [ -z "${!v}" ] && missing+=("$v")
+          done
+          if [ "${#missing[@]}" -eq 5 ]; then
+            echo "::notice::No macOS signing secrets set — building UNSIGNED (ok for forks/PRs)."
+            exit 0
+          fi
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::macOS signing/notarization is partially configured. Empty/missing secret(s): ${missing[*]}"
+            echo "Re-set each blank secret (they are write-only, so an empty 'gh secret set' looks 'set' but isn't):"
+            for v in "${missing[@]}"; do
+              case "$v" in
+                CSC_LINK)            echo "    gh secret set MAC_CSC_LINK          # base64 of the Developer ID .p12";;
+                CSC_KEY_PASSWORD)    echo "    gh secret set MAC_CSC_KEY_PASSWORD  # the .p12 export password";;
+                *)                   echo "    gh secret set $v";;
+              esac
+            done
+            echo "Or run the helper:  bash script/setup-mac-ci-secrets.sh   (see SIGNING.md)"
+            exit 1
+          fi
+          echo "✓ All 5 macOS signing/notarization secrets are present."
+
       - name: Package & upload to the draft release
         run: npx --no-install electron-builder --publish always
         env:
