@@ -6,6 +6,16 @@ import { ToolCall } from './ToolCall'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { cn } from '../lib/cn'
 
+// Fade streamed markdown in as it arrives. `stagger: 0` is deliberate: the
+// upstream default (40ms) animates characters out of order during streaming,
+// which reads as jittery, half-rendered text. Flat timing keeps prose in order.
+const STREAM_ANIMATION = {
+  animation: 'fadeIn',
+  duration: 150,
+  easing: 'ease',
+  stagger: 0
+} as const
+
 /**
  * The single entry point for rendering an assistant turn: it walks `parts` in
  * order so reasoning, tool calls, and prose appear exactly when they happened
@@ -59,10 +69,7 @@ export function MessageParts({
         }
         return (
           <div key={i} className="streamdown max-w-none">
-            <Streamdown
-              animated={{ animation: 'fadeIn', duration: 200, easing: 'ease-out' }}
-              isAnimating={streaming && isLast}
-            >
+            <Streamdown animated={STREAM_ANIMATION} isAnimating={streaming && isLast}>
               {part.text}
             </Streamdown>
           </div>
