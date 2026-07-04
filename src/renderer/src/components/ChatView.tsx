@@ -197,18 +197,13 @@ export function ChatView(): JSX.Element {
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
         {isEmpty ? (
           <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-            <img
-              src={roxy}
-              alt="Roxy"
-              className="h-14 w-14 rounded-2xl object-cover opacity-90 ring-1 ring-border"
-            />
             {activeLoop ? (
-              <p className="mt-4 max-w-xs text-sm text-text-muted">
+              <p className="max-w-xs text-sm text-text-muted">
                 Loop <span className="font-medium text-text">{activeChat.title}</span> runs every{' '}
                 {activeLoop.intervalMinutes}m. First heartbeat soon — or type to intervene.
               </p>
             ) : (
-              <p className="mt-4 text-sm text-text-muted">
+              <p className="text-sm text-text-muted">
                 Working in <span className="font-medium text-text">{activeChat.title}</span>
               </p>
             )}
