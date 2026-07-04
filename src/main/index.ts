@@ -2,6 +2,7 @@ import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import macDockIcon from '../../resources/icon-mac.png?asset'
 import { registerIpc } from './ipc'
 import { getDb } from './db/database'
 import { startLoopScheduler } from './services/loops'
@@ -70,7 +71,9 @@ app.whenReady().then(() => {
   setAgentPromptText(AGENT_PROMPT_TEXT)
 
   if (process.platform === 'darwin') {
-    app.dock?.setIcon(icon)
+    // Use the padded variant so the dock icon matches Apple's size convention
+    // (the full-bleed resources/icon.png would render oversized next to native apps).
+    app.dock?.setIcon(macDockIcon)
   }
 
   app.on('browser-window-created', (_, window) => {

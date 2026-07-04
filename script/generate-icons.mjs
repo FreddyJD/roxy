@@ -6,7 +6,8 @@
  *   build/icon.ico         — Windows (full-bleed)
  *   build/icon.png         — Linux / electron-builder (1024, full-bleed)
  *   build/icons/<n>x<n>.png — Linux size set
- *   resources/icon.png     — runtime BrowserWindow / taskbar icon (512)
+ *   resources/icon.png     — runtime BrowserWindow / taskbar icon (512, full-bleed)
+ *   resources/icon-mac.png — macOS dock icon (512, padded to dock convention)
  *   src/renderer/src/assets/roxy.png — in-app avatar (512)
  *
  * Run: npm run icons
@@ -78,6 +79,9 @@ const resize = (buf, s) => sharp(buf).resize(s, s).png().toBuffer()
 
 writeFileSync(join(root, 'build', 'icon.png'), full)
 writeFileSync(join(root, 'resources', 'icon.png'), await resize(full, 512))
+// macOS overrides the dock icon at runtime (app.dock.setIcon), which bypasses the
+// padded bundle .icns — so ship a matching padded PNG for that call.
+writeFileSync(join(root, 'resources', 'icon-mac.png'), await resize(mac, 512))
 writeFileSync(join(root, 'src', 'renderer', 'src', 'assets', 'roxy.png'), await resize(full, 512))
 
 writeFileSync(join(root, 'build', 'icon.ico'), png2icons.createICO(full, png2icons.BICUBIC, 0, true))
