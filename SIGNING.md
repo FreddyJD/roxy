@@ -106,13 +106,26 @@ Windows job).
 
 **Set them up (one time):**
 
-1. Export the signing identity to a `.p12`. In **Keychain Access** → _login_ →
-   _My Certificates_, right-click **Developer ID Application: Freddy Diaz
-   (MA46PKHWXH)** → **Export…** → save `roxy-cert.p12` → set a password (this
-   becomes `MAC_CSC_KEY_PASSWORD`).
+1. Run the helper from a **normal terminal** (it uses `gh` and prompts for the
+   private values, so nothing lands in your shell history):
 
-2. Push all five secrets with the helper (uses `gh`, prompts for the secret
-   values so nothing lands in your shell history):
+   ```sh
+   bash script/setup-mac-ci-secrets.sh
+   ```
+
+   With no argument it **exports your Developer ID identity straight from the
+   login keychain** — a macOS *“security wants to export a key”* dialog pops up,
+   click **Allow** (enter your Mac login password if asked) — generates a random
+   `.p12` password, and sets `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, and the
+   auto-detected `APPLE_TEAM_ID` for you. You are prompted only for your
+   `APPLE_ID` (email) and `APPLE_APP_SPECIFIC_PASSWORD`.
+
+   > Must be run in your own terminal — the keychain-export dialog and the
+   > password prompts need an interactive session.
+
+   If you'd rather export the `.p12` yourself (Keychain Access → _login_ → _My
+   Certificates_ → right-click **Developer ID Application: Freddy Diaz
+   (MA46PKHWXH)** → **Export…**), pass its path and the script uses that instead:
 
    ```sh
    bash script/setup-mac-ci-secrets.sh ~/Desktop/roxy-cert.p12
@@ -128,7 +141,7 @@ Windows job).
    printf '%s' MA46PKHWXH | gh secret set APPLE_TEAM_ID
    ```
 
-3. Trigger a signed + notarized release by bumping the version:
+2. Trigger a signed + notarized release by bumping the version:
 
    ```sh
    npm version patch    # e.g. 0.0.13 → 0.0.14
