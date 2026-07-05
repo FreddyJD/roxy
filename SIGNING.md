@@ -28,8 +28,8 @@ electron-builder does all of this automatically. You only need the certificate
    key is present and you can sign. (For this account the Team ID is
    `MA46PKHWXH`.)
 
-3. **Notarization credentials.** Copy `.env.example` to `.env` and fill in one
-   of these sets:
+3. **Notarization credentials.** Create a git-ignored `.env` file in the repo
+   root with one of these sets:
 
    - **Apple ID (simplest):** `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`
      (create at https://appleid.apple.com → App-Specific Passwords),

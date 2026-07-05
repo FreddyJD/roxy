@@ -6,7 +6,6 @@ out
 *.log.*
 .env
 .env.*
-!.env.example
 
 # smoke-test build output
 test/.out/
