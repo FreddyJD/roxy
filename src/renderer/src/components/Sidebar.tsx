@@ -115,25 +115,38 @@ export function Sidebar(): JSX.Element {
   // drop indicator and reorder live; the persist happens on drop.
   const [dragId, setDragId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
+  // Which edge of the hovered row we'd drop on. 'after' is what lets an item reach
+  // the very bottom (drop onto the last row's lower half) — a before-only insert
+  // structurally could never place anything past the last row.
+  const [dropAfter, setDropAfter] = useState(false)
 
-  // Reorder `sessions` so `sourceId` lands just before `targetId`, returning the
-  // new id order (or null when it's a no-op / cross-project drag).
-  const reorderWithin = (sessions: Chat[], sourceId: string, targetId: string): string[] | null => {
+  // Reorder `sessions` so `sourceId` lands just before/after `targetId`, returning
+  // the new id order (or null when nothing actually moved / it's a cross-project drag).
+  const reorderWithin = (
+    sessions: Chat[],
+    sourceId: string,
+    targetId: string,
+    place: 'before' | 'after'
+  ): string[] | null => {
     const ids = sessions.map((s) => s.id)
     const from = ids.indexOf(sourceId)
-    const to = ids.indexOf(targetId)
-    if (from === -1 || to === -1 || from === to) return null
+    if (from === -1 || ids.indexOf(targetId) === -1) return null
     ids.splice(from, 1)
-    ids.splice(ids.indexOf(targetId), 0, sourceId)
+    ids.splice(ids.indexOf(targetId) + (place === 'after' ? 1 : 0), 0, sourceId)
+    // Bail if the order is unchanged (e.g. dropped onto your own current slot) so
+    // we don't fire a pointless persist + refresh.
+    if (ids.every((id, i) => id === sessions[i].id)) return null
     return ids
   }
 
   const onSessionDrop = (project: Project, targetId: string): void => {
     const source = dragId
+    const place = dropAfter ? 'after' : 'before'
     setDragId(null)
     setDragOverId(null)
+    setDropAfter(false)
     if (!source || source === targetId) return
-    const order = reorderWithin(project.sessions, source, targetId)
+    const order = reorderWithin(project.sessions, source, targetId, place)
     if (order) void reorderSessions(project.path === '(no folder)' ? null : project.path, order)
   }
 
@@ -479,7 +492,15 @@ export function Sidebar(): JSX.Element {
                                   dragId && dragId !== chat.id && setDragOverId(chat.id)
                                 }
                                 onDragOver={(e) => {
-                                  if (dragId) e.preventDefault() // allow drop
+                                  if (!dragId) return
+                                  e.preventDefault() // allow drop
+                                  if (dragId === chat.id) return
+                                  // Top half → drop before this row; bottom half → after.
+                                  // The 'after' branch is what makes the bottom reachable.
+                                  const r = e.currentTarget.getBoundingClientRect()
+                                  const after = e.clientY - r.top > r.height / 2
+                                  if (dragOverId !== chat.id) setDragOverId(chat.id)
+                                  if (after !== dropAfter) setDropAfter(after)
                                 }}
                                 onDrop={(e) => {
                                   e.preventDefault()
@@ -488,13 +509,18 @@ export function Sidebar(): JSX.Element {
                                 onDragEnd={() => {
                                   setDragId(null)
                                   setDragOverId(null)
+                                  setDropAfter(false)
                                 }}
                                 className={cn(
+                                  'relative',
                                   dragId === chat.id && 'opacity-40',
-                                  // Drop indicator: a line above the hovered row.
+                                  // Drop indicator: a hairline on the edge we'd insert at
+                                  // (top for 'before', bottom for 'after').
                                   dragOverId === chat.id &&
                                     dragId !== chat.id &&
-                                    'rounded-lg ring-1 ring-inset ring-accent/60'
+                                    (dropAfter
+                                      ? 'after:absolute after:inset-x-1 after:-bottom-px after:h-0.5 after:rounded-full after:bg-accent'
+                                      : 'before:absolute before:inset-x-1 before:-top-px before:h-0.5 before:rounded-full before:bg-accent')
                                 )}
                               >
                                 <div

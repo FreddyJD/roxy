@@ -413,12 +413,16 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     // list sorted by sortOrder DESC), so the drag feels instant; then persist
     // and refresh to pick up the authoritative sort keys.
     const inProject = new Set(ids)
-    const bySlot = [...ids]
     set((s) => {
+      // Fill each of this project's slots (top-to-bottom) with the chat named by
+      // the next id in ids. k MUST advance exactly once per slot: evaluating
+      // ids[k++] inside a .find predicate bumped it per element scanned, which
+      // mapped one chat into two slots -> a duplicate row that broke on delete.
+      const byId = new Map(s.chats.map((c) => [c.id, c]))
       let k = 0
       const chats = s.chats.map((c) =>
         c.kind === 'main' && c.workspacePath === workspacePath && inProject.has(c.id)
-          ? (s.chats.find((x) => x.id === bySlot[k++]) ?? c)
+          ? (byId.get(ids[k++]) ?? c)
           : c
       )
       return { chats }
