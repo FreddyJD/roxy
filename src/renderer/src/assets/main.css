@@ -29,6 +29,15 @@
   color-scheme: dark;
 }
 
+/* On macOS, prefer the native system font (San Francisco) over Geist so the app
+   feels at home. Windows/Linux keep Geist. These override the @theme vars, which
+   both `body` and Tailwind's font-sans/font-mono utilities read from. */
+[data-platform='darwin'] {
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
+    system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+}
+
 /* Tailwind v4 borders default to currentColor — pin a sane default. */
 *,
 ::before,
