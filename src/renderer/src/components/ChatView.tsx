@@ -203,9 +203,7 @@ export function ChatView(): JSX.Element {
                 {activeLoop.intervalMinutes}m. First heartbeat soon — or type to intervene.
               </p>
             ) : (
-              <p className="text-sm text-text-muted">
-                Working in <span className="font-medium text-text">{activeChat.title}</span>
-              </p>
+              <p className="text-sm text-text-muted"></p>
             )}
           </div>
         ) : (

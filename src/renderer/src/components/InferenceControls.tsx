@@ -55,12 +55,12 @@ const popoverClass =
 
 // ---- Thinking effort ---------------------------------------------------------
 
-const EFFORTS: { value: ReasoningEffort; label: string; desc: string }[] = [
-  { value: 'low', label: 'Low', desc: 'Faster responses with less reasoning' },
-  { value: 'medium', label: 'Medium', desc: 'Balanced reasoning and speed' },
-  { value: 'high', label: 'High', desc: 'Greater reasoning depth but slower' },
-  { value: 'xhigh', label: 'Xhigh', desc: 'Highest reasoning depth but slowest' },
-  { value: 'max', label: 'Max', desc: 'Absolute maximum capability with no constraints' }
+const EFFORTS: { value: ReasoningEffort; label: string }[] = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Xhigh' },
+  { value: 'max', label: 'Max' }
 ]
 
 export function ThinkingPicker(): JSX.Element | null {
@@ -96,24 +96,16 @@ export function ThinkingPicker(): JSX.Element | null {
                     setOpen(false)
                   }}
                   className={cn(
-                    'flex w-full items-start gap-2 px-3 py-1.5 text-left transition',
+                    'flex w-full items-center gap-2 px-3 py-1.5 text-left transition',
                     selected ? 'bg-accent/15' : 'hover:bg-white/5'
                   )}
                 >
                   <Check
-                    className={cn(
-                      'mt-0.5 h-3.5 w-3.5 shrink-0',
-                      selected ? 'text-accent' : 'opacity-0'
-                    )}
+                    className={cn('h-3.5 w-3.5 shrink-0', selected ? 'text-accent' : 'opacity-0')}
                   />
-                  <span className="min-w-0">
-                    <span className="text-xs font-medium text-text">
-                      {e.label}
-                      {e.value === 'high' && (
-                        <span className="ml-1 text-text-subtle">(default)</span>
-                      )}
-                    </span>
-                    <span className="block text-[11px] text-text-subtle">{e.desc}</span>
+                  <span className="text-xs font-medium text-text">{e.label}</span>
+                  <span className="ml-auto text-[11px] text-text-subtle">
+                    {e.value === 'high' ? 'Default' : ''}
                   </span>
                 </button>
               )
