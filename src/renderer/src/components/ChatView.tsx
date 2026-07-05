@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, ChevronUp, FolderOpen, ListTree, Loader2, Repeat, Settings, X } from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
+import { formatInterval } from '@shared/format'
 import { cn } from '../lib/cn'
 import { MessageBubble } from './MessageBubble'
 import { Composer } from './Composer'
@@ -131,7 +132,7 @@ export function ChatView(): JSX.Element {
             <Repeat className="h-4 w-4 shrink-0 text-text-muted" />
             <span className="shrink-0 text-sm font-medium">{activeChat.title}</span>
             <span className="truncate text-xs text-text-subtle">
-              every {activeLoop.intervalMinutes}m · {activeLoop.enabled ? 'running' : 'paused'}
+              every {formatInterval(activeLoop.intervalMinutes)} · {activeLoop.enabled ? 'running' : 'paused'}
             </span>
           </div>
         ) : (
@@ -200,7 +201,7 @@ export function ChatView(): JSX.Element {
             {activeLoop ? (
               <p className="max-w-xs text-sm text-text-muted">
                 Loop <span className="font-medium text-text">{activeChat.title}</span> runs every{' '}
-                {activeLoop.intervalMinutes}m. First heartbeat soon — or type to intervene.
+                {formatInterval(activeLoop.intervalMinutes)}. First heartbeat soon — or type to intervene.
               </p>
             ) : (
               <p className="text-sm text-text-muted"></p>

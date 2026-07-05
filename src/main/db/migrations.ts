@@ -119,5 +119,14 @@ export const MIGRATIONS: string[] = [
       enabled    INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL
     );
+  `,
+
+  // ---- v12: user-orderable sessions (drag-to-reorder within a project) ----
+  // Seed each existing row with its creation time so the default order is stable
+  // (newest-created first); reorders write ~now()-scale keys to float a chosen
+  // order into place. Higher sort_order = higher in the list.
+  /* sql */ `
+    ALTER TABLE chats ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+    UPDATE chats SET sort_order = created_at;
   `
 ]

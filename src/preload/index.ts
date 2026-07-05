@@ -35,7 +35,8 @@ const roxy: RoxyApi = {
     list: () => ipcRenderer.invoke(CHANNELS.chatsList),
     create: (input) => ipcRenderer.invoke(CHANNELS.chatsCreate, input),
     rename: (id, title) => ipcRenderer.invoke(CHANNELS.chatsRename, id, title),
-    remove: (id) => ipcRenderer.invoke(CHANNELS.chatsRemove, id)
+    remove: (id) => ipcRenderer.invoke(CHANNELS.chatsRemove, id),
+    reorder: (workspacePath, ids) => ipcRenderer.invoke(CHANNELS.chatsReorder, workspacePath, ids)
   },
   messages: {
     list: (chatId) => ipcRenderer.invoke(CHANNELS.messagesList, chatId),

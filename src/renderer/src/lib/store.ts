@@ -77,6 +77,8 @@ interface RoxyStore {
   ensureProjectInstructions: (workspacePath: string) => Promise<void>
   deleteChat: (id: string) => Promise<void>
   renameChat: (id: string, title: string) => Promise<void>
+  /** Persist a project's session order (optimistic). `ids` = full project list, top-to-bottom. */
+  reorderSessions: (workspacePath: string | null, ids: string[]) => Promise<void>
   submit: (content: string, images?: ComposerImage[]) => Promise<void>
   sendMessage: (content: string, chatId?: string, images?: ComposerImage[]) => Promise<void>
   drainQueue: (chatId: string) => Promise<void>
@@ -403,6 +405,25 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
 
   renameChat: async (id, title) => {
     await api.chats.rename(id, title)
+    await get().refreshChats()
+  },
+
+  reorderSessions: async (workspacePath, ids) => {
+    // Optimistic: reorder this project's sessions in place (chats is one flat
+    // list sorted by sortOrder DESC), so the drag feels instant; then persist
+    // and refresh to pick up the authoritative sort keys.
+    const inProject = new Set(ids)
+    const bySlot = [...ids]
+    set((s) => {
+      let k = 0
+      const chats = s.chats.map((c) =>
+        c.kind === 'main' && c.workspacePath === workspacePath && inProject.has(c.id)
+          ? (s.chats.find((x) => x.id === bySlot[k++]) ?? c)
+          : c
+      )
+      return { chats }
+    })
+    await api.chats.reorder(workspacePath, ids)
     await get().refreshChats()
   },
 

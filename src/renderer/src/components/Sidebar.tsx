@@ -23,6 +23,7 @@ import {
   Trash2
 } from 'lucide-react'
 import type { Chat, Loop } from '@shared/types'
+import { formatInterval } from '@shared/format'
 import { useRoxyStore } from '../lib/store'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
@@ -58,6 +59,7 @@ export function Sidebar(): JSX.Element {
   const sendingChats = useRoxyStore((s) => s.sendingChats)
   const loops = useRoxyStore((s) => s.loops)
   const removeLoop = useRoxyStore((s) => s.removeLoop)
+  const reorderSessions = useRoxyStore((s) => s.reorderSessions)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
   const [width, setWidth] = useState<number>(() => {
@@ -107,6 +109,33 @@ export function Sidebar(): JSX.Element {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
   const cancelRef = useRef(false)
+
+  // Drag-to-reorder sessions within a project (native HTML5 DnD, no dep). We track
+  // the dragged session id + the id we're hovering over so the list can show a
+  // drop indicator and reorder live; the persist happens on drop.
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+
+  // Reorder `sessions` so `sourceId` lands just before `targetId`, returning the
+  // new id order (or null when it's a no-op / cross-project drag).
+  const reorderWithin = (sessions: Chat[], sourceId: string, targetId: string): string[] | null => {
+    const ids = sessions.map((s) => s.id)
+    const from = ids.indexOf(sourceId)
+    const to = ids.indexOf(targetId)
+    if (from === -1 || to === -1 || from === to) return null
+    ids.splice(from, 1)
+    ids.splice(ids.indexOf(targetId), 0, sourceId)
+    return ids
+  }
+
+  const onSessionDrop = (project: Project, targetId: string): void => {
+    const source = dragId
+    setDragId(null)
+    setDragOverId(null)
+    if (!source || source === targetId) return
+    const order = reorderWithin(project.sessions, source, targetId)
+    if (order) void reorderSessions(project.path === '(no folder)' ? null : project.path, order)
+  }
 
   const beginRename = (chat: Chat): void => {
     cancelRef.current = false
@@ -415,7 +444,8 @@ export function Sidebar(): JSX.Element {
                                   >
                                     <span className="block truncate">{loop.name}</span>
                                     <span className="block text-[11px] text-text-subtle">
-                                      every {loop.intervalMinutes}m{loop.enabled ? '' : ' · paused'}
+                                      every {formatInterval(loop.intervalMinutes)}
+                                      {loop.enabled ? '' : ' · paused'}
                                     </span>
                                   </button>
                                   <button
@@ -436,10 +466,41 @@ export function Sidebar(): JSX.Element {
                             const subs = subsByParent.get(chat.id) ?? []
                             const subsOpen = expandedSubs.has(chat.id)
                             return (
-                              <li key={chat.id}>
+                              <li
+                                key={chat.id}
+                                // Only the whole row is draggable when not renaming;
+                                // the inline input stays editable during a rename.
+                                draggable={editingId !== chat.id}
+                                onDragStart={(e) => {
+                                  setDragId(chat.id)
+                                  e.dataTransfer.effectAllowed = 'move'
+                                }}
+                                onDragEnter={() =>
+                                  dragId && dragId !== chat.id && setDragOverId(chat.id)
+                                }
+                                onDragOver={(e) => {
+                                  if (dragId) e.preventDefault() // allow drop
+                                }}
+                                onDrop={(e) => {
+                                  e.preventDefault()
+                                  onSessionDrop(project, chat.id)
+                                }}
+                                onDragEnd={() => {
+                                  setDragId(null)
+                                  setDragOverId(null)
+                                }}
+                                className={cn(
+                                  dragId === chat.id && 'opacity-40',
+                                  // Drop indicator: a line above the hovered row.
+                                  dragOverId === chat.id &&
+                                    dragId !== chat.id &&
+                                    'rounded-lg ring-1 ring-inset ring-accent/60'
+                                )}
+                              >
                                 <div
                                   className={cn(
                                     'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition',
+                                    dragId && 'cursor-grabbing',
                                     chat.id === activeChatId
                                       ? 'bg-elevated text-text'
                                       : 'text-text-muted hover:bg-white/5 hover:text-text'

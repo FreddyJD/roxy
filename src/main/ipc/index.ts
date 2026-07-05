@@ -92,6 +92,9 @@ export function registerIpc(): void {
     cancelSessionBackgroundJobs(id)
     return repo.removeChat(id)
   })
+  ipcMain.handle(CHANNELS.chatsReorder, (_e, workspacePath: string | null, ids: string[]) =>
+    repo.reorderSessions(workspacePath, ids)
+  )
 
   // ---- messages ----
   ipcMain.handle(CHANNELS.messagesList, (_e, chatId: string) => repo.listMessages(chatId))

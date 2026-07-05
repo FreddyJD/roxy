@@ -1,5 +1,6 @@
 import { Repeat, X } from 'lucide-react'
 import type { Chat, Loop } from '@shared/types'
+import { formatInterval } from '@shared/format'
 import { cn } from '../lib/cn'
 
 function fmtTime(ts: number | null): string {
@@ -82,7 +83,7 @@ export function LoopDetailsPane({
                 loop.enabled ? 'bg-success' : 'bg-text-subtle'
               )}
             />
-            {loop.enabled ? 'Running' : 'Paused'} · every {loop.intervalMinutes}m
+            {loop.enabled ? 'Running' : 'Paused'} · every {formatInterval(loop.intervalMinutes)}
           </span>
         </Row>
 

@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { useRoxyStore } from '../lib/store'
 import { Button, Input, Textarea } from './ui'
+import { formatInterval } from '@shared/format'
 
-const INTERVALS = [1, 5, 15, 30, 60]
+// Heartbeat presets, in minutes -- minute-grained to an hour, then hours/day.
+const INTERVALS = [1, 5, 15, 30, 60, 180, 360, 720, 1440]
 
 export function HeartbeatDot({ enabled }: { enabled: boolean }): JSX.Element {
   if (!enabled) return <span className="h-2 w-2 shrink-0 rounded-full bg-text-subtle/40" />
@@ -86,7 +88,7 @@ export function NewLoopDialog({
             >
               {INTERVALS.map((m) => (
                 <option key={m} value={m}>
-                  Every {m} minute{m === 1 ? '' : 's'}
+                  Every {formatInterval(m)}
                 </option>
               ))}
             </select>

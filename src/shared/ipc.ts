@@ -16,6 +16,7 @@ export const CHANNELS = {
   chatsCreate: 'chats:create',
   chatsRename: 'chats:rename',
   chatsRemove: 'chats:remove',
+  chatsReorder: 'chats:reorder',
 
   messagesList: 'messages:list',
   messagesAdd: 'messages:add',

@@ -6,6 +6,7 @@ import { TOOLS, getTool, resolveToolIds, TOOL_CATEGORIES } from '../src/shared/t
 import { AGENTS, getAgent, PRIMARY_AGENTS, SUBAGENTS, DEFAULT_AGENT_ID } from '../src/shared/agents'
 import { SEED_PROVIDERS, resolveSeed, isConnectableNow } from '../src/shared/providers'
 import { randomSlug, uniqueSlug } from '../src/shared/slugs'
+import { formatInterval } from '../src/shared/format'
 import {
   selectPromptName,
   buildEnvironment,
@@ -1423,6 +1424,19 @@ async function main(): Promise<void> {
   const fresh = uniqueSlug([seed.toLowerCase()])
   check('uniqueSlug avoids a taken name', fresh.toLowerCase() !== seed.toLowerCase())
   check('uniqueSlug with no taken set still returns a slug', uniqueSlug().split(/\s+/).length >= 3)
+
+  // --- formatInterval (loop heartbeat labels: m → hrs → days) ---
+  check('formatInterval sub-hour stays minutes', formatInterval(5) === '5m')
+  check('formatInterval 59m stays minutes', formatInterval(59) === '59m')
+  check('formatInterval 60m is 1hr', formatInterval(60) === '1hr')
+  check('formatInterval 90m is 1hr 30m', formatInterval(90) === '1hr 30m')
+  check('formatInterval 120m is 2hrs', formatInterval(120) === '2hrs')
+  check('formatInterval 360m is 6hrs', formatInterval(360) === '6hrs')
+  check('formatInterval 1439m is 23hrs 59m', formatInterval(1439) === '23hrs 59m')
+  check('formatInterval 1440m is 1 day', formatInterval(1440) === '1 day')
+  check('formatInterval 2880m is 2 days', formatInterval(2880) === '2 days')
+  check('formatInterval 1500m is 1 day 1hr', formatInterval(1500) === '1 day 1hr')
+  check('formatInterval clamps sub-minute to 1m', formatInterval(0) === '1m')
 
   if (fails.length) {
     console.error(`\nSHARED FAILED \u2014 ${fails.length} failing: ${fails.join(', ')}`)

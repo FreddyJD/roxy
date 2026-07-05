@@ -51,6 +51,7 @@ interface ChatRow {
   context_summary_at: number | null
   description: string | null
   tasks: string | null
+  sort_order: number
   created_at: number
   updated_at: number
 }
@@ -317,6 +318,7 @@ function rowToChat(row: ChatRow): Chat {
     contextSummaryAt: row.context_summary_at,
     description: row.description,
     tasks: parseTasks(row.tasks),
+    sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -324,7 +326,7 @@ function rowToChat(row: ChatRow): Chat {
 
 export function listChats(): Chat[] {
   const rows = getDb()
-    .prepare('SELECT * FROM chats ORDER BY updated_at DESC')
+    .prepare('SELECT * FROM chats ORDER BY sort_order DESC, updated_at DESC')
     .all() as ChatRow[]
   return rows.map(rowToChat)
 }
@@ -347,8 +349,8 @@ export function createChat(input: CreateChatInput = {}): Chat {
   const now = Date.now()
   getDb()
     .prepare(
-      `INSERT INTO chats(id, title, kind, provider_id, model, workspace_path, parent_id, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO chats(id, title, kind, provider_id, model, workspace_path, parent_id, sort_order, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -358,6 +360,7 @@ export function createChat(input: CreateChatInput = {}): Chat {
       input.model ?? null,
       input.workspacePath ?? null,
       input.parentId ?? null,
+      now, // sort_order: seed new sessions at the top of their project
       now,
       now
     )
@@ -448,6 +451,27 @@ export function setChatMetadata(
   const chat = getChat(chatId)
   if (!chat) throw new Error('Chat not found')
   return chat
+}
+
+/**
+ * Reorder a project's main sessions to match `orderedIds` (front = top of the
+ * list). Assigns large strictly-descending sort keys anchored at now() so the
+ * chosen order beats the created_at seed AND a freshly-created session (keyed at
+ * now()) still lands above an old hand-ordered set. Only main sessions sharing
+ * the workspace are touched; a no-op unless every id in that set is provided.
+ */
+export function reorderSessions(workspacePath: string | null, orderedIds: string[]): void {
+  const db = getDb()
+  const rows = db
+    .prepare("SELECT id FROM chats WHERE kind = 'main' AND workspace_path IS ?")
+    .all(workspacePath) as { id: string }[]
+  if (rows.length < 2) return
+  const valid = new Set(rows.map((r) => r.id))
+  const ids = orderedIds.filter((id) => valid.has(id))
+  if (ids.length !== rows.length) return
+  const base = Date.now()
+  const update = db.prepare('UPDATE chats SET sort_order = ? WHERE id = ?')
+  db.transaction(() => ids.forEach((id, i) => update.run(base - i, id)))()
 }
 
 // ---- Messages ----------------------------------------------------------------

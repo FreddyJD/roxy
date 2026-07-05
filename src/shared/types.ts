@@ -107,6 +107,8 @@ export interface Chat {
   description: string | null
   /** Agent-maintained task checklist for this session. */
   tasks: SessionTask[]
+  /** User-defined sort key within its project (higher = higher in the list). */
+  sortOrder: number
   createdAt: number
   updatedAt: number
 }

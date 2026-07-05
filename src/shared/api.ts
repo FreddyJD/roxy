@@ -283,6 +283,8 @@ export interface RoxyApi {
     create(input?: CreateChatInput): Promise<Chat>
     rename(id: string, title: string): Promise<void>
     remove(id: string): Promise<void>
+    /** Reorder a project's sessions; `ids` is the full project session list, top-to-bottom. */
+    reorder(workspacePath: string | null, ids: string[]): Promise<void>
   }
   messages: {
     list(chatId: string): Promise<Message[]>

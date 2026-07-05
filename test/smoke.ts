@@ -138,6 +138,32 @@ async function main(): Promise<void> {
   check('getChatWorkspace', repo.getChatWorkspace(chat.id) === ws)
   repo.renameChat(chat.id, 'renamed')
   check('renameChat', repo.listChats().find((c) => c.id === chat.id)?.title === 'renamed')
+  // ---- session reorder within a project (v12: sort_order) ----
+  const rws = path.join(ws, 'reorder-project')
+  const rs1 = repo.createChat({ title: 'r1', kind: 'main', workspacePath: rws })
+  const rs2 = repo.createChat({ title: 'r2', kind: 'main', workspacePath: rws })
+  const rs3 = repo.createChat({ title: 'r3', kind: 'main', workspacePath: rws })
+  const orderOf = (): string =>
+    repo
+      .listChats()
+      .filter((c) => c.workspacePath === rws)
+      .map((c) => c.title)
+      .join()
+  check(
+    'all three sessions are grouped under the project',
+    orderOf().split(',').sort().join() === 'r1,r2,r3'
+  )
+  // reorderSessions assigns distinct descending keys, so the order is exact.
+  repo.reorderSessions(rws, [rs1.id, rs3.id, rs2.id])
+  check('reorderSessions persists a new order', orderOf() === 'r1,r3,r2')
+  repo.reorderSessions(rws, [rs2.id, rs1.id, rs3.id])
+  check('reorderSessions persists another order', orderOf() === 'r2,r1,r3')
+  // A partial/foreign id set is ignored (guards against clobbering).
+  repo.reorderSessions(rws, [rs1.id])
+  check('reorderSessions ignores an incomplete set', orderOf() === 'r2,r1,r3')
+  repo.removeChat(rs1.id)
+  repo.removeChat(rs2.id)
+  repo.removeChat(rs3.id)
 
   // ---- subagent sessions link to + cascade-delete with their parent (v9) ----
   const sub = repo.createChat({
