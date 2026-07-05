@@ -1,6 +1,6 @@
 {
   "name": "roxy",
-  "version": "0.0.27",
+  "version": "0.0.28",
   "description": "Roxy — an open-source AI coding agent for engineers.",
   "main": "./out/main/index.js",
   "author": "Roxy (https://github.com/FreddyJD/roxy)",

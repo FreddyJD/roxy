@@ -288,15 +288,8 @@ export function Sidebar(): JSX.Element {
 
       <div className="mt-4 flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3">
         <section className="flex min-h-0 flex-1 flex-col">
-          <div className="mb-2 flex items-center justify-between px-1">
-            <span className="text-xs font-medium text-text-muted">Sessions</span>
-            <button
-              onClick={newSession}
-              title="Open a folder as a new project"
-              className="flex h-5 w-5 items-center justify-center rounded text-text-subtle transition hover:bg-white/5 hover:text-text"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
+          <div className="mb-2 flex items-center px-1">
+            <span className="text-xs font-medium text-text-muted">Projects</span>
           </div>
           {projects.length === 0 ? (
             <p className="px-1 text-xs text-text-subtle">
@@ -324,9 +317,6 @@ export function Sidebar(): JSX.Element {
                           {project.name}
                         </span>
                       </button>
-                      <span className="shrink-0 text-[10px] tabular-nums text-text-subtle">
-                        {project.sessions.length}
-                      </span>
                       {project.path !== '(no folder)' && (
                         <button
                           onClick={() => setLoopDialogFor({ path: project.path, name: project.name })}
