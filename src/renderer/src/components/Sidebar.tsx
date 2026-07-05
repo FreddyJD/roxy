@@ -1,11 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent
+} from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ChevronRight,
   FolderOpen,
   Hammer,
   Lightbulb,
-  Loader2,
   MessageSquarePlus,
   MonitorSmartphone,
   PanelLeftClose,
@@ -22,6 +28,7 @@ import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import { HeartbeatDot, NewLoopDialog } from './LoopsSection'
 import { RemoteWorkspaceDialog } from './RemoteWorkspaceDialog'
+import { BrailleSpinner } from './ThinkingIndicator'
 import { UpdateCard } from './UpdateCard'
 import roxy from '../assets/roxy.png'
 
@@ -388,149 +395,149 @@ export function Sidebar(): JSX.Element {
                     </div>
                     {!isCollapsed && (
                       <>
-                      {project.loops.length > 0 && (
-                        <ul className="mb-0.5 flex flex-col gap-0.5 pl-2">
-                          {project.loops.map((loop) => (
-                            <li key={loop.id}>
-                              <div
-                                className={cn(
-                                  'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition',
-                                  loop.chatId === activeChatId
-                                    ? 'bg-elevated text-text'
-                                    : 'text-text-muted hover:bg-white/5 hover:text-text'
-                                )}
-                              >
-                                <HeartbeatDot enabled={loop.enabled} />
-                                <button
-                                  onClick={() => selectChat(loop.chatId)}
-                                  title={loop.name}
-                                  className="min-w-0 flex-1 text-left"
+                        {project.loops.length > 0 && (
+                          <ul className="mb-0.5 flex flex-col gap-0.5 pl-2">
+                            {project.loops.map((loop) => (
+                              <li key={loop.id}>
+                                <div
+                                  className={cn(
+                                    'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition',
+                                    loop.chatId === activeChatId
+                                      ? 'bg-elevated text-text'
+                                      : 'text-text-muted hover:bg-white/5 hover:text-text'
+                                  )}
                                 >
-                                  <span className="block truncate">{loop.name}</span>
-                                  <span className="block text-[11px] text-text-subtle">
-                                    every {loop.intervalMinutes}m{loop.enabled ? '' : ' · paused'}
-                                  </span>
-                                </button>
-                                <button
-                                  onClick={() => removeLoop(loop.id)}
-                                  title="Delete loop"
-                                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover:opacity-100"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      <ul className="mt-0.5 flex flex-col gap-0.5 pl-2">
-                        {project.sessions.map((chat) => {
-                          const sending = !!sendingChats[chat.id]
-                          const subs = subsByParent.get(chat.id) ?? []
-                          const subsOpen = expandedSubs.has(chat.id)
-                          return (
-                            <li key={chat.id}>
-                              <div
-                                className={cn(
-                                  'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition',
-                                  chat.id === activeChatId
-                                    ? 'bg-elevated text-text'
-                                    : 'text-text-muted hover:bg-white/5 hover:text-text'
-                                )}
-                              >
-                                {sending ? (
-                                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
-                                ) : (
-                                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-text-subtle/50" />
-                                )}
-                                {editingId === chat.id ? (
-                                  <input
-                                    autoFocus
-                                    value={draftTitle}
-                                    onChange={(e) => setDraftTitle(e.target.value)}
-                                    onKeyDown={onRenameKeyDown}
-                                    onBlur={commitRename}
-                                    onFocus={(e) => e.currentTarget.select()}
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="min-w-0 flex-1 rounded border border-accent/60 bg-bg px-1.5 py-0.5 text-sm text-text outline-none"
-                                  />
-                                ) : (
+                                  <HeartbeatDot enabled={loop.enabled} />
                                   <button
-                                    onClick={() => selectChat(chat.id)}
-                                    onDoubleClick={() => beginRename(chat)}
-                                    title={chat.title}
-                                    className="min-w-0 flex-1 truncate text-left"
+                                    onClick={() => selectChat(loop.chatId)}
+                                    title={loop.name}
+                                    className="min-w-0 flex-1 text-left"
                                   >
-                                    {chat.title}
+                                    <span className="block truncate">{loop.name}</span>
+                                    <span className="block text-[11px] text-text-subtle">
+                                      every {loop.intervalMinutes}m{loop.enabled ? '' : ' · paused'}
+                                    </span>
                                   </button>
-                                )}
-                                {subs.length > 0 && (
                                   <button
-                                    onClick={() => toggleSubs(chat.id)}
-                                    title={`${subs.length} subagent${subs.length === 1 ? '' : 's'} — tap to ${subsOpen ? 'hide' : 'view'}`}
-                                    className="flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-surface-2 px-1 text-[10px] font-medium tabular-nums text-text-subtle transition hover:text-text"
+                                    onClick={() => removeLoop(loop.id)}
+                                    title="Delete loop"
+                                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover:opacity-100"
                                   >
-                                    {subs.length}
+                                    <Trash2 className="h-3.5 w-3.5" />
                                   </button>
-                                )}
-                                <button
-                                  onClick={() => deleteChat(chat.id)}
-                                  title="Delete session"
-                                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover:opacity-100"
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <ul className="mt-0.5 flex flex-col gap-0.5 pl-2">
+                          {project.sessions.map((chat) => {
+                            const sending = !!sendingChats[chat.id]
+                            const subs = subsByParent.get(chat.id) ?? []
+                            const subsOpen = expandedSubs.has(chat.id)
+                            return (
+                              <li key={chat.id}>
+                                <div
+                                  className={cn(
+                                    'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition',
+                                    chat.id === activeChatId
+                                      ? 'bg-elevated text-text'
+                                      : 'text-text-muted hover:bg-white/5 hover:text-text'
+                                  )}
                                 >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-                              {subsOpen && subs.length > 0 && (
-                                <ul className="mt-0.5 ml-3 flex flex-col gap-0.5 border-l border-border pl-2">
-                                  {subs.map((sub) => (
-                                    <li key={sub.id}>
-                                      <div
-                                        className={cn(
-                                          'group/sub flex items-center gap-2 rounded-lg px-2 py-1 text-xs transition',
-                                          sub.id === activeChatId
-                                            ? 'bg-elevated text-text'
-                                            : 'text-text-muted hover:bg-white/5 hover:text-text'
-                                        )}
-                                      >
-                                        <Hammer className="h-3 w-3 shrink-0 opacity-70" />
-                                        {editingId === sub.id ? (
-                                          <input
-                                            autoFocus
-                                            value={draftTitle}
-                                            onChange={(e) => setDraftTitle(e.target.value)}
-                                            onKeyDown={onRenameKeyDown}
-                                            onBlur={commitRename}
-                                            onFocus={(e) => e.currentTarget.select()}
-                                            onClick={(e) => e.stopPropagation()}
-                                            className="min-w-0 flex-1 rounded border border-accent/60 bg-bg px-1.5 py-0.5 text-xs text-text outline-none"
-                                          />
-                                        ) : (
-                                          <button
-                                            onClick={() => selectChat(sub.id)}
-                                            onDoubleClick={() => beginRename(sub)}
-                                            title={sub.title}
-                                            className="min-w-0 flex-1 truncate text-left"
-                                          >
-                                            {sub.title}
-                                          </button>
-                                        )}
-                                        <button
-                                          onClick={() => deleteChat(sub.id)}
-                                          title="Delete subagent session"
-                                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover/sub:opacity-100"
+                                  {sending ? (
+                                    <BrailleSpinner className="shrink-0 text-sm text-accent" />
+                                  ) : (
+                                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-text-subtle/50" />
+                                  )}
+                                  {editingId === chat.id ? (
+                                    <input
+                                      autoFocus
+                                      value={draftTitle}
+                                      onChange={(e) => setDraftTitle(e.target.value)}
+                                      onKeyDown={onRenameKeyDown}
+                                      onBlur={commitRename}
+                                      onFocus={(e) => e.currentTarget.select()}
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="min-w-0 flex-1 rounded border border-accent/60 bg-bg px-1.5 py-0.5 text-sm text-text outline-none"
+                                    />
+                                  ) : (
+                                    <button
+                                      onClick={() => selectChat(chat.id)}
+                                      onDoubleClick={() => beginRename(chat)}
+                                      title={chat.title}
+                                      className="min-w-0 flex-1 truncate text-left"
+                                    >
+                                      {chat.title}
+                                    </button>
+                                  )}
+                                  {subs.length > 0 && (
+                                    <button
+                                      onClick={() => toggleSubs(chat.id)}
+                                      title={`${subs.length} subagent${subs.length === 1 ? '' : 's'} — tap to ${subsOpen ? 'hide' : 'view'}`}
+                                      className="flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-surface-2 px-1 text-[10px] font-medium tabular-nums text-text-subtle transition hover:text-text"
+                                    >
+                                      {subs.length}
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => deleteChat(chat.id)}
+                                    title="Delete session"
+                                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover:opacity-100"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                                {subsOpen && subs.length > 0 && (
+                                  <ul className="mt-0.5 ml-3 flex flex-col gap-0.5 border-l border-border pl-2">
+                                    {subs.map((sub) => (
+                                      <li key={sub.id}>
+                                        <div
+                                          className={cn(
+                                            'group/sub flex items-center gap-2 rounded-lg px-2 py-1 text-xs transition',
+                                            sub.id === activeChatId
+                                              ? 'bg-elevated text-text'
+                                              : 'text-text-muted hover:bg-white/5 hover:text-text'
+                                          )}
                                         >
-                                          <Trash2 className="h-3 w-3" />
-                                        </button>
-                                      </div>
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                            </li>
-                          )
-                        })}
-                      </ul>
+                                          <Hammer className="h-3 w-3 shrink-0 opacity-70" />
+                                          {editingId === sub.id ? (
+                                            <input
+                                              autoFocus
+                                              value={draftTitle}
+                                              onChange={(e) => setDraftTitle(e.target.value)}
+                                              onKeyDown={onRenameKeyDown}
+                                              onBlur={commitRename}
+                                              onFocus={(e) => e.currentTarget.select()}
+                                              onClick={(e) => e.stopPropagation()}
+                                              className="min-w-0 flex-1 rounded border border-accent/60 bg-bg px-1.5 py-0.5 text-xs text-text outline-none"
+                                            />
+                                          ) : (
+                                            <button
+                                              onClick={() => selectChat(sub.id)}
+                                              onDoubleClick={() => beginRename(sub)}
+                                              title={sub.title}
+                                              className="min-w-0 flex-1 truncate text-left"
+                                            >
+                                              {sub.title}
+                                            </button>
+                                          )}
+                                          <button
+                                            onClick={() => deleteChat(sub.id)}
+                                            title="Delete subagent session"
+                                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover/sub:opacity-100"
+                                          >
+                                            <Trash2 className="h-3 w-3" />
+                                          </button>
+                                        </div>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </li>
+                            )
+                          })}
+                        </ul>
                       </>
                     )}
                   </div>

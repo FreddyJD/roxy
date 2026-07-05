@@ -12,3 +12,6 @@ test/.out/
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+# Roxy agent scratch (browser screenshots, etc.)
+.roxy/
