@@ -127,9 +127,11 @@ export function ToolCall({
   const Icon = TOOL_ICON[tool] ?? Wrench
   const body = output?.trimEnd() ?? ''
 
-  // Auto-open a running command so you can watch its logs stream in live.
+  // Auto-open a running bash command so you can watch its logs stream in live,
+  // then collapse it again once it finishes -- completed calls shouldn't leave a
+  // terminal preview expanded, cluttering the transcript (click to re-expand).
   useEffect(() => {
-    if (tool === 'bash' && state === 'running') setOpen(true)
+    if (tool === 'bash') setOpen(state === 'running')
   }, [tool, state])
 
   // Warm the heavy syntax-highlight chunk as soon as a code card appears, so the
@@ -180,9 +182,7 @@ export function ToolCall({
       ) : open && tool === 'read' && state === 'done' && body && !image ? (
         <div className="max-h-96 overflow-auto border-t border-border bg-surface">
           <Suspense
-            fallback={
-              <div className="px-3 py-2 font-mono text-xs text-text-subtle">Loading…</div>
-            }
+            fallback={<div className="px-3 py-2 font-mono text-xs text-text-subtle">Loading…</div>}
           >
             <FileView name={title || 'file.txt'} contents={body} />
           </Suspense>
