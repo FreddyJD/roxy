@@ -22,6 +22,7 @@ import { selectPromptName, buildEnvironment, assembleSystemPrompt } from '@share
 import { PROMPT_TEXT, AGENT_PROMPT_TEXT } from '@shared/prompt-text'
 import { reconstructTurn, REPLAY_OUTPUT_CAP } from '@shared/tool-history'
 import { isOverflow, pruneToolMessages, KEEP_RECENT_TOKENS } from '@shared/context'
+import { uniqueSlug } from '@shared/slugs'
 import { api } from './api'
 import type { ComposerImage } from './images'
 
@@ -374,11 +375,13 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   },
 
   newSessionInProject: async (workspacePath) => {
-    // A project is its workspace folder; sessions under it are numbered.
-    const count = get().chats.filter(
-      (c) => c.kind === 'main' && c.workspacePath === workspacePath
-    ).length
-    const chat = await api.chats.create({ title: `Session ${count + 1}`, workspacePath })
+    // A project is its workspace folder. New sessions get a fun random three-word
+    // slug (e.g. "Async Roxy Sage") instead of "Session N" — the agent renames it
+    // properly on its first turn. Skip this project's live titles to avoid a dup.
+    const taken = get()
+      .chats.filter((c) => c.kind === 'main' && c.workspacePath === workspacePath)
+      .map((c) => c.title)
+    const chat = await api.chats.create({ title: uniqueSlug(taken), workspacePath })
     await get().refreshChats()
     await get().selectChat(chat.id)
   },
@@ -579,9 +582,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
 
     // Real model: a connected provider with a usable credential streams the reply.
     const provider =
-      get().providers.find((p) => p.id === settings?.activeProviderId) ??
-      get().providers[0] ??
-      null
+      get().providers.find((p) => p.id === settings?.activeProviderId) ?? get().providers[0] ?? null
     if (provider && (provider.hasCredential || provider.auth === 'none')) {
       const model =
         settings?.activeModel ||
@@ -719,7 +720,10 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       deltaHandlers.delete(requestId)
       chatRequests.delete(chatId)
       if (!result.ok && !stopped()) {
-        parts = [...parts, { type: 'text', text: `_\u26a0 ${result.error ?? 'Model request failed.'}_` }]
+        parts = [
+          ...parts,
+          { type: 'text', text: `_\u26a0 ${result.error ?? 'Model request failed.'}_` }
+        ]
         setStreaming(parts)
       }
       await finishTurn()
@@ -841,7 +845,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
  * size, so it omits main-only facts (git status, platform) that add just a line.
  * Passing `agentId` folds in the agent's own prompt (e.g. Plan mode's reminder).
  */
-export function buildSystemPrompt(chat: Chat | undefined, modelId?: string, agentId?: string): string {
+export function buildSystemPrompt(
+  chat: Chat | undefined,
+  modelId?: string,
+  agentId?: string
+): string {
   const base = PROMPT_TEXT[selectPromptName(modelId)] ?? PROMPT_TEXT.default
   const environment = buildEnvironment({
     cwd: chat?.workspacePath || undefined,
@@ -855,7 +863,7 @@ export function buildSystemPrompt(chat: Chat | undefined, modelId?: string, agen
   // empty until loaded (the meter fills in once the IPC resolves).
   const workspace = chat?.workspacePath
   const instructions = workspace
-    ? useRoxyStore.getState().projectInstructions[workspace] ?? []
+    ? (useRoxyStore.getState().projectInstructions[workspace] ?? [])
     : []
   const extra = [...instructions, ...(agentPrompt ? [agentPrompt] : [])]
   return assembleSystemPrompt({
@@ -925,7 +933,11 @@ async function buildChatMessages(
 }
 
 /** Rough estimate of tokens currently in a chat's live window (post-compaction). */
-async function estimateUsedTokens(chatId: string, modelId?: string, agentId?: string): Promise<number> {
+async function estimateUsedTokens(
+  chatId: string,
+  modelId?: string,
+  agentId?: string
+): Promise<number> {
   const chat = useRoxyStore.getState().chats.find((c) => c.id === chatId)
   const since = chat?.contextSummaryAt ?? 0
   const msgs = (await api.messages.list(chatId)).filter((m) => m.createdAt > since)
@@ -947,8 +959,7 @@ function buildPlaceholderReply(
   providers: ConnectedProvider[],
   settings: AppSettings | null
 ): string {
-  const active =
-    providers.find((p) => p.id === settings?.activeProviderId) ?? providers[0] ?? null
+  const active = providers.find((p) => p.id === settings?.activeProviderId) ?? providers[0] ?? null
   const providerName = active?.name ?? 'no provider yet'
   const model = settings?.activeModel
   const wire = active?.wire ?? 'openai-chat'
@@ -1021,7 +1032,11 @@ function parseToolCommand(raw: string): {
     case 'read':
     case 'html':
     case 'dom':
-      return { tool: 'browser_read', input: arg ? { selector: arg } : {}, title: arg || 'page HTML' }
+      return {
+        tool: 'browser_read',
+        input: arg ? { selector: arg } : {},
+        title: arg || 'page HTML'
+      }
     case 'console':
     case 'errors':
       return { tool: 'browser_console', input: {}, title: 'console' }
