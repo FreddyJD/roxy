@@ -1,6 +1,14 @@
+<p align="center">
+  <a href="https://roxy.gg">
+    <img src="roxy.png" alt="Roxy" width="640" />
+  </a>
+</p>
+
 # Roxy
 
 > An open-source AI coding agent for engineers — built as a cross-platform desktop app.
+
+**Download:** [https://roxy.gg](https://roxy.gg)
 
 Roxy is an [Electron](https://www.electronjs.org/) application written in **TypeScript** with a
 **React** renderer. It ships a full agent **harness** in the main process: a provider-agnostic
