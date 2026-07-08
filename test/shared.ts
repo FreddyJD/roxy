@@ -18,6 +18,7 @@ import {
   reconstructAssistant,
   reconstructTurn,
   flattenToolHistory,
+  sanitizeToolCallId,
   REPLAY_OUTPUT_CAP
 } from '../src/shared/tool-history'
 import {
@@ -370,6 +371,58 @@ check(
     const flat = flattenToolHistory(plain)
     return flat.length === 2 && flat[0].content === 'hi' && flat[1].content === 'hello'
   })()
+)
+
+// ---- sanitizeToolCallId: the Copilot Claude tool_use.id pattern (letters/digits/hyphens) ----
+// Guards the wire error: tool_use.id must match the letters/digits/hyphens-only pattern.
+const TOOL_ID_OK = /^[a-zA-Z0-9-]+$/
+
+// Underscores (OpenAI-style call_... / Anthropic toolu_...) are rejected by Copilot's proxy.
+check(
+  'sanitizeToolCallId: underscores become hyphens',
+  sanitizeToolCallId('call_abc123') === 'call-abc123' &&
+    sanitizeToolCallId('toolu_01ABC') === 'toolu-01ABC'
+)
+
+// MCP ids carry dots + colons (e.g. server.tool:1) so every invalid char is replaced.
+check(
+  'sanitizeToolCallId: dots and colons become hyphens',
+  (() => {
+    const out = sanitizeToolCallId('server.tool:1')
+    return out === 'server-tool-1' && TOOL_ID_OK.test(out)
+  })()
+)
+
+// A valid id is returned byte-for-byte (a no-op on providers that already accept it).
+check(
+  'sanitizeToolCallId: an already-valid id passes through unchanged',
+  sanitizeToolCallId('abc-123-DEF') === 'abc-123-DEF'
+)
+
+// Empty / nullish ids get a stable placeholder so the pattern quantifier never fails on empty.
+check(
+  'sanitizeToolCallId: empty/undefined id gets a valid placeholder',
+  (() => {
+    const a = sanitizeToolCallId('')
+    const b = sanitizeToolCallId(undefined)
+    const c = sanitizeToolCallId(null)
+    return a === 'tool-call' && b === 'tool-call' && c === 'tool-call' && TOOL_ID_OK.test(a)
+  })()
+)
+
+// Deterministic: the SAME raw id always maps to the SAME sanitized id, so an
+// assistant tool_calls[].id and its paired tool_call_id stay matched on replay.
+check(
+  'sanitizeToolCallId: deterministic (call id and result id stay paired)',
+  sanitizeToolCallId('functions.exec:0') === sanitizeToolCallId('functions.exec:0')
+)
+
+// Whatever comes out always satisfies the strict pattern (fuzz over gnarly inputs).
+check(
+  'sanitizeToolCallId: output always matches the strict tool_use.id pattern',
+  ['call_1', 'a.b:c', ' functions.exec:0', 'toolu_x|y', '???', '', 'OK-9'].every((raw) =>
+    TOOL_ID_OK.test(sanitizeToolCallId(raw))
+  )
 )
 
 // ---- web helpers (Phase 6: webfetch + websearch) ----

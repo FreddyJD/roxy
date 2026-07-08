@@ -19,7 +19,7 @@ import {
   assembleSystemPrompt,
   GIT_COMMIT_TRAILER_PROMPT
 } from '../../shared/prompt'
-import { flattenToolHistory } from '../../shared/tool-history'
+import { flattenToolHistory, sanitizeToolCallId } from '../../shared/tool-history'
 import { pruneToolMessages, KEEP_RECENT_TOKENS } from '../../shared/context'
 import {
   MAX_PARALLEL_SUBAGENTS,
@@ -814,6 +814,30 @@ function toOpenAiMessage(m: ChatMessage): OpenAiMessage {
   return { role: m.role, content: openAiContent(m) }
 }
 
+/**
+ * Run every tool-call id in a conversation through `sanitizeToolCallId` before it
+ * leaves the process, keeping an assistant `tool_calls[].id` and its paired
+ * `tool_call_id` in lockstep (same input maps to the same output). This is what
+ * stops GitHub Copilot's Claude/Opus proxy from 400ing a FOLLOW-UP turn with
+ * "tool_use.id: String should match pattern ..." when the model's own ids (or our
+ * fallback / an MCP id) carry underscores, dots, or colons. Returns a new array;
+ * messages without tool ids pass through untouched.
+ */
+function sanitizeMessageToolIds(messages: OpenAiMessage[]): OpenAiMessage[] {
+  return messages.map((m) => {
+    if (m.role === 'tool' && m.tool_call_id) {
+      return { ...m, tool_call_id: sanitizeToolCallId(m.tool_call_id) }
+    }
+    if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length) {
+      return {
+        ...m,
+        tool_calls: m.tool_calls.map((tc) => ({ ...tc, id: sanitizeToolCallId(tc.id) }))
+      }
+    }
+    return m
+  })
+}
+
 /** Run one user turn: the tool-using agent loop (primary "build" agent) or a plain answer. */
 export async function runAgentTurn(opts: RunTurnOptions): Promise<void> {
   const { providerId, model, messages, cwd, chatId, agentId, signal, emit, reasoning, reasoningEffort, contextLimit } =
@@ -1391,6 +1415,15 @@ async function streamOnce(
       ? undefined
       : repo.listConnectedProviders().find((p) => p.id === providerId)
   const wire = providerId === 'github-copilot' ? 'openai-chat' : provider?.wire
+  // Sanitize every tool-call id before it leaves the process. GitHub Copilot
+  // proxies Claude/Opus and validates tool_use.id against a letters/digits/hyphens
+  // pattern (no underscores, dots, or colons), so replaying a prior turn's raw ids
+  // -- the model's own call ids, an MCP "server.tool:1", or our own fallback --
+  // 400s the FOLLOW-UP with "tool_use.id: String should match pattern ...". The
+  // transform is deterministic, so an assistant tool_calls[].id and its paired
+  // tool_call_id map to the same value and stay matched; valid ids pass through
+  // unchanged. Covers both transports: the SSE payload below and the AI SDK path.
+  messages = sanitizeMessageToolIds(messages)
   if (usesAiSdk(wire)) {
     return streamViaAiSdk({
       wire,
@@ -1439,7 +1472,9 @@ async function streamOnce(
   const finish = (): { text: string; toolCalls: ToolCallAccum[] } => {
     const toolCalls = calls.filter(Boolean)
     toolCalls.forEach((c, i) => {
-      if (!c.id) c.id = `call_${i}`
+      // Hyphen, not underscore: the fallback id must itself satisfy the strict
+      // tool_use.id pattern (see sanitizeToolCallId) so it survives replay as-is.
+      if (!c.id) c.id = `call-${i}`
     })
     return { text, toolCalls: toolCalls.filter((c) => c.name) }
   }

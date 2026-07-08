@@ -17,6 +17,32 @@ import { previewText } from './context'
 
 /** Cap a replayed tool result to what the live loop sent (agent.ts runLoop bounds big outputs). */
 export const REPLAY_OUTPUT_CAP = 8000
+
+/** Characters NOT allowed in a tool-call id by the strictest provider (Copilot's Claude proxy). */
+const TOOL_ID_DISALLOWED = /[^a-zA-Z0-9-]/g
+
+/**
+ * Coerce a tool-call id to the strictest cross-provider pattern (letters, digits,
+ * and hyphens only).
+ *
+ * GitHub Copilot proxies Claude/Opus and validates a `tool_use.id` against that
+ * set -- no underscores, dots, or colons (stricter even than Anthropic's own
+ * pattern, which also allows underscores). So replaying a prior turn's raw ids
+ * (`call_...`, `toolu_...`, or an MCP id like `server.tool:1`) 400s on the NEXT
+ * message with "tool_use.id: String should match pattern ...".
+ *
+ * The transform is deterministic (every disallowed char becomes a hyphen), so an
+ * assistant `tool_calls[].id` and its paired `tool_call_id`/`tool_use_id` always
+ * map to the SAME value and stay matched. The sanitized form is a subset valid
+ * for every provider, so it is safe on all wires (also fixes cross-provider
+ * replay after a mid-session model switch). Empty/blank ids get a stable
+ * placeholder so the trailing quantifier never fails on an empty string.
+ */
+export function sanitizeToolCallId(id: string | undefined | null): string {
+  const cleaned = (id ?? '').replace(TOOL_ID_DISALLOWED, '-')
+  return cleaned.length ? cleaned : 'tool-call'
+}
+
 /** Shown between the head and tail of a replayed result that was too big to keep whole. */
 const REPLAY_MARKER = '…[tool output truncated to fit context — full result was shown live]…'
 
