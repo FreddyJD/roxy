@@ -37,6 +37,61 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4)
 }
 
+/**
+ * Flat token cost charged per image, matching the renderer's window estimate
+ * (store.ts). Vision models bill an image as a bounded number of visual tokens
+ * (~1-2k), NOT the length of its base64 data URL. Sizing an image by
+ * `JSON.stringify`-ing its content would count the raw base64 (~1.37x the file
+ * size, i.e. 100k+ "tokens" for a normal screenshot), which made the trimmer
+ * treat one pasted image as an overflow and drop the whole user turn — leaving a
+ * system-only request that 400s ("at least one message is required"). Keep this
+ * in lockstep with the renderer's per-image constant so both sides agree a turn
+ * fits.
+ */
+export const IMAGE_TOKEN_COST = 800
+
+/**
+ * Count how many image parts an OpenAI-shaped content value carries, WITHOUT
+ * charging for their base64 bytes. A plain string has none; an array counts its
+ * `image_url` parts (the shape `openAiContent` in llm.ts produces).
+ */
+export function countContentImages(content: unknown): number {
+  if (!Array.isArray(content)) return 0
+  let n = 0
+  for (const p of content) {
+    if (p && typeof p === 'object' && (p as { type?: unknown }).type === 'image_url') n++
+  }
+  return n
+}
+
+/**
+ * Token estimate for one OpenAI-shaped message that is image-aware: text +
+ * tool-call args counted by length (~4 chars/token), each image charged a flat
+ * {@link IMAGE_TOKEN_COST} rather than its base64 length. This is the sizing the
+ * harness trimmer and the renderer window cut must share so a turn that carries a
+ * pasted image is never mis-sized into oblivion.
+ */
+export function messageTokens(m: {
+  content?: unknown
+  tool_calls?: unknown
+  toolCalls?: unknown
+}): number {
+  const images = countContentImages(m.content)
+  // Text: a string is itself; a part-array is sized by its TEXT only (images are
+  // charged flat above, so drop them before stringifying to avoid the base64 blow-up).
+  let textLen: number
+  if (typeof m.content === 'string') textLen = m.content.length
+  else if (Array.isArray(m.content)) {
+    textLen = m.content.reduce((n, p) => {
+      const t = p && typeof p === 'object' ? (p as { type?: unknown; text?: unknown }) : {}
+      return n + (t.type === 'text' && typeof t.text === 'string' ? t.text.length : 0)
+    }, 0)
+  } else textLen = 0
+  const calls = m.tool_calls ?? m.toolCalls
+  const callsLen = calls ? JSON.stringify(calls).length : 0
+  return Math.ceil((textLen + callsLen) / 4) + images * IMAGE_TOKEN_COST
+}
+
 /** Count lines cheaply (newlines + 1) without allocating a split array. */
 export function countLines(text: string): number {
   if (!text) return 0
@@ -148,12 +203,10 @@ export function pruneToolMessages<T extends PrunableMessage>(messages: T[], opts
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     const isText = typeof m.content === 'string'
-    // Estimate every message (multimodal/part-array content is JSON-sized, not 0)
-    // so the recent-token window doesn't over-reach past image/tool-array turns.
-    const sized = isText ? (m.content as string) : m.content == null ? '' : JSON.stringify(m.content)
-    const calls = (m as { tool_calls?: unknown; toolCalls?: unknown }).tool_calls ??
-      (m as { tool_calls?: unknown; toolCalls?: unknown }).toolCalls
-    const tokens = estimateTokens(sized) + (calls ? estimateTokens(JSON.stringify(calls)) : 0)
+    // Image-aware sizing: charge each image a flat cost instead of JSON-stringifying
+    // its base64 (see messageTokens), so a pasted image doesn't blow up the recent-
+    // token window and shove real turns out of the protected zone.
+    const tokens = messageTokens(m)
     const withinRecent = budget <= keepRecentTokens
     budget += tokens
     if (withinRecent) continue // protected recent window — leave intact

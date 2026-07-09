@@ -47,6 +47,9 @@ import {
   needsTruncation,
   previewText,
   pruneToolMessages,
+  messageTokens,
+  countContentImages,
+  IMAGE_TOKEN_COST,
   COMPACTION_BUFFER,
   KEEP_RECENT_TOKENS,
   TOOL_OUTPUT_MAX_CHARS
@@ -654,6 +657,56 @@ check(
   (() => {
     const small = [{ role: 'tool', tool_call_id: 'z', content: 'tiny' }]
     return pruneToolMessages(small)[0].content === 'tiny'
+  })()
+)
+
+// ---- messageTokens / images: an image is charged flat, NOT by its base64 length ----
+// The empty-messages 400 on Copilot+image came from sizing an image by
+// JSON.stringify(content) (the whole base64 data URL), so one screenshot read as
+// 100k+ tokens and the trimmer dropped the user turn. These lock in flat sizing.
+const fakeDataUrl = 'data:image/png;base64,' + 'A'.repeat(200_000)
+const imageContent = [
+  { type: 'text', text: 'look at this' },
+  { type: 'image_url', image_url: { url: fakeDataUrl } }
+]
+
+check(
+  'countContentImages: counts image_url parts, ignores text/strings',
+  countContentImages(imageContent) === 1 &&
+    countContentImages('plain string') === 0 &&
+    countContentImages([{ type: 'text', text: 'hi' }]) === 0
+)
+
+check(
+  'messageTokens: a plain-text message is ~chars/4',
+  messageTokens({ content: 'x'.repeat(400) }) === 100
+)
+
+check(
+  'messageTokens: an image is charged the flat cost, not its base64 length',
+  (() => {
+    const tokens = messageTokens({ content: imageContent })
+    // 'look at this' = 12 chars -> 3 tokens, + one image flat. If the base64 were
+    // counted it would be ~50k tokens, so assert it stays tiny.
+    return tokens === Math.ceil(12 / 4) + IMAGE_TOKEN_COST && tokens < 1000
+  })()
+)
+
+check(
+  'messageTokens: a big pasted image never looks like an overflow',
+  messageTokens({ content: imageContent }) < 5_000
+)
+
+check(
+  'messageTokens: includes tool_calls args in the estimate',
+  (() => {
+    const withCalls = {
+      content: null,
+      tool_calls: [
+        { id: 'a', type: 'function', function: { name: 'read', arguments: '{"path":"x"}' } }
+      ]
+    }
+    return messageTokens(withCalls) > 0
   })()
 )
 

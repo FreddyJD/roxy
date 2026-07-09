@@ -20,7 +20,7 @@ import {
   GIT_COMMIT_TRAILER_PROMPT
 } from '../../shared/prompt'
 import { flattenToolHistory, sanitizeToolCallId } from '../../shared/tool-history'
-import { pruneToolMessages, KEEP_RECENT_TOKENS } from '../../shared/context'
+import { pruneToolMessages, KEEP_RECENT_TOKENS, messageTokens } from '../../shared/context'
 import {
   MAX_PARALLEL_SUBAGENTS,
   mapWithConcurrency,
@@ -1515,11 +1515,9 @@ async function streamOnce(
   return finish()
 }
 
-/** Rough token estimate for a message (~4 chars/token, incl. tool-call args). */
+/** Rough token estimate for a message (~4 chars/token; images charged flat, not by base64). */
 function msgTokens(m: OpenAiMessage): number {
-  const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')
-  const calls = m.tool_calls ? JSON.stringify(m.tool_calls) : ''
-  return Math.ceil((c.length + calls.length) / 4)
+  return messageTokens(m)
 }
 
 /**
@@ -1557,6 +1555,15 @@ function trimConvo(convo: OpenAiMessage[], budget = 200_000): OpenAiMessage[] {
   // guarantees any kept assistant tool_calls still have their following results,
   // so this only ever removes stale boundary turns.
   while (kept.length && kept[0].role !== 'user') kept.shift()
+  // Never hand a provider a system-only request: if the leading-edge strip emptied
+  // the window (e.g. the recent turns were an assistant tool_call + its result whose
+  // user turn got dropped as oversized), fall back to the last real user turn from
+  // the full history. Copilot's Anthropic proxy moves `system` out of `messages`, so
+  // a system-only convo becomes messages:[] -> 400 "at least one message required".
+  if (kept.length === 0) {
+    const lastUser = [...rest].reverse().find((m) => m.role === 'user')
+    if (lastUser) kept.push(lastUser)
+  }
   return [...sys, ...kept]
 }
 
