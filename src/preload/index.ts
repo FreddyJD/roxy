@@ -87,6 +87,10 @@ const roxy: RoxyApi = {
   dialog: {
     openWorkspace: () => ipcRenderer.invoke(CHANNELS.dialogOpenWorkspace)
   },
+  config: {
+    export: () => ipcRenderer.invoke(CHANNELS.configExport),
+    import: () => ipcRenderer.invoke(CHANNELS.configImport)
+  },
   loops: {
     list: () => ipcRenderer.invoke(CHANNELS.loopsList),
     create: (input) => ipcRenderer.invoke(CHANNELS.loopsCreate, input),

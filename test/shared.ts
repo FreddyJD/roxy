@@ -106,6 +106,15 @@ import {
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CHANNELS } from '../src/shared/ipc'
+import {
+  buildBundle,
+  serializeBundle,
+  parseBundle,
+  summarizeBundle,
+  isSafeSkillFilePath,
+  BUNDLE_KIND,
+  BUNDLE_VERSION
+} from '../src/shared/portable'
 
 let pass = 0
 const fails: string[] = []
@@ -1582,6 +1591,104 @@ async function main(): Promise<void> {
   check('formatInterval 1500m is 1 day 1hr', formatInterval(1500) === '1 day 1hr')
   check('formatInterval clamps sub-minute to 1m', formatInterval(0) === '1m')
 
+
+  // ---- portable config bundle (export/import global skills + MCP) ----
+  const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
+  const goodBundle = buildBundle({
+    now: 1720000000000,
+    app: '9.9.9',
+    skills: [
+      {
+        name: 'demokit',
+        files: [
+          { path: 'SKILL.md', dataBase64: b64('---\nname: demokit\n---\nHi') },
+          { path: 'scripts/run.sh', dataBase64: b64('echo hi') }
+        ]
+      }
+    ],
+    mcpServers: [
+      { id: 'filesystem', config: { type: 'local', command: ['npx', 'x'] }, enabled: true },
+      { id: 'remote1', config: { type: 'remote', url: 'https://e.com/mcp' }, enabled: false }
+    ]
+  })
+  check(
+    'portable: buildBundle stamps kind + version',
+    goodBundle.kind === BUNDLE_KIND && goodBundle.version === BUNDLE_VERSION
+  )
+  check('portable: buildBundle keeps the injected clock', goodBundle.exportedAt === 1720000000000)
+  check(
+    'portable: buildBundle carries skills + servers',
+    goodBundle.skills.length === 1 && goodBundle.mcpServers.length === 2
+  )
+  check('portable: summarizeBundle reads naturally', summarizeBundle(goodBundle) === '1 skill, 2 MCP servers')
+
+  const roundTrip = parseBundle(serializeBundle(goodBundle))
+  check('portable: serialize -> parse round-trips', roundTrip.ok === true)
+  if (roundTrip.ok) {
+    check('portable: round-trip preserves the skill file', roundTrip.bundle.skills[0].files.length === 2)
+    check(
+      'portable: round-trip preserves a disabled server',
+      roundTrip.bundle.mcpServers.find((s) => s.id === 'remote1')?.enabled === false
+    )
+  }
+
+  // Rejections
+  check('portable: parse rejects non-JSON', parseBundle('not json').ok === false)
+  check('portable: parse rejects the wrong kind', parseBundle('{"kind":"nope","version":1}').ok === false)
+  check(
+    'portable: parse rejects a future version',
+    parseBundle(JSON.stringify({ kind: BUNDLE_KIND, version: 999, skills: [], mcpServers: [] })).ok === false
+  )
+  check(
+    'portable: parse rejects an empty bundle',
+    parseBundle(JSON.stringify({ kind: BUNDLE_KIND, version: 1, skills: [], mcpServers: [] })).ok === false
+  )
+
+  // A skill with no SKILL.md is dropped; unsafe companion paths are dropped.
+  const dirty = parseBundle(
+    JSON.stringify({
+      kind: BUNDLE_KIND,
+      version: 1,
+      skills: [
+        { name: 'noskillmd', files: [{ path: 'notes.txt', dataBase64: b64('x') }] },
+        {
+          name: 'ok',
+          files: [
+            { path: 'SKILL.md', dataBase64: b64('hi') },
+            { path: '../escape.sh', dataBase64: b64('bad') },
+            { path: '/abs.sh', dataBase64: b64('bad') }
+          ]
+        }
+      ],
+      mcpServers: [
+        { id: '', config: { type: 'remote', url: 'https://e.com' } },
+        { id: 'bad', config: { nonsense: true } },
+        { id: 'good', config: { url: 'https://ok.com/mcp' } }
+      ]
+    })
+  )
+  check('portable: parse drops a skill missing SKILL.md', dirty.ok === true && dirty.bundle.skills.length === 1)
+  check(
+    'portable: parse strips unsafe companion paths (keeps only SKILL.md)',
+    dirty.ok === true &&
+      dirty.bundle.skills[0].files.length === 1 &&
+      dirty.bundle.skills[0].files[0].path === 'SKILL.md'
+  )
+  check(
+    'portable: parse keeps only the valid MCP server',
+    dirty.ok === true && dirty.bundle.mcpServers.length === 1 && dirty.bundle.mcpServers[0].id === 'good'
+  )
+  check(
+    'portable: parse infers MCP transport from url',
+    dirty.ok === true && dirty.bundle.mcpServers[0].config.type === 'remote'
+  )
+
+  // isSafeSkillFilePath guards
+  check('portable: safe path accepts a nested companion', isSafeSkillFilePath('scripts/run.sh'))
+  check('portable: safe path rejects ..', !isSafeSkillFilePath('../x'))
+  check('portable: safe path rejects absolute', !isSafeSkillFilePath('/etc/passwd'))
+  check('portable: safe path rejects a drive letter', !isSafeSkillFilePath('C:/x'))
+  check('portable: safe path rejects backslashes', !isSafeSkillFilePath('a\\b'))
   if (fails.length) {
     console.error(`\nSHARED FAILED \u2014 ${fails.length} failing: ${fails.join(', ')}`)
     process.exit(1)

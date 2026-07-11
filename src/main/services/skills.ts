@@ -35,6 +35,7 @@ import {
   type SkillInfo,
   type SkillSource
 } from '../../shared/skills'
+import { isSafeSkillFilePath, type PortableSkill, type PortableSkillFile } from '../../shared/portable'
 
 /** Relative skill-root directories searched under each workspace ancestor. */
 const WORKSPACE_SKILL_DIRS = ['.roxy/skills', '.claude/skills', '.agents/skills']
@@ -397,6 +398,123 @@ async function sampleSkillFiles(directory: string, skillFile: string): Promise<s
     if (out.length >= SKILL_FILE_SAMPLE_LIMIT) break
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// Portable export / import (back up a machine's global skills to another)
+// ---------------------------------------------------------------------------
+
+const EXPORT_MAX_FILE_BYTES = 1_000_000 // 1 MB per file
+const EXPORT_MAX_TOTAL_BYTES = 16_000_000 // 16 MB across all skills
+
+/** Read a file, returning null if it's missing or exceeds the per-file cap. */
+async function readCapped(abs: string): Promise<Buffer | null> {
+  try {
+    const stat = await fs.stat(abs)
+    if (!stat.isFile() || stat.size > EXPORT_MAX_FILE_BYTES) return null
+    return await fs.readFile(abs)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Collect every GLOBAL skill as a portable bundle entry — the skill's folder
+ * files (SKILL.md + companions), base64-encoded so binaries survive the trip.
+ * A bare `<name>.md` skill is emitted as a one-file `{ SKILL.md }` folder so it
+ * re-imports in canonical form. Only the user's global roots are exported (the
+ * Settings/Skills UI is global-scoped); workspace skills live with their repo.
+ * Bounded by per-file/total caps so a huge tree can't blow up the bundle. Never
+ * throws — an unreadable skill is skipped.
+ */
+export async function exportGlobalSkills(): Promise<PortableSkill[]> {
+  if (skillsDisabled()) return []
+  const out: PortableSkill[] = []
+  const seen = new Set<string>()
+  let totalBytes = 0
+  for (const root of globalSkillDirs()) {
+    for (const skill of await loadRoot(root, 'global')) {
+      const name = sanitizeSkillName(skill.name)
+      if (!name || seen.has(name.toLowerCase())) continue
+
+      const isFolder = path.basename(skill.location).toLowerCase() === 'skill.md'
+      const files: PortableSkillFile[] = []
+      if (isFolder) {
+        const dir = path.dirname(skill.location)
+        const rels = ['SKILL.md', ...(await sampleSkillFiles(dir, skill.location))]
+        for (const rel of rels) {
+          if (!isSafeSkillFilePath(rel)) continue
+          const bytes = await readCapped(path.join(dir, rel))
+          if (!bytes) continue
+          if (totalBytes + bytes.length > EXPORT_MAX_TOTAL_BYTES) break
+          totalBytes += bytes.length
+          files.push({ path: rel, dataBase64: bytes.toString('base64') })
+        }
+      } else {
+        const bytes = await readCapped(skill.location)
+        if (bytes && totalBytes + bytes.length <= EXPORT_MAX_TOTAL_BYTES) {
+          totalBytes += bytes.length
+          files.push({ path: 'SKILL.md', dataBase64: bytes.toString('base64') })
+        }
+      }
+
+      if (!files.some((f) => f.path.toLowerCase() === 'skill.md')) continue
+      seen.add(name.toLowerCase())
+      out.push({ name, files })
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** One skill written during an import. */
+export interface ImportedSkillRef {
+  name: string
+  location: string
+  replaced: boolean
+}
+
+/**
+ * Write portable skills from an imported bundle into the user's GLOBAL skills
+ * root (`~/.roxy/skills/<name>/SKILL.md` + companions). Each skill's folder is
+ * replaced wholesale (a clean install/update, matching remote install). Refuses
+ * any path that escapes the skill folder. Busts the discovery cache. Never
+ * throws — a bad skill is recorded as skipped.
+ */
+export async function importGlobalSkills(
+  skills: PortableSkill[]
+): Promise<{ installed: ImportedSkillRef[]; skipped: { name: string; reason: string }[] }> {
+  const installed: ImportedSkillRef[] = []
+  const skipped: { name: string; reason: string }[] = []
+  if (skillsDisabled()) {
+    return { installed, skipped: skills.map((s) => ({ name: s.name, reason: 'skills disabled' })) }
+  }
+
+  const root = primarySkillRoot('global', '')
+  for (const skill of skills) {
+    const name = sanitizeSkillName(skill.name)
+    if (!name) {
+      skipped.push({ name: skill.name, reason: 'invalid name' })
+      continue
+    }
+    if (!skill.files.some((f) => f.path.toLowerCase() === 'skill.md')) {
+      skipped.push({ name, reason: 'no SKILL.md' })
+      continue
+    }
+    const targetDir = path.join(root, name)
+    const replaced = await isDir(targetDir)
+    try {
+      await fs.rm(targetDir, { recursive: true, force: true }) // fresh install / clean update
+      for (const f of skill.files) {
+        if (!isSafeSkillFilePath(f.path)) continue
+        await writeUnder(targetDir, f.path, Buffer.from(f.dataBase64, 'base64'))
+      }
+      installed.push({ name, location: path.join(targetDir, 'SKILL.md'), replaced })
+    } catch (e) {
+      skipped.push({ name, reason: (e as Error).message })
+    }
+  }
+  if (installed.length) refreshSkills()
+  return { installed, skipped }
 }
 
 /** Drop the discovery cache (all workspaces, or just one) so the next scan is fresh. */

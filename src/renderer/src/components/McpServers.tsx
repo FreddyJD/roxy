@@ -4,6 +4,7 @@ import type { McpServerView } from '@shared/api'
 import type { McpServerConfig } from '@shared/mcp'
 import { api } from '../lib/api'
 import { Button, Input, Switch, Badge } from './ui'
+import { ConfigBackup } from './ConfigBackup'
 
 function configSummary(config: McpServerConfig): string {
   return config.type === 'remote' ? config.url : config.command.join(' ')
@@ -16,7 +17,7 @@ const MCP_STATUS_STYLES: Record<McpServerView['status'], string> = {
 }
 
 /** List/add/toggle/reconnect/remove external MCP tool servers. Shared by Settings + the MCP page. */
-export function McpServers(): JSX.Element {
+export function McpServers({ showBackup = false }: { showBackup?: boolean } = {}): JSX.Element {
   const [servers, setServers] = useState<McpServerView[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -25,6 +26,10 @@ export function McpServers(): JSX.Element {
   const [kind, setKind] = useState<'local' | 'remote'>('local')
   const [value, setValue] = useState('')
   const [formErr, setFormErr] = useState('')
+
+  const reload = async (): Promise<void> => {
+    setServers(await api.mcp.list())
+  }
 
   useEffect(() => {
     api.mcp.list().then((rows) => {
@@ -220,6 +225,11 @@ export function McpServers(): JSX.Element {
         >
           <Plus className="h-4 w-4" /> Add MCP server
         </button>
+      )}
+      {showBackup && (
+        <div className="mt-1 border-t border-border pt-3">
+          <ConfigBackup onImported={() => void reload()} />
+        </div>
       )}
     </div>
   )

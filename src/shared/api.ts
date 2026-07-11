@@ -262,6 +262,36 @@ export interface RemoteStartInput {
   sessionId: string
 }
 
+/** Outcome of exporting the portable config bundle (skills + MCP servers). */
+export interface ConfigExportResult {
+  /** True when a file was written; false when the user cancelled the dialog. */
+  ok: boolean
+  /** Absolute path the bundle was saved to (when ok). */
+  path?: string
+  skills: number
+  mcpServers: number
+  /** e.g. "3 skills, 2 MCP servers". */
+  summary: string
+  error?: string
+}
+
+/** Outcome of importing a portable config bundle from a file. */
+export interface ConfigImportResult {
+  /** True when at least one skill or server was applied; false on cancel/empty/error. */
+  ok: boolean
+  /** False specifically when the user cancelled the open dialog (not an error). */
+  cancelled?: boolean
+  /** Global skills written (replaced=true when one already existed). */
+  skills: { name: string; replaced: boolean }[]
+  /** MCP servers written (replaced=true when one already existed). */
+  mcpServers: { id: string; replaced: boolean }[]
+  /** Entries found but not applied, with a reason. */
+  skipped: { name: string; reason: string }[]
+  /** e.g. "Imported 3 skills and 2 MCP servers." */
+  summary: string
+  error?: string
+}
+
 
 export interface RoxyApi {
   settings: {
@@ -352,6 +382,12 @@ export interface RoxyApi {
   }
   dialog: {
     openWorkspace(): Promise<string | null>
+  }
+  config: {
+    /** Export global skills + MCP configs to a file chosen via a save dialog. */
+    export(): Promise<ConfigExportResult>
+    /** Import a config bundle chosen via an open dialog (overwrites by name/id). */
+    import(): Promise<ConfigImportResult>
   }
   loops: {
     list(): Promise<Loop[]>

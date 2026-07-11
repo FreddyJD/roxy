@@ -6,6 +6,7 @@ import type { SkillView } from '@shared/api'
 import { api } from '../lib/api'
 import { Badge, Button, Input, Textarea } from '../components/ui'
 import { PageShell } from '../components/PageShell'
+import { ConfigBackup } from '../components/ConfigBackup'
 
 export default function Skills(): JSX.Element {
   const navigate = useNavigate()
@@ -135,6 +136,7 @@ function DiscoveredSkills(): JSX.Element {
             <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
             Rescan
           </Button>
+          <ConfigBackup onImported={() => void refresh()} />
         </div>
       </div>
 

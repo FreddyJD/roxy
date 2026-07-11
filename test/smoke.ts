@@ -54,9 +54,13 @@ import {
   loadSkill,
   refreshSkills,
   installSkillFromSource,
+  exportGlobalSkills,
+  importGlobalSkills,
   _setInstallFetchForTests,
   _resetSkillsForTests
 } from '../src/main/services/skills'
+import { buildExport, applyImport } from '../src/main/services/portable'
+import { parseBundle } from '../src/shared/portable'
 import {
   streamTurn,
   isTransientModelError,
@@ -803,6 +807,125 @@ async function main(): Promise<void> {
     }
   }
 
+
+  // ---- Portable config export/import (backup skills + MCP to another machine) ----
+  // Drives the REAL buildExport/applyImport against an isolated global home + the
+  // live DB: seed global skills (folder + companion, and a bare .md) and MCP rows,
+  // export to a bundle, wipe everything, then import and verify a faithful restore.
+  {
+    const prevHome = process.env.HOME
+    const prevProfile = process.env.USERPROFILE
+    const prevDisabled = process.env.ROXY_SKILLS
+    delete process.env.ROXY_SKILLS
+    const pHome = path.join(tmp, 'porthome')
+    try {
+      process.env.HOME = pHome
+      process.env.USERPROFILE = pHome
+      const homeOk = os.homedir() === pHome
+
+      if (homeOk) {
+        // Seed two global skills: a folder skill with a companion, and a bare .md.
+        await fs.mkdir(path.join(pHome, '.roxy/skills/backupme/scripts'), { recursive: true })
+        await fs.writeFile(
+          path.join(pHome, '.roxy/skills/backupme/SKILL.md'),
+          '---\nname: backupme\ndescription: Backup me\n---\nBody here. Use scripts/go.sh.\n',
+          'utf8'
+        )
+        await fs.writeFile(path.join(pHome, '.roxy/skills/backupme/scripts/go.sh'), 'echo go\n', 'utf8')
+        await fs.writeFile(
+          path.join(pHome, '.roxy/skills/solo.md'),
+          '---\ndescription: Bare solo skill\n---\nSolo body.\n',
+          'utf8'
+        )
+        _resetSkillsForTests()
+
+        const exported = await exportGlobalSkills()
+        const byName = new Map(exported.map((s) => [s.name, s]))
+        check('portable(app): export finds the folder + bare skills', byName.has('backupme') && byName.has('solo'))
+        check('portable(app): folder skill carries its companion file', (byName.get('backupme')?.files.length ?? 0) === 2)
+        check(
+          'portable(app): bare skill is normalized to a SKILL.md file',
+          byName.get('solo')?.files.some((f) => f.path.toLowerCase() === 'skill.md') === true
+        )
+
+        // Seed MCP rows, then build the whole export via the service (skills + DB).
+        repo.upsertMcpServer({ id: 'port-fs', config: { type: 'local', command: ['npx', 'srv'] }, enabled: true })
+        repo.upsertMcpServer({ id: 'port-remote', config: { type: 'remote', url: 'https://p.example/mcp' }, enabled: false })
+        const built = await buildExport()
+        check('portable(app): buildExport counts skills + servers', built.skills >= 2 && built.mcpServers >= 2)
+        check('portable(app): buildExport text is a valid bundle', parseBundle(built.text).ok === true)
+
+        // Wipe both sides, then restore from the exported text.
+        await fs.rm(path.join(pHome, '.roxy/skills'), { recursive: true, force: true })
+        repo.deleteMcpServer('port-fs')
+        repo.deleteMcpServer('port-remote')
+        _resetSkillsForTests()
+        check('portable(app): skills gone before import', (await exportGlobalSkills()).length === 0)
+
+        const applied = await applyImport(built.text)
+        check('portable(app): applyImport reports ok', applied.ok === true)
+        check('portable(app): applyImport restored the skills', applied.skills.some((s) => s.name === 'backupme'))
+        check(
+          'portable(app): applyImport restored the servers',
+          applied.mcpServers.some((s) => s.id === 'port-fs') && applied.mcpServers.some((s) => s.id === 'port-remote')
+        )
+
+        // Verify the files + DB rows really came back.
+        const restoredSkill = await fs
+          .readFile(path.join(pHome, '.roxy/skills/backupme/SKILL.md'), 'utf8')
+          .catch(() => '')
+        check('portable(app): restored SKILL.md content matches', restoredSkill.includes('Body here.'))
+        const restoredCompanion = await fs
+          .readFile(path.join(pHome, '.roxy/skills/backupme/scripts/go.sh'), 'utf8')
+          .catch(() => '')
+        check('portable(app): restored companion file matches', restoredCompanion.includes('echo go'))
+        const remote = repo.listMcpServers().find((r) => r.id === 'port-remote')
+        check(
+          'portable(app): restored a disabled remote server',
+          remote?.enabled === false && remote?.config.type === 'remote'
+        )
+
+        // Re-importing overwrites (replaced=true), never duplicates.
+        const again = await applyImport(built.text)
+        check('portable(app): re-import marks skills replaced', again.skills.find((s) => s.name === 'backupme')?.replaced === true)
+        check('portable(app): re-import marks servers replaced', again.mcpServers.find((s) => s.id === 'port-fs')?.replaced === true)
+
+        // A malformed bundle is a graceful, structured failure.
+        const bad = await applyImport('{ not a bundle }')
+        check('portable(app): applyImport rejects junk without throwing', bad.ok === false && !!bad.error)
+
+        // importGlobalSkills refuses a path escaping the skill folder.
+        const escaped = await importGlobalSkills([
+          {
+            name: 'evil',
+            files: [
+              { path: 'SKILL.md', dataBase64: Buffer.from('---\nname: evil\n---\nx', 'utf8').toString('base64') },
+              { path: '../pwn.sh', dataBase64: Buffer.from('bad', 'utf8').toString('base64') }
+            ]
+          }
+        ])
+        check('portable(app): import writes the skill but drops the escaping path', escaped.installed.some((s) => s.name === 'evil'))
+        check(
+          'portable(app): the escaping companion was not written',
+          !existsSync(path.join(pHome, '.roxy/skills/pwn.sh')) && !existsSync(path.join(tmp, 'pwn.sh'))
+        )
+
+        // Clean up DB rows this block created.
+        repo.deleteMcpServer('port-fs')
+        repo.deleteMcpServer('port-remote')
+      } else {
+        check('portable(app): skipped (home override unsupported here)', true)
+      }
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME
+      else process.env.HOME = prevHome
+      if (prevProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = prevProfile
+      if (prevDisabled === undefined) delete process.env.ROXY_SKILLS
+      else process.env.ROXY_SKILLS = prevDisabled
+      _resetSkillsForTests()
+    }
+  }
   // ---- skill_manage tool (Phase 14+): the model authoring/managing skills ----
   // Drives the real writeSkill/deleteSkill service through runTool against the
   // smoke workspace `ws` (scope defaults to workspace → writes ws/.roxy/skills),

@@ -50,6 +50,10 @@ export const CHANNELS = {
 
   dialogOpenWorkspace: 'dialog:openWorkspace',
 
+  /** Portable backup: export/import global skills + MCP configs to a file. */
+  configExport: 'config:export',
+  configImport: 'config:import',
+
   loopsList: 'loops:list',
   loopsCreate: 'loops:create',
   loopsSetEnabled: 'loops:setEnabled',

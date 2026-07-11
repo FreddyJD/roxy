@@ -8,6 +8,7 @@ import { api } from '../lib/api'
 import { Button } from '../components/ui'
 import { PageShell } from '../components/PageShell'
 import { McpServers } from '../components/McpServers'
+import { ConfigBackup } from '../components/ConfigBackup'
 import { ProviderLogo } from '../lib/providerLogos'
 import { useRoxyStore } from '../lib/store'
 
@@ -168,6 +169,27 @@ export default function Settings(): JSX.Element {
           MCP servers
         </h2>
         <McpServers />
+      </section>
+
+      <section className="mb-8">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          Backup &amp; restore
+        </h2>
+        <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-text">Skills &amp; MCP servers</div>
+            <p className="mt-0.5 text-xs text-text-muted">
+              Export your global skills and MCP server configs to a single file, then import it on
+              another computer to set it up the same way. Importing overwrites skills/servers that
+              share a name.{' '}
+              <span className="text-text-subtle">
+                Heads up: the file includes any MCP secrets (headers/env) in plain text — keep it
+                private.
+              </span>
+            </p>
+          </div>
+          <ConfigBackup onImported={() => void bootstrap()} />
+        </div>
       </section>
 
       <section>

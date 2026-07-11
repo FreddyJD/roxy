@@ -18,6 +18,9 @@ import { mcpServerSummaries, reconnectMcpServer, disposeConnection } from '../se
 import { listSkills, refreshSkills, readSkill, writeSkill, deleteSkill, installSkillFromSource } from '../services/skills'
 import { runSessionTurn } from '../services/session-turn'
 import * as remote from '../services/remote'
+import { buildExport, applyImport } from '../services/portable'
+import { promises as fsp } from 'node:fs'
+import { BUNDLE_FILENAME } from '../../shared/portable'
 
 /** In-flight streamed completions, keyed by requestId, so they can be aborted. */
 const llmControllers = new Map<string, AbortController>()
@@ -229,6 +232,63 @@ export function registerIpc(): void {
       : await dialog.showOpenDialog({ ...options, properties: [...options.properties] })
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
+  })
+
+  // ---- portable config (export/import global skills + MCP servers) ----
+  // Export builds the bundle, then a native Save dialog picks the destination;
+  // import reads a file via an Open dialog and applies it. Both degrade to a
+  // structured result (never throw), and treat a cancelled dialog as a no-op.
+  ipcMain.handle(CHANNELS.configExport, async (event) => {
+    const built = await buildExport()
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const opts = {
+      title: 'Export Roxy config',
+      defaultPath: BUNDLE_FILENAME,
+      filters: [{ name: 'Roxy config', extensions: ['json'] }]
+    }
+    const result = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
+    if (result.canceled || !result.filePath) {
+      return { ok: false, skills: built.skills, mcpServers: built.mcpServers, summary: built.summary }
+    }
+    try {
+      await fsp.writeFile(result.filePath, built.text, 'utf8')
+    } catch (e) {
+      return {
+        ok: false,
+        skills: built.skills,
+        mcpServers: built.mcpServers,
+        summary: built.summary,
+        error: (e as Error).message
+      }
+    }
+    return {
+      ok: true,
+      path: result.filePath,
+      skills: built.skills,
+      mcpServers: built.mcpServers,
+      summary: built.summary
+    }
+  })
+  ipcMain.handle(CHANNELS.configImport, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const opts = {
+      title: 'Import Roxy config',
+      properties: ['openFile'] as const,
+      filters: [{ name: 'Roxy config', extensions: ['json'] }]
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, { ...opts, properties: [...opts.properties] })
+      : await dialog.showOpenDialog({ ...opts, properties: [...opts.properties] })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, cancelled: true, skills: [], mcpServers: [], skipped: [], summary: '' }
+    }
+    let text: string
+    try {
+      text = await fsp.readFile(result.filePaths[0], 'utf8')
+    } catch (e) {
+      return { ok: false, skills: [], mcpServers: [], skipped: [], summary: '', error: (e as Error).message }
+    }
+    return applyImport(text)
   })
 
   // ---- loops ----
