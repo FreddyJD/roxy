@@ -9,6 +9,7 @@ import * as repo from '../db/repo'
 import { streamChat } from './llm'
 import { getAgent } from '../../shared/agents'
 import { AGENT_PROMPT_TEXT } from '../../shared/prompt-text'
+import { messagesToCompact } from '../../shared/context'
 import type { Chat, Message } from '../../shared/types'
 
 /**
@@ -53,9 +54,16 @@ export async function compactChat(
 ): Promise<Chat> {
   const existing = repo.getChat(chatId)
   if (!existing) throw new Error('Chat not found')
-  const messages = repo
+  const all = repo
     .listMessages(chatId)
     .filter((m) => m.role === 'user' || m.role === 'assistant')
+  if (all.length === 0) return existing
+
+  // Don't summarize a trailing UNANSWERED user turn (see messagesToCompact): it's
+  // the message we're about to answer, and folding it into the summary would drop
+  // it from the live window -> a system-only request -> 400 "at least one message
+  // is required". Keep it live; it gets compacted on a later turn.
+  const messages = messagesToCompact(all)
   if (messages.length === 0) return existing
 
   // Most recent ~120k chars (older turns matter less if the convo is enormous).

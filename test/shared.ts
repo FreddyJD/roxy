@@ -49,6 +49,7 @@ import {
   pruneToolMessages,
   messageTokens,
   countContentImages,
+  messagesToCompact,
   IMAGE_TOKEN_COST,
   COMPACTION_BUFFER,
   KEEP_RECENT_TOKENS,
@@ -709,6 +710,43 @@ check(
     return messageTokens(withCalls) > 0
   })()
 )
+
+// ---- messagesToCompact: never summarize away a trailing unanswered user turn ----
+// This is the empty-messages 400 root cause: compaction fires right after the new
+// user message is persisted, so it's the newest row. Summarizing it (and marking
+// the summary through its timestamp) drops it from the live window -> system-only
+// request -> 400. So a trailing user turn is held back from the summary.
+check(
+  'messagesToCompact: excludes a trailing (unanswered) user turn',
+  (() => {
+    const msgs = [
+      { role: 'user', createdAt: 1 },
+      { role: 'assistant', createdAt: 2 },
+      { role: 'user', createdAt: 3 }
+    ]
+    const out = messagesToCompact(msgs)
+    const last = out[out.length - 1]
+    return out.length === 2 && last.role === 'assistant' && last.createdAt === 2
+  })()
+)
+
+check(
+  'messagesToCompact: keeps all when the last turn is an assistant reply',
+  (() => {
+    const msgs = [
+      { role: 'user', createdAt: 1 },
+      { role: 'assistant', createdAt: 2 }
+    ]
+    return messagesToCompact(msgs).length === 2
+  })()
+)
+
+check(
+  'messagesToCompact: a lone unanswered user turn yields nothing to summarize',
+  messagesToCompact([{ role: 'user', createdAt: 1 }]).length === 0
+)
+
+check('messagesToCompact: empty in, empty out', messagesToCompact([]).length === 0)
 
 // cross-turn replay now previews (head + tail) instead of a head-only slice
 const replayTurn: Message = {

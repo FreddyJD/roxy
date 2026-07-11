@@ -1424,6 +1424,15 @@ async function streamOnce(
   // tool_call_id map to the same value and stay matched; valid ids pass through
   // unchanged. Covers both transports: the SSE payload below and the AI SDK path.
   messages = sanitizeMessageToolIds(messages)
+  // Hard backstop: never POST a request whose only message is `system`. Copilot's
+  // Anthropic proxy lifts `system` out of `messages`, so a system-only body becomes
+  // `messages: []` -> 400 "at least one message is required". This can happen if
+  // trimming/compaction ever strips every non-system turn (e.g. a summary marked
+  // through the current user turn). Root causes are fixed upstream; this guarantees
+  // the wire request is always structurally valid rather than 400ing the turn.
+  if (!messages.some((m) => m.role !== 'system')) {
+    messages = [...messages, { role: 'user', content: 'Please continue.' }]
+  }
   if (usesAiSdk(wire)) {
     return streamViaAiSdk({
       wire,

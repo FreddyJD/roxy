@@ -51,6 +51,22 @@ export function estimateTokens(text: string): number {
 export const IMAGE_TOKEN_COST = 800
 
 /**
+ * Choose which messages a compaction pass should summarize, given the full
+ * (chronological) list of user/assistant turns. A trailing UNANSWERED user turn
+ * is EXCLUDED: compaction usually fires from sendMessage right after the new user
+ * message is persisted, so it's the newest row. Folding it into the summary and
+ * marking the summary's coverage at its timestamp would make the window rebuild
+ * (`createdAt > contextSummaryAt`) drop that very turn, sending a system-only
+ * request -> 400 "at least one message is required". Keeping it out of the summary
+ * leaves it live to be answered; it gets compacted on a later turn. Returns [] when
+ * there's nothing safe to summarize (caller should skip compaction).
+ */
+export function messagesToCompact<T extends { role: string }>(all: T[]): T[] {
+  if (all.length === 0) return []
+  return all[all.length - 1].role === 'user' ? all.slice(0, -1) : all
+}
+
+/**
  * Count how many image parts an OpenAI-shaped content value carries, WITHOUT
  * charging for their base64 bytes. A plain string has none; an array counts its
  * `image_url` parts (the shape `openAiContent` in llm.ts produces).
