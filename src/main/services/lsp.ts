@@ -100,6 +100,17 @@ function findRoot(absFile: string, markers: string[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// Canonical key for a document across the didOpen/didChange -> publishDiagnostics
+// round-trip. A server echoes back a file:// URI, and fileUriToPath yields forward
+// slashes even on Windows (C:/a/b), while the paths we open with are native
+// (C:\a\b). Keying published/listeners off the raw path would never match on
+// Windows, silently dropping every diagnostic -- so both sides go through here.
+function docKey(p: string): string {
+  let out = p.replace(/\\/g, '/')
+  if (process.platform === 'win32') out = out.replace(/^([a-zA-Z]):/, (_m, d) => d.toLowerCase() + ':')
+  return out
+}
+
 // LspClient: one language-server process + its document/diagnostic state.
 // ---------------------------------------------------------------------------
 
@@ -216,7 +227,7 @@ class LspClient {
   private onPublishDiagnostics(params: unknown): void {
     const p = params as { uri?: string; version?: number; diagnostics?: LspDiagnostic[] } | undefined
     if (!p?.uri) return
-    const filePath = fileUriToPath(p.uri)
+    const filePath = docKey(fileUriToPath(p.uri))
     this.published.set(filePath, {
       at: Date.now(),
       version: typeof p.version === 'number' ? p.version : undefined,
@@ -323,8 +334,8 @@ class LspClient {
         contentChanges: [{ text }] // full-document sync (always spec-valid)
       })
     }
-    await this.waitForFreshDiagnostics(absPath, version, sentAt, timeoutMs)
-    return this.published.get(absPath)?.diagnostics ?? []
+    await this.waitForFreshDiagnostics(docKey(absPath), version, sentAt, timeoutMs)
+    return this.published.get(docKey(absPath))?.diagnostics ?? []
   }
 
   /** Resolve once a publishDiagnostics for `path` newer than `sentAt` has settled. */

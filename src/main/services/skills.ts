@@ -391,7 +391,9 @@ async function sampleSkillFiles(directory: string, skillFile: string): Promise<s
     }
     const rel = path.relative(baseReal, real)
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue // escaped the skill dir
-    out.push(path.relative(directory, f)) // show the logical in-dir path, not the resolved target
+    // Show the logical in-dir path, not the resolved target — posix-style so the
+    // model always sees `scripts/run.sh` (path.relative yields `\` on Windows).
+    out.push(path.relative(directory, f).split(/[\\/]/).join('/'))
     if (out.length >= SKILL_FILE_SAMPLE_LIMIT) break
   }
   return out
