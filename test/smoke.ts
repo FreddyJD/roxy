@@ -161,6 +161,52 @@ async function main(): Promise<void> {
   // A partial/foreign id set is ignored (guards against clobbering).
   repo.reorderSessions(rws, [rs1.id])
   check('reorderSessions ignores an incomplete set', orderOf() === 'r2,r1,r3')
+
+  // ---- project (workspace) order is explicit + independent of sessions (v13) ----
+  // New projects register at the BOTTOM of the order, not the top.
+  const pA = path.join(ws, 'proj-a')
+  const pB = path.join(ws, 'proj-b')
+  const pC = path.join(ws, 'proj-c')
+  repo.createChat({ title: 'a1', kind: 'main', workspacePath: pA })
+  repo.createChat({ title: 'b1', kind: 'main', workspacePath: pB })
+  repo.createChat({ title: 'c1', kind: 'main', workspacePath: pC })
+  const projOrder = (): string =>
+    repo
+      .listProjectOrder()
+      .filter((p) => p === pA || p === pB || p === pC)
+      .map((p) => p.split(/[\\/]/).pop())
+      .join()
+  check('new projects append at the bottom in creation order', projOrder() === 'proj-a,proj-b,proj-c')
+  // Creating another session in the FIRST project must not float it to the top.
+  repo.createChat({ title: 'a2', kind: 'main', workspacePath: pA })
+  check('a new session does not reorder its project', projOrder() === 'proj-a,proj-b,proj-c')
+  // Reordering a project session order must not touch the project order either.
+  const paIds = repo
+    .listChats()
+    .filter((c) => c.workspacePath === pA)
+    .map((c) => c.id)
+  repo.reorderSessions(pA, [paIds[1], paIds[0]])
+  check('reordering sessions does not reorder projects', projOrder() === 'proj-a,proj-b,proj-c')
+  // Explicit reorder: move C to the front.
+  repo.reorderProjects([pC, pA, pB])
+  check('reorderProjects persists a new order', projOrder() === 'proj-c,proj-a,proj-b')
+  // Deleting a project last session/loop forgets the project (drops its slot).
+  repo
+    .listChats()
+    .filter((c) => c.workspacePath === pB)
+    .forEach((c) => repo.removeChat(c.id))
+  check('an emptied project is dropped from the order', !repo.listProjectOrder().includes(pB))
+  // Re-opening that folder later appends it at the bottom again (fresh slot).
+  repo.createChat({ title: 'b2', kind: 'main', workspacePath: pB })
+  check('a re-opened project appends at the bottom', projOrder() === 'proj-c,proj-a,proj-b')
+  ;[pA, pB, pC].forEach((p) =>
+    repo
+      .listChats()
+      .filter((c) => c.workspacePath === p)
+      .forEach((c) => repo.removeChat(c.id))
+  )
+  check('all test projects cleaned up', repo.listProjectOrder().every((p) => p !== pA && p !== pB && p !== pC))
+
   repo.removeChat(rs1.id)
   repo.removeChat(rs2.id)
   repo.removeChat(rs3.id)

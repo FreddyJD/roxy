@@ -6,7 +6,7 @@ import macDockIcon from '../../resources/icon-mac.png?asset'
 import { registerIpc } from './ipc'
 import { getDb } from './db/database'
 import { startLoopScheduler } from './services/loops'
-import { setAppIcon } from './services/browser'
+import { setAppIcon, closeAll as closeAllBrowsers } from './services/browser'
 import { cleanupToolOutputs } from './services/tool-output-store'
 import { cancelAllBackgroundJobs } from './services/background-tasks'
 import { shutdownAllLsp } from './services/lsp'
@@ -108,6 +108,7 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   killAllBackground()
   cancelAllBackgroundJobs()
+  closeAllBrowsers()
   shutdownAllLsp()
   void shutdownAllMcp()
   shutdownRemote()

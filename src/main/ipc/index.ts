@@ -90,11 +90,17 @@ export function registerIpc(): void {
     // Cancel any background subagents this session launched before it's deleted,
     // so detached work doesn't keep running against a gone parent.
     cancelSessionBackgroundJobs(id)
+    // Close this session's browser window (if any) so it doesn't linger orphaned.
+    browser.disposeSession(id)
     return repo.removeChat(id)
   })
   ipcMain.handle(CHANNELS.chatsReorder, (_e, workspacePath: string | null, ids: string[]) =>
     repo.reorderSessions(workspacePath, ids)
   )
+
+  // ---- projects (workspace display order) ----
+  ipcMain.handle(CHANNELS.projectsListOrder, () => repo.listProjectOrder())
+  ipcMain.handle(CHANNELS.projectsReorder, (_e, paths: string[]) => repo.reorderProjects(paths))
 
   // ---- messages ----
   ipcMain.handle(CHANNELS.messagesList, (_e, chatId: string) => repo.listMessages(chatId))
@@ -243,7 +249,7 @@ export function registerIpc(): void {
       if (!cwd && needsWorkspace) {
         return { ok: false, output: 'No workspace is open for this session.' }
       }
-      return runTool(name, input ?? {}, { cwd: cwd ?? '' })
+      return runTool(name, input ?? {}, { cwd: cwd ?? '', sessionId })
     }
   )
 
@@ -306,20 +312,26 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.contextInstructions, (_e, cwd: string) => projectInstructions(cwd))
 
   // ---- browser (URL bar + manual control) ----
+  // The manual "Open browser" button drives the shared default window. The chrome's
+  // own controls (URL bar / tab strip) come from a SESSION browser window's
+  // webContents, so resolve that window's key from the sender and drive exactly
+  // that session's browser -- never another chat's.
+  const keyOf = (e: Electron.IpcMainInvokeEvent): string | undefined =>
+    browser.keyForContents(e.sender) ?? undefined
   ipcMain.handle(CHANNELS.browserOpen, async (_e, url?: string) => {
     browser.openWindow()
     if (url) await browser.navigate(url)
   })
-  ipcMain.handle(CHANNELS.browserNavigate, (_e, url: string) => browser.navigate(url))
-  ipcMain.handle(CHANNELS.browserBack, () => browser.back())
-  ipcMain.handle(CHANNELS.browserForward, () => browser.forward())
-  ipcMain.handle(CHANNELS.browserReload, () => browser.reload())
-  ipcMain.handle(CHANNELS.browserStop, () => browser.stop())
-  ipcMain.handle(CHANNELS.browserNewTab, (_e, url?: string) => browser.newTab(url))
-  ipcMain.handle(CHANNELS.browserCloseTab, (_e, id: string) => browser.closeTab(id))
-  ipcMain.handle(CHANNELS.browserActivateTab, (_e, id: string) => browser.activateTab(id))
-  ipcMain.handle(CHANNELS.browserMoveTab, (_e, id: string, toIndex: number) =>
-    browser.moveTab(id, toIndex)
+  ipcMain.handle(CHANNELS.browserNavigate, (e, url: string) => browser.navigate(url, keyOf(e)))
+  ipcMain.handle(CHANNELS.browserBack, (e) => browser.back(keyOf(e)))
+  ipcMain.handle(CHANNELS.browserForward, (e) => browser.forward(keyOf(e)))
+  ipcMain.handle(CHANNELS.browserReload, (e) => browser.reload(keyOf(e)))
+  ipcMain.handle(CHANNELS.browserStop, (e) => browser.stop(keyOf(e)))
+  ipcMain.handle(CHANNELS.browserNewTab, (e, url?: string) => browser.newTab(url, keyOf(e)))
+  ipcMain.handle(CHANNELS.browserCloseTab, (e, id: string) => browser.closeTab(id, keyOf(e)))
+  ipcMain.handle(CHANNELS.browserActivateTab, (e, id: string) => browser.activateTab(id, keyOf(e)))
+  ipcMain.handle(CHANNELS.browserMoveTab, (e, id: string, toIndex: number) =>
+    browser.moveTab(id, toIndex, keyOf(e))
   )
 
   // ---- remote (Remote Workspace: share a session to a phone via roxy.gg) ----

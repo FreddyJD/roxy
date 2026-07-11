@@ -18,6 +18,10 @@ export const CHANNELS = {
   chatsRemove: 'chats:remove',
   chatsReorder: 'chats:reorder',
 
+  /** Project (workspace) display order — read + drag-to-reorder. */
+  projectsListOrder: 'projects:listOrder',
+  projectsReorder: 'projects:reorder',
+
   messagesList: 'messages:list',
   messagesAdd: 'messages:add',
 

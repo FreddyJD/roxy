@@ -43,6 +43,8 @@ interface RoxyStore {
   activeAgentId: string
   /** Project instruction blocks (AGENTS.md etc.) cached per workspace path. */
   projectInstructions: Record<string, string[]>
+  /** Workspace paths in the user's chosen sidebar order (top → bottom). */
+  projectOrder: string[]
   loops: Loop[]
   /** Pending prompts queued on the active chat (FIFO). */
   queue: QueueItem[]
@@ -79,6 +81,8 @@ interface RoxyStore {
   renameChat: (id: string, title: string) => Promise<void>
   /** Persist a project's session order (optimistic). `ids` = full project list, top-to-bottom. */
   reorderSessions: (workspacePath: string | null, ids: string[]) => Promise<void>
+  /** Persist the project (workspace) order (optimistic). `paths` = full list, top → bottom. */
+  reorderProjects: (paths: string[]) => Promise<void>
   submit: (content: string, images?: ComposerImage[]) => Promise<void>
   sendMessage: (content: string, chatId?: string, images?: ComposerImage[]) => Promise<void>
   drainQueue: (chatId: string) => Promise<void>
@@ -141,6 +145,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   streamingChats: {},
   activeAgentId: DEFAULT_AGENT_ID,
   projectInstructions: {},
+  projectOrder: [],
   loops: [],
   queue: [],
   stopChats: {},
@@ -149,13 +154,14 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   remote: { phase: 'idle', guests: 0, rev: 0 },
 
   bootstrap: async () => {
-    const [settings, providers, chats, loops] = await Promise.all([
+    const [settings, providers, chats, loops, projectOrder] = await Promise.all([
       api.settings.getAll(),
       api.providers.listConnected(),
       api.chats.list(),
-      api.loops.list()
+      api.loops.list(),
+      api.projects.listOrder()
     ])
-    set({ settings, providers, chats, loops, ready: true })
+    set({ settings, providers, chats, loops, projectOrder, ready: true })
 
     if (!loopTickSubscribed) {
       loopTickSubscribed = true
@@ -239,7 +245,13 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   },
 
   refreshChats: async () => {
-    set({ chats: await api.chats.list() })
+    // Project order can change when a session/loop is created or deleted, so
+    // pull it in the same round trip — one set, so the sidebar re-renders once.
+    const [chats, projectOrder] = await Promise.all([
+      api.chats.list(),
+      api.projects.listOrder()
+    ])
+    set({ chats, projectOrder })
   },
 
   refreshLoops: async () => {
@@ -428,6 +440,14 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       return { chats }
     })
     await api.chats.reorder(workspacePath, ids)
+    await get().refreshChats()
+  },
+
+  reorderProjects: async (paths) => {
+    // Optimistic: show the new project order immediately, then persist and
+    // refresh to pick up the authoritative order (mirrors reorderSessions).
+    set({ projectOrder: paths })
+    await api.projects.reorder(paths)
     await get().refreshChats()
   },
 

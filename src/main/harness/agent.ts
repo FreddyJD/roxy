@@ -933,6 +933,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<void> {
     cwd,
     parentChatId: chatId,
     sessionId: chatId,
+    browserKey: chatId,
     signal,
     emitTool: emit,
     onText: (delta) => emit({ type: 'text', delta }),
@@ -961,6 +962,9 @@ interface LoopOptions {
   parentChatId?: string
   /** The session this loop runs — the target of `change_session_metadata`. */
   sessionId?: string
+  /** Isolation key for this turn's browser window/tabs. Top session = its chatId;
+   *  subagents inherit the parent's key so a project shares one browser window. */
+  browserKey?: string
   signal: AbortSignal
   /** Tool cards — the parent's and any subagent's tool work both surface here. */
   emitTool: (event: LlmEvent) => void
@@ -986,7 +990,7 @@ interface LoopOptions {
 
 /** The shared agent loop: stream → run tools (incl. `task`) → repeat. Returns the final prose. */
 async function runLoop(o: LoopOptions): Promise<string> {
-  const { providerId, vision, model, convo, cwd, parentChatId, sessionId, signal, emitTool, onText, onReasoning, tools, mcpTools, skillTools, skillInfo, readOnly, reasoning, effort, contextLimit, depth } =
+  const { providerId, vision, model, convo, cwd, parentChatId, sessionId, browserKey, signal, emitTool, onText, onReasoning, tools, mcpTools, skillTools, skillInfo, readOnly, reasoning, effort, contextLimit, depth } =
     o
   let lastText = ''
 
@@ -1051,6 +1055,8 @@ async function runLoop(o: LoopOptions): Promise<string> {
           model,
           cwd,
           parentChatId,
+          // Subagents share their parent's browser window (its project's one window).
+          browserKey,
           readOnly,
           signal,
           emit: emitTool,
@@ -1083,6 +1089,7 @@ async function runLoop(o: LoopOptions): Promise<string> {
       const result = await runTool(tc.name, input, {
         cwd,
         sessionId,
+        browserKey,
         onChunk: (chunk) => emitTool({ type: 'tool-delta', callId: tc.id, chunk })
       })
       emitTool({
@@ -1133,6 +1140,9 @@ interface SubagentOptions {
   model: string
   cwd: string
   parentChatId?: string
+  /** Browser isolation key inherited from the parent, so the subagent shares the
+   *  project's one browser window instead of spawning its own. */
+  browserKey?: string
   /** The parent is read-only (Plan) — only read-only subagents may be spawned. */
   readOnly?: boolean
   signal: AbortSignal
@@ -1151,7 +1161,7 @@ interface SubagentOptions {
 
 /** Spawn a subagent: a focused child run of the same loop, returned as a `task` result. */
 async function runSubagent(o: SubagentOptions): Promise<string> {
-  const { callId, input, providerId, vision, model, cwd, parentChatId, readOnly, signal, emit, reasoning, effort, contextLimit, depth, mcpTools, skillTools, skillInfo } =
+  const { callId, input, providerId, vision, model, cwd, parentChatId, browserKey, readOnly, signal, emit, reasoning, effort, contextLimit, depth, mcpTools, skillTools, skillInfo } =
     o
   const { description, prompt, subagentType, background } = input
   const fail = (msg: string): string => {
@@ -1265,6 +1275,8 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
           { role: 'user', content: prompt || description }
         ],
         cwd,
+        // Inherit the parent's browser window so the project keeps ONE browser.
+        browserKey,
         signal: runSignal,
         emitTool: emitNested,
         onText: addText,

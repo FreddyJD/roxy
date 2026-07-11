@@ -286,6 +286,12 @@ export interface RoxyApi {
     /** Reorder a project's sessions; `ids` is the full project session list, top-to-bottom. */
     reorder(workspacePath: string | null, ids: string[]): Promise<void>
   }
+  projects: {
+    /** Workspace paths in sidebar display order, top → bottom. */
+    listOrder(): Promise<string[]>
+    /** Persist the project order; `paths` is the full list, top → bottom. */
+    reorder(paths: string[]): Promise<void>
+  }
   messages: {
     list(chatId: string): Promise<Message[]>
     add(input: AddMessageInput): Promise<Message>

@@ -48,6 +48,13 @@ export interface ToolContext {
   cwd: string
   /** The session (chat id) this turn runs in — the target of session-metadata tools. */
   sessionId?: string
+  /**
+   * The key that isolates this turn's browser (window + tabs + console). Defaults
+   * to sessionId, so each chat drives its own browser and concurrent chats never
+   * clobber each other's tabs. Subagents inherit their PARENT's key so they share
+   * the project's one window (see agent.ts). Omitted -> the shared default window.
+   */
+  browserKey?: string
   /** Optional sink for incremental output (bash streams its logs here live). */
   onChunk?: (chunk: string) => void
 }
@@ -115,27 +122,27 @@ export async function runTool(
       case 'websearch':
         return await runWebSearch(str(input.query), input.numResults ?? input.count, ctx.onChunk)
       case 'browser_open':
-        return await runBrowserOpen(str(input.url))
+        return await runBrowserOpen(str(input.url), browserKey(ctx))
       case 'browser_screenshot':
-        return await runBrowserScreenshot(ctx.cwd)
+        return await runBrowserScreenshot(ctx.cwd, browserKey(ctx))
       case 'browser_read':
-        return await runBrowserRead(str(input.selector) || undefined)
+        return await runBrowserRead(str(input.selector) || undefined, browserKey(ctx))
       case 'browser_console':
-        return runBrowserConsole()
+        return runBrowserConsole(browserKey(ctx))
       case 'browser_click':
-        return await runBrowserClick(str(input.selector))
+        return await runBrowserClick(str(input.selector), browserKey(ctx))
       case 'browser_scroll':
-        return await runBrowserScroll(input)
+        return await runBrowserScroll(input, browserKey(ctx))
       case 'browser_type':
-        return await runBrowserType(str(input.selector), str(input.text))
+        return await runBrowserType(str(input.selector), str(input.text), browserKey(ctx))
       case 'browser_tabs':
-        return runBrowserTabs()
+        return runBrowserTabs(browserKey(ctx))
       case 'browser_new_tab':
-        return runBrowserNewTab(str(input.url) || undefined)
+        return runBrowserNewTab(str(input.url) || undefined, browserKey(ctx))
       case 'browser_activate_tab':
-        return runBrowserActivateTab(str(input.id ?? input.tab))
+        return runBrowserActivateTab(str(input.id ?? input.tab), browserKey(ctx))
       case 'browser_close':
-        browser.close()
+        browser.close(browserKey(ctx))
         return { ok: true, output: 'Closed the browser.' }
       case 'loop_create':
         return runLoopCreate(input, ctx.cwd)
@@ -176,6 +183,11 @@ function num(v: unknown): number | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return v
   if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v)
   return undefined
+}
+
+/** The browser-isolation key for a turn: explicit override, else the session id. */
+function browserKey(ctx: ToolContext): string | undefined {
+  return ctx.browserKey ?? ctx.sessionId
 }
 
 function bool(v: unknown): boolean {
@@ -715,17 +727,17 @@ function capText(text: string, cap: number): string {
 
 const CONSOLE_LEVELS = ['verbose', 'info', 'warning', 'error']
 
-async function runBrowserOpen(url: string): Promise<ToolResult> {
+async function runBrowserOpen(url: string, key?: string): Promise<ToolResult> {
   if (!url.trim()) return { ok: false, output: 'browser_open: missing "url"' }
-  const { url: finalUrl, title, error } = await browser.open(url)
+  const { url: finalUrl, title, error } = await browser.open(url, key)
   const note = error ? `\n[load warning: ${error}]` : ''
   return { ok: !error, output: `Opened ${title || '(untitled)'}\n${finalUrl}${note}` }
 }
 
-async function runBrowserScreenshot(cwd: string): Promise<ToolResult> {
-  const shot = await browser.screenshot(cwd || undefined)
+async function runBrowserScreenshot(cwd: string, key?: string): Promise<ToolResult> {
+  const shot = await browser.screenshot(cwd || undefined, key)
   const where = shot.savedTo ? `\nSaved to ${shot.savedTo}` : ''
-  const page = browser.currentUrl() ?? 'the page'
+  const page = browser.currentUrl(key) ?? 'the page'
   return {
     ok: true,
     output: `Captured a ${shot.width}\u00d7${shot.height} screenshot of ${page}.${where}`,
@@ -733,13 +745,13 @@ async function runBrowserScreenshot(cwd: string): Promise<ToolResult> {
   }
 }
 
-async function runBrowserRead(selector?: string): Promise<ToolResult> {
-  const html = await browser.getHtml(selector)
+async function runBrowserRead(selector: string | undefined, key?: string): Promise<ToolResult> {
+  const html = await browser.getHtml(selector, key)
   return { ok: true, output: cap(html) }
 }
 
-function runBrowserConsole(): ToolResult {
-  const { entries, errors, warnings } = browser.getConsole()
+function runBrowserConsole(key?: string): ToolResult {
+  const { entries, errors, warnings } = browser.getConsole(key)
   if (entries.length === 0) return { ok: true, output: 'No console messages captured yet.' }
   const lines = entries.map((e) => {
     const label = (CONSOLE_LEVELS[e.level] ?? 'log').toUpperCase()
@@ -750,8 +762,8 @@ function runBrowserConsole(): ToolResult {
   return { ok: errors === 0, output: `${header}\n${cap(lines.join('\n'))}` }
 }
 
-function runBrowserTabs(): ToolResult {
-  const open = browser.listTabs()
+function runBrowserTabs(key?: string): ToolResult {
+  const open = browser.listTabs(key)
   if (open.length === 0) return { ok: true, output: 'No browser is open. Use browser_open first.' }
   const lines = open.map(
     (t) => `${t.active ? '*' : ' '} [${t.id}] ${t.title || '(untitled)'} — ${t.url || 'about:blank'}`
@@ -759,36 +771,39 @@ function runBrowserTabs(): ToolResult {
   return { ok: true, output: `${open.length} open tab(s) (* = active):\n${lines.join('\n')}` }
 }
 
-function runBrowserNewTab(url?: string): ToolResult {
-  browser.newTab(url)
-  return runBrowserTabs()
+function runBrowserNewTab(url: string | undefined, key?: string): ToolResult {
+  browser.newTab(url, key)
+  return runBrowserTabs(key)
 }
 
-function runBrowserActivateTab(id: string): ToolResult {
+function runBrowserActivateTab(id: string, key?: string): ToolResult {
   if (!id) return { ok: false, output: 'browser_activate_tab: missing "id"' }
-  if (!browser.listTabs().some((t) => t.id === id)) {
+  if (!browser.listTabs(key).some((t) => t.id === id)) {
     return { ok: false, output: `No tab with id "${id}". Use browser_tabs to list ids.` }
   }
-  browser.activateTab(id)
-  return runBrowserTabs()
+  browser.activateTab(id, key)
+  return runBrowserTabs(key)
 }
 
-async function runBrowserClick(selector: string): Promise<ToolResult> {
-  const out = await browser.click(selector)
+async function runBrowserClick(selector: string, key?: string): Promise<ToolResult> {
+  const out = await browser.click(selector, key)
   return { ok: !out.startsWith('No element') && !out.startsWith('browser_'), output: out }
 }
 
-async function runBrowserScroll(input: Record<string, unknown>): Promise<ToolResult> {
-  const out = await browser.scroll({
-    selector: typeof input.selector === 'string' ? input.selector : undefined,
-    direction: typeof input.direction === 'string' ? input.direction : undefined,
-    amount: typeof input.amount === 'number' ? input.amount : undefined
-  })
+async function runBrowserScroll(input: Record<string, unknown>, key?: string): Promise<ToolResult> {
+  const out = await browser.scroll(
+    {
+      selector: typeof input.selector === 'string' ? input.selector : undefined,
+      direction: typeof input.direction === 'string' ? input.direction : undefined,
+      amount: typeof input.amount === 'number' ? input.amount : undefined
+    },
+    key
+  )
   return { ok: !out.startsWith('No element'), output: out }
 }
 
-async function runBrowserType(selector: string, text: string): Promise<ToolResult> {
-  const out = await browser.type(selector, text)
+async function runBrowserType(selector: string, text: string, key?: string): Promise<ToolResult> {
+  const out = await browser.type(selector, text, key)
   return { ok: !out.startsWith('No element') && !out.startsWith('browser_'), output: out }
 }
 

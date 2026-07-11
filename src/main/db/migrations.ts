@@ -128,5 +128,28 @@ export const MIGRATIONS: string[] = [
   /* sql */ `
     ALTER TABLE chats ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
     UPDATE chats SET sort_order = created_at;
+  `,
+
+  // ---- v13: explicit, persistent project (workspace) order ----
+  // Projects used to be ordered only as a side effect of their sessions'
+  // sort_order, so creating or reordering a session floated the whole project to
+  // the top. Give each workspace its own order instead: it's rendered ASC (top→
+  // bottom), new projects append at the bottom (MAX+1), and session activity no
+  // longer touches it. Seed the initial order from each project's newest session
+  // (ROW_NUMBER over MAX(sort_order) DESC) so it matches the newest-session-first
+  // layout users saw right before upgrading.
+  /* sql */ `
+    CREATE TABLE projects (
+      path       TEXT PRIMARY KEY,
+      sort_order INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    INSERT INTO projects(path, sort_order, created_at)
+      SELECT workspace_path,
+             ROW_NUMBER() OVER (ORDER BY MAX(sort_order) DESC) - 1,
+             MIN(created_at)
+      FROM chats
+      WHERE workspace_path IS NOT NULL
+      GROUP BY workspace_path;
   `
 ]

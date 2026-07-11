@@ -364,6 +364,10 @@ export function createChat(input: CreateChatInput = {}): Chat {
       now,
       now
     )
+  // A new main session or loop in a workspace registers that project (appended
+  // to the bottom of the project list) the first time we see that folder. Sub-
+  // agent sessions group under their parent, so they never register a project.
+  if (input.workspacePath && (input.kind ?? 'main') !== 'sub') ensureProject(input.workspacePath)
   const chat = getChat(id)
   if (!chat) throw new Error('Failed to create chat')
   return chat
@@ -377,9 +381,13 @@ export function renameChat(id: string, title: string): void {
 
 export function removeChat(id: string): void {
   const db = getDb()
+  const workspace = getChatWorkspace(id)
   // Cascade to any subagent sessions this chat spawned.
   db.prepare('DELETE FROM chats WHERE parent_id = ?').run(id)
   db.prepare('DELETE FROM chats WHERE id = ?').run(id)
+  // Drop the project row once its last session/loop is gone so it no longer
+  // holds a slot in the order (a folder re-opened later appends at the bottom).
+  if (workspace) pruneProjectIfEmpty(workspace)
 }
 
 /** Subagent sessions spawned by a given chat, newest first. */
@@ -472,6 +480,65 @@ export function reorderSessions(workspacePath: string | null, orderedIds: string
   const base = Date.now()
   const update = db.prepare('UPDATE chats SET sort_order = ? WHERE id = ?')
   db.transaction(() => ids.forEach((id, i) => update.run(base - i, id)))()
+}
+
+// ---- Projects (workspace order) ----------------------------------------------
+//
+// A "project" is a workspace folder that groups sessions in the sidebar. Its
+// order is explicit and persistent here (rendered ASC, top→bottom) so that,
+// unlike before, creating or reordering a *session* never floats the project
+// to the top. New projects append at the bottom; the user drags to reorder.
+
+/** Register a workspace as a project at the bottom of the order (no-op if known). */
+export function ensureProject(path: string): void {
+  const db = getDb()
+  if (db.prepare('SELECT 1 FROM projects WHERE path = ?').get(path)) return
+  const { max } = db.prepare('SELECT MAX(sort_order) AS max FROM projects').get() as {
+    max: number | null
+  }
+  db
+    .prepare('INSERT INTO projects(path, sort_order, created_at) VALUES(?, ?, ?)')
+    .run(path, (max ?? -1) + 1, Date.now())
+}
+
+/** Forget a project once it has no more main sessions or loops. */
+export function pruneProjectIfEmpty(path: string): void {
+  const db = getDb()
+  const { n } = db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM chats WHERE workspace_path IS ? AND kind IN ('main', 'loop')"
+    )
+    .get(path) as { n: number }
+  if (n === 0) db.prepare('DELETE FROM projects WHERE path = ?').run(path)
+}
+
+/** Project (workspace) paths in display order, top → bottom. */
+export function listProjectOrder(): string[] {
+  const rows = getDb()
+    .prepare('SELECT path FROM projects ORDER BY sort_order ASC, created_at ASC')
+    .all() as { path: string }[]
+  return rows.map((r) => r.path)
+}
+
+/**
+ * Persist the project order to match `orderedPaths` (front = top). Unknown
+ * paths are registered as they land; any existing project rows not named are
+ * kept, appended after in their previous order, so the result is a total order.
+ */
+export function reorderProjects(orderedPaths: string[]): void {
+  const db = getDb()
+  const existing = db
+    .prepare('SELECT path FROM projects ORDER BY sort_order ASC, created_at ASC')
+    .all() as { path: string }[]
+  const seen = new Set(orderedPaths)
+  const rest = existing.map((r) => r.path).filter((p) => !seen.has(p))
+  const now = Date.now()
+  const upsert = db.prepare(
+    `INSERT INTO projects(path, sort_order, created_at) VALUES(?, ?, ?)
+     ON CONFLICT(path) DO UPDATE SET sort_order = excluded.sort_order`
+  )
+  const final = [...orderedPaths, ...rest]
+  db.transaction(() => final.forEach((path, i) => upsert.run(path, i, now)))()
 }
 
 // ---- Messages ----------------------------------------------------------------
@@ -589,8 +656,10 @@ export function setLoopEnabled(id: string, enabled: boolean): void {
 export function removeLoop(id: string): void {
   const loop = getLoop(id)
   if (!loop) return
+  const workspace = getChatWorkspace(loop.chatId)
   // Deleting the chat cascades to the loop row and its messages.
   getDb().prepare('DELETE FROM chats WHERE id = ?').run(loop.chatId)
+  if (workspace) pruneProjectIfEmpty(workspace)
 }
 
 export function dueLoops(now: number): Loop[] {

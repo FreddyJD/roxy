@@ -60,6 +60,8 @@ export function Sidebar(): JSX.Element {
   const loops = useRoxyStore((s) => s.loops)
   const removeLoop = useRoxyStore((s) => s.removeLoop)
   const reorderSessions = useRoxyStore((s) => s.reorderSessions)
+  const reorderProjects = useRoxyStore((s) => s.reorderProjects)
+  const projectOrder = useRoxyStore((s) => s.projectOrder)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
   const [width, setWidth] = useState<number>(() => {
@@ -119,6 +121,13 @@ export function Sidebar(): JSX.Element {
   // the very bottom (drop onto the last row's lower half) — a before-only insert
   // structurally could never place anything past the last row.
   const [dropAfter, setDropAfter] = useState(false)
+
+  // Drag-to-reorder whole projects (workspace folders). Kept separate from the
+  // session DnD state above so a session drag never triggers a project reorder
+  // (and vice-versa), even though their native drag events share the DOM tree.
+  const [projectDrag, setProjectDrag] = useState<string | null>(null)
+  const [projectDragOver, setProjectDragOver] = useState<string | null>(null)
+  const [projectDropAfter, setProjectDropAfter] = useState(false)
 
   // Reorder `sessions` so `sourceId` lands just before/after `targetId`, returning
   // the new id order (or null when nothing actually moved / it's a cross-project drag).
@@ -219,8 +228,37 @@ export function Sidebar(): JSX.Element {
     for (const loop of loops) {
       ensure(chatPath.get(loop.chatId) ?? '(no folder)').loops.push(loop)
     }
-    return [...map.values()]
-  }, [chats, loops])
+    const groups = [...map.values()]
+    // Order by the user's saved project order; unknowns (a just-created project
+    // not yet in projectOrder, or the '(no folder)' catch-all) fall to the bottom.
+    // Array.sort is stable, so those keep their newest-first insertion order.
+    const rank = new Map(projectOrder.map((p, i) => [p, i]))
+    return groups.sort(
+      (a, b) =>
+        (rank.get(a.path) ?? Number.MAX_SAFE_INTEGER) -
+        (rank.get(b.path) ?? Number.MAX_SAFE_INTEGER)
+    )
+  }, [chats, loops, projectOrder])
+
+  // Reorder projects so the dragged folder lands before/after the drop target,
+  // then persist. Only real folders take part — the '(no folder)' catch-all
+  // isn't a registered project, so it always stays pinned at the bottom.
+  const onProjectDrop = (targetPath: string): void => {
+    const source = projectDrag
+    const place = projectDropAfter ? 'after' : 'before'
+    setProjectDrag(null)
+    setProjectDragOver(null)
+    setProjectDropAfter(false)
+    if (!source || source === targetPath || targetPath === '(no folder)') return
+    const current = projects.map((p) => p.path).filter((p) => p !== '(no folder)')
+    const from = current.indexOf(source)
+    if (from === -1 || current.indexOf(targetPath) === -1) return
+    const paths = current.slice()
+    paths.splice(from, 1)
+    paths.splice(paths.indexOf(targetPath) + (place === 'after' ? 1 : 0), 0, source)
+    if (paths.every((p, i) => p === current[i])) return
+    void reorderProjects(paths)
+  }
 
   // Subagent sessions grouped by the main chat that spawned them.
   const subsByParent = useMemo(() => {
@@ -368,9 +406,50 @@ export function Sidebar(): JSX.Element {
             <div className="flex flex-col gap-2">
               {projects.map((project) => {
                 const isCollapsed = collapsed.has(project.path)
+                const canDragProject = project.path !== '(no folder)'
                 return (
-                  <div key={project.path}>
-                    <div className="flex items-center gap-1 px-1">
+                  <div
+                    key={project.path}
+                    className={cn(
+                      'relative',
+                      projectDrag === project.path && 'opacity-40',
+                      projectDragOver === project.path &&
+                        projectDrag &&
+                        projectDrag !== project.path &&
+                        (projectDropAfter
+                          ? 'after:absolute after:inset-x-1 after:-bottom-px after:h-0.5 after:rounded-full after:bg-accent'
+                          : 'before:absolute before:inset-x-1 before:-top-px before:h-0.5 before:rounded-full before:bg-accent')
+                    )}
+                    onDragOver={(e) => {
+                      if (!projectDrag || !canDragProject) return
+                      e.preventDefault()
+                      if (projectDrag === project.path) return
+                      const r = e.currentTarget.getBoundingClientRect()
+                      const after = e.clientY - r.top > r.height / 2
+                      if (projectDragOver !== project.path) setProjectDragOver(project.path)
+                      if (after !== projectDropAfter) setProjectDropAfter(after)
+                    }}
+                    onDrop={(e) => {
+                      if (!projectDrag) return
+                      e.preventDefault()
+                      onProjectDrop(project.path)
+                    }}
+                  >
+                    <div
+                      className={cn('flex items-center gap-1 px-1', projectDrag && 'cursor-grabbing')}
+                      draggable={canDragProject}
+                      onDragStart={(e) => {
+                        if (!canDragProject) return
+                        setProjectDrag(project.path)
+                        e.dataTransfer.effectAllowed = 'move'
+                        e.stopPropagation()
+                      }}
+                      onDragEnd={() => {
+                        setProjectDrag(null)
+                        setProjectDragOver(null)
+                        setProjectDropAfter(false)
+                      }}
+                    >
                       <button
                         onClick={() => toggleProject(project.path)}
                         className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs font-medium text-text-muted transition hover:text-text"

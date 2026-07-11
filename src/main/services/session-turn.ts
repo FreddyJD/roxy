@@ -13,6 +13,8 @@ import type { LlmEvent, LlmResult, LlmStartInput } from '../../shared/api'
 import * as repo from '../db/repo'
 import { runAgentTurn } from '../harness'
 import { activeBackgroundSubChatIds } from './background-tasks'
+import { setLabel as setBrowserLabel } from './browser'
+import path from 'node:path'
 
 /**
  * Run one agent turn for a session. `emit` receives every streamed `LlmEvent`;
@@ -25,6 +27,9 @@ export async function runSessionTurn(
   signal: AbortSignal
 ): Promise<LlmResult> {
   const cwd = repo.getChatWorkspace(input.sessionId) ?? ''
+  // Name this session's browser window after its project so concurrent windows
+  // are tellable apart (a no-op until/unless the agent opens the browser).
+  if (cwd) setBrowserLabel(input.sessionId, path.basename(cwd))
   try {
     await runAgentTurn({
       providerId: input.providerId,
