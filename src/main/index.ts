@@ -6,6 +6,9 @@ import macDockIcon from '../../resources/icon-mac.png?asset'
 import { registerIpc } from './ipc'
 import { getDb } from './db/database'
 import { startLoopScheduler } from './services/loops'
+import { listModels } from './services/models'
+import { backfillUsageFromHistory } from './services/usage'
+import { listConnectedProviders } from './db/repo'
 import { setAppIcon, closeAll as closeAllBrowsers } from './services/browser'
 import { cleanupToolOutputs } from './services/tool-output-store'
 import { cancelAllBackgroundJobs } from './services/background-tasks'
@@ -60,6 +63,23 @@ function createWindow(): BrowserWindow {
   return mainWindow
 }
 
+/**
+ * Warm the models.dev catalog for each connected provider (so `modelCost` can
+ * price rows), then run the one-time history backfill. Fully best-effort — any
+ * failure just leaves backfilled rows unpriced, which real turns fill in later.
+ */
+async function warmCatalogThenBackfill(): Promise<void> {
+  try {
+    const providers = listConnectedProviders()
+    // Pull each provider's catalog once; listModels caches it process-wide, which
+    // is exactly what modelCost() reads from.
+    await Promise.allSettled(providers.map((p) => listModels(p.id)))
+  } catch {
+    // ignore — backfill still runs, just possibly unpriced
+  }
+  backfillUsageFromHistory()
+}
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.roxy.app')
   // Give the agent's browser window the Roxy icon too (no asset import in the
@@ -87,6 +107,10 @@ app.whenReady().then(() => {
   startLoopScheduler()
   // Sweep tool-output spill files older than the retention window (best-effort).
   void cleanupToolOutputs()
+  // One-time: seed the usage/cost table from existing message history so the
+  // dashboard isn't empty after upgrading. Warm the models.dev catalog first so
+  // backfilled rows can be priced (else they'd all cost $0). Best-effort + async.
+  void warmCatalogThenBackfill()
 
   const mainWindow = createWindow()
   initAutoUpdater(mainWindow)

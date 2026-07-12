@@ -8,7 +8,8 @@ import type {
   Message,
   MessagePart,
   QueueItem,
-  ReasoningEffort
+  ReasoningEffort,
+  UsageStats
 } from '@shared/types'
 import type {
   ChatMessage,
@@ -57,6 +58,8 @@ interface RoxyStore {
   runningTasks: Record<string, TaskUpdate[]>
   /** Remote Workspace sharing status — mirrors the main process's RemoteState. */
   remote: RemoteState
+  /** Token-usage + cost dashboard (last 30 days); null until first fetched. */
+  usageStats: UsageStats | null
 
   bootstrap: () => Promise<void>
   refreshChats: () => Promise<void>
@@ -89,6 +92,10 @@ interface RoxyStore {
   drainQueue: (chatId: string) => Promise<void>
   removeQueued: (id: string) => Promise<void>
   moveQueued: (id: string, direction: 'up' | 'down') => Promise<void>
+  /** Edit a queued prompt in place (text + images), keeping its queue position. */
+  editQueued: (id: string, content: string, images?: ComposerImage[]) => Promise<void>
+  /** Refresh the usage/cost dashboard (called on turn end + when the pill opens). */
+  refreshUsage: () => Promise<void>
   stop: () => void
   /** Start sharing the active session to a phone via the roxy.gg relay. */
   startRemote: () => Promise<void>
@@ -153,6 +160,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   compactingChats: {},
   runningTasks: {},
   remote: { phase: 'idle', guests: 0, rev: 0 },
+  usageStats: null,
 
   bootstrap: async () => {
     const [settings, providers, chats, loops, projectOrder] = await Promise.all([
@@ -163,6 +171,8 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       api.projects.listOrder()
     ])
     set({ settings, providers, chats, loops, projectOrder, ready: true })
+    // Warm the usage/cost dashboard for the titlebar pill (best-effort, async).
+    void get().refreshUsage()
 
     if (!loopTickSubscribed) {
       loopTickSubscribed = true
@@ -248,10 +258,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   refreshChats: async () => {
     // Project order can change when a session/loop is created or deleted, so
     // pull it in the same round trip — one set, so the sidebar re-renders once.
-    const [chats, projectOrder] = await Promise.all([
-      api.chats.list(),
-      api.projects.listOrder()
-    ])
+    const [chats, projectOrder] = await Promise.all([api.chats.list(), api.projects.listOrder()])
     set({ chats, projectOrder })
   },
 
@@ -567,6 +574,9 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         void mirrorSharedChat(chatId, get().remote.rev)
       }
       await get().refreshChats()
+      // A turn just recorded usage rows — refresh the cost dashboard so the
+      // titlebar pill reflects the new spend without waiting for a manual open.
+      void get().refreshUsage()
       // Completed subagent sessions get pruned in main — if we were viewing one
       // (now gone), fall back to this turn's chat so the pane isn't left empty.
       const active = get().activeChatId
@@ -827,6 +837,23 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       reordered.map((q) => q.id)
     )
     await get().refreshQueue()
+  },
+
+  editQueued: async (id, content, images) => {
+    await api.queue.update(
+      id,
+      content,
+      images?.map(({ dataUrl, mediaType, name }) => ({ dataUrl, mediaType, name }))
+    )
+    await get().refreshQueue()
+  },
+
+  refreshUsage: async () => {
+    try {
+      set({ usageStats: await api.usage.stats() })
+    } catch {
+      // best-effort — a usage fetch failure must never disrupt the UI
+    }
   },
 
   stop: () => {

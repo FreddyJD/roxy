@@ -75,7 +75,12 @@ export function ThinkingPicker(): JSX.Element | null {
 
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)} className={triggerClass} title="Thinking effort">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={triggerClass}
+        title="Thinking effort"
+      >
         <Brain className="h-3.5 w-3.5 shrink-0 text-accent" />
         <span>{currentLabel}</span>
       </button>
@@ -122,6 +127,12 @@ export function ThinkingPicker(): JSX.Element | null {
 
 // ---- Agent (Build vs Plan) ---------------------------------------------------
 
+/** One-line taglines for the picker — the full `description`s are for the model. */
+const AGENT_TAGLINE: Record<string, string> = {
+  build: 'Reads, edits, and runs commands',
+  plan: 'Read-only — explores and proposes'
+}
+
 /**
  * Primary-agent selector. Switching to Plan makes the next turn read-only: the
  * harness resolves this agent id, layers its `plan.txt` reminder onto the system
@@ -136,19 +147,18 @@ export function AgentPicker(): JSX.Element {
 
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)} className={triggerClass} title="Agent mode">
-        <span
-          className="h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: active.color }}
-        />
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={triggerClass}
+        title="Agent mode"
+      >
+        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: active.color }} />
         <span>{active.name}</span>
       </button>
       {open && (
-        <div className={popoverClass}>
-          <div className="border-b border-border px-3 py-2 text-[11px] font-medium text-text-subtle">
-            Agent
-          </div>
-          <div className="py-1">
+        <div className={cn(popoverClass, 'w-64')}>
+          <div className="p-1">
             {PRIMARY_AGENTS.map((a) => {
               const selected = a.id === active.id
               return (
@@ -160,32 +170,24 @@ export function AgentPicker(): JSX.Element {
                     setOpen(false)
                   }}
                   className={cn(
-                    'flex w-full items-start gap-2 px-3 py-1.5 text-left transition',
+                    'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition',
                     selected ? 'bg-accent/15' : 'hover:bg-white/5'
                   )}
                 >
-                  <Check
-                    className={cn('mt-0.5 h-3.5 w-3.5 shrink-0', selected ? 'text-accent' : 'opacity-0')}
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: a.color }}
                   />
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-1.5 text-xs font-medium text-text">
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: a.color }}
-                      />
-                      {a.name}
-                      {a.id === DEFAULT_AGENT_ID && (
-                        <span className="text-text-subtle">(default)</span>
-                      )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-xs font-medium text-text">{a.name}</span>
+                    <span className="block truncate text-[11px] text-text-subtle">
+                      {AGENT_TAGLINE[a.id] ?? a.description}
                     </span>
-                    <span className="block text-[11px] text-text-subtle">{a.description}</span>
                   </span>
+                  {selected && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
                 </button>
               )
             })}
-          </div>
-          <div className="border-t border-border px-3 py-1.5 text-[11px] text-text-subtle">
-            Plan is read-only — it explores and proposes without editing files.
           </div>
         </div>
       )}
@@ -235,7 +237,12 @@ export function ContextPicker(): JSX.Element | null {
 
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)} className={triggerClass} title="Context window">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={triggerClass}
+        title="Context window"
+      >
         <span>{formatTokens(current)}</span>
       </button>
       {open && (
@@ -384,60 +391,68 @@ export function ContextMeter(): JSX.Element {
       {open && (
         <div className="absolute bottom-full left-0 z-50 w-72 pb-1.5">
           <div className="animate-pop-in origin-bottom-left overflow-hidden rounded-xl border border-border bg-elevated p-3 shadow-2xl">
-          <div className="mb-1.5 text-xs font-medium text-text">Context Window</div>
-          <div className="mb-1 flex items-baseline justify-between text-[11px] text-text-subtle">
-            <span className="tabular-nums">
-              {formatTokens(used)} {total ? `/ ${formatTokens(total)}` : ''} tokens
-            </span>
-            {total ? <span className="tabular-nums">{pct}%</span> : null}
-          </div>
-          <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-            <span
-              className={cn('h-full', pct >= 90 ? 'bg-danger' : 'bg-accent')}
-              style={{ width: `${pct}%` }}
-            />
-            <span className="h-full bg-accent/30" style={{ width: `${reservePct}%`, backgroundImage: hatch }} />
-          </div>
-          {reserve > 0 && (
-            <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-text-subtle">
-              <span className="h-2.5 w-2.5 rounded-sm bg-accent/30" style={{ backgroundImage: hatch }} />
-              Reserved for response
+            <div className="mb-1.5 text-xs font-medium text-text">Context Window</div>
+            <div className="mb-1 flex items-baseline justify-between text-[11px] text-text-subtle">
+              <span className="tabular-nums">
+                {formatTokens(used)} {total ? `/ ${formatTokens(total)}` : ''} tokens
+              </span>
+              {total ? <span className="tabular-nums">{pct}%</span> : null}
             </div>
-          )}
-
-          {groups.map((g) => (
-            <div key={g.group} className="mt-2.5">
-              <div className="mb-0.5 text-[11px] font-medium text-text-muted">{g.group}</div>
-              {g.items.map((it) => (
-                <div
-                  key={it.label}
-                  className="flex items-center justify-between py-0.5 text-[11px] text-text-subtle"
-                >
-                  <span>{it.label}</span>
-                  <span className="tabular-nums">{fmtShare(it.tokens)}</span>
-                </div>
-              ))}
+            <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+              <span
+                className={cn('h-full', pct >= 90 ? 'bg-danger' : 'bg-accent')}
+                style={{ width: `${pct}%` }}
+              />
+              <span
+                className="h-full bg-accent/30"
+                style={{ width: `${reservePct}%`, backgroundImage: hatch }}
+              />
             </div>
-          ))}
-
-          {total && pct >= 75 && (
-            <div className="mt-2 text-[11px] text-danger/90">Quality may decline as limit nears.</div>
-          )}
-
-          <button
-            type="button"
-            onClick={() => void compactConversation()}
-            disabled={compacting || counted.length === 0}
-            className="press-scale mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-xs text-text hover:border-border-strong hover:bg-elevated disabled:opacity-40"
-          >
-            {compacting ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Compacting…
-              </>
-            ) : (
-              'Compact Conversation'
+            {reserve > 0 && (
+              <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-text-subtle">
+                <span
+                  className="h-2.5 w-2.5 rounded-sm bg-accent/30"
+                  style={{ backgroundImage: hatch }}
+                />
+                Reserved for response
+              </div>
             )}
-          </button>
+
+            {groups.map((g) => (
+              <div key={g.group} className="mt-2.5">
+                <div className="mb-0.5 text-[11px] font-medium text-text-muted">{g.group}</div>
+                {g.items.map((it) => (
+                  <div
+                    key={it.label}
+                    className="flex items-center justify-between py-0.5 text-[11px] text-text-subtle"
+                  >
+                    <span>{it.label}</span>
+                    <span className="tabular-nums">{fmtShare(it.tokens)}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+
+            {total && pct >= 75 && (
+              <div className="mt-2 text-[11px] text-danger/90">
+                Quality may decline as limit nears.
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void compactConversation()}
+              disabled={compacting || counted.length === 0}
+              className="press-scale mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-xs text-text hover:border-border-strong hover:bg-elevated disabled:opacity-40"
+            >
+              {compacting ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Compacting…
+                </>
+              ) : (
+                'Compact Conversation'
+              )}
+            </button>
           </div>
         </div>
       )}
@@ -447,7 +462,10 @@ export function ContextMeter(): JSX.Element {
           <>
             <span className="h-1 w-8 overflow-hidden rounded-full bg-surface-2">
               <span
-                className={cn('block h-full rounded-full', pct >= 90 ? 'bg-danger' : 'bg-accent/70')}
+                className={cn(
+                  'block h-full rounded-full',
+                  pct >= 90 ? 'bg-danger' : 'bg-accent/70'
+                )}
                 style={{ width: `${pct}%` }}
               />
             </span>

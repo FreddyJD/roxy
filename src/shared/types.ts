@@ -292,3 +292,76 @@ export interface AppVersions {
   chrome: string
   node: string
 }
+
+// ---- Usage / cost ------------------------------------------------------------
+
+/**
+ * Token counts for ONE model call. `input`/`output` are fresh (uncached) tokens;
+ * `cacheRead`/`cacheWrite` split out so pricing can charge them at their (cheaper)
+ * rates. `estimated` marks rows we derived from text length rather than a real
+ * provider `usage` frame, so the UI can be honest about precision.
+ */
+export interface TokenUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  reasoning: number
+  estimated: boolean
+}
+
+/** One persisted usage record — a single model call, attributed to a provider/model. */
+export interface UsageRecord extends TokenUsage {
+  id: string
+  chatId: string | null
+  providerId: string
+  model: string
+  /** USD cost priced at record time from the model catalog (0 when price unknown). */
+  cost: number
+  createdAt: number
+}
+
+/** Rolled-up totals for one provider (or model), over a window. */
+export interface UsageBucket {
+  tokens: number
+  cost: number
+  calls: number
+}
+
+/** One day of spend, for the popover's bar graph (oldest → newest). */
+export interface UsageDay {
+  /** Local YYYY-MM-DD. */
+  date: string
+  tokens: number
+  cost: number
+}
+
+/** Per-provider usage summary shown as a tab in the popover. */
+export interface ProviderUsage {
+  providerId: string
+  /** Human label (falls back to the id when the provider was removed). */
+  name: string
+  today: UsageBucket
+  last30d: UsageBucket
+  /** Most-used model over the window, by token volume. */
+  topModel: string | null
+  /** Daily spend for the last 30 days (bar graph). */
+  daily: UsageDay[]
+  /** True if any priced-in record was estimated (drives the "~/estimated" note). */
+  hasEstimates: boolean
+  /** True if any record lacked catalog pricing (cost is a floor, not exact). */
+  hasUnpriced: boolean
+}
+
+/** The whole usage dashboard payload — an "Overview" plus a tab per provider. */
+export interface UsageStats {
+  overview: {
+    today: UsageBucket
+    last30d: UsageBucket
+    topModel: string | null
+    daily: UsageDay[]
+    hasEstimates: boolean
+    hasUnpriced: boolean
+  }
+  providers: ProviderUsage[]
+}

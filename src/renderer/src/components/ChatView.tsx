@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, ChevronUp, FolderOpen, ListTree, Loader2, Repeat, Settings, X } from 'lucide-react'
+import { ChevronRight, FolderOpen, ListTree, Loader2, Repeat, Settings } from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
 import { formatInterval } from '@shared/format'
 import { cn } from '../lib/cn'
@@ -7,15 +7,10 @@ import { MessageBubble } from './MessageBubble'
 import { Composer } from './Composer'
 import { LoopDetailsPane } from './LoopDetailsPane'
 import { SessionInfo } from './SessionInfo'
+import { QueuedMessage } from './QueuedMessage'
+import { UsageMeter } from './UsageMeter'
 import {
   Queue,
-  QueueItem,
-  QueueItemAction,
-  QueueItemActions,
-  QueueItemAttachment,
-  QueueItemContent,
-  QueueItemImage,
-  QueueItemIndicator,
   QueueList,
   QueueSection,
   QueueSectionContent,
@@ -39,8 +34,6 @@ export function ChatView(): JSX.Element {
   const submit = useRoxyStore((s) => s.submit)
   const stop = useRoxyStore((s) => s.stop)
   const queue = useRoxyStore((s) => s.queue)
-  const removeQueued = useRoxyStore((s) => s.removeQueued)
-  const moveQueued = useRoxyStore((s) => s.moveQueued)
   const newSession = useRoxyStore((s) => s.newSession)
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const chats = useRoxyStore((s) => s.chats)
@@ -132,7 +125,8 @@ export function ChatView(): JSX.Element {
             <Repeat className="h-4 w-4 shrink-0 text-text-muted" />
             <span className="shrink-0 text-sm font-medium">{activeChat.title}</span>
             <span className="truncate text-xs text-text-subtle">
-              every {formatInterval(activeLoop.intervalMinutes)} · {activeLoop.enabled ? 'running' : 'paused'}
+              every {formatInterval(activeLoop.intervalMinutes)} ·{' '}
+              {activeLoop.enabled ? 'running' : 'paused'}
             </span>
           </div>
         ) : (
@@ -180,20 +174,23 @@ export function ChatView(): JSX.Element {
             )}
           </div>
         )}
-        {activeLoop && (
-          <button
-            onClick={() => setLoopPaneOpen((o) => !o)}
-            title="Loop settings"
-            className={cn(
-              'press-scale flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs',
-              loopPaneOpen
-                ? 'bg-elevated text-text'
-                : 'text-text-muted hover:bg-white/5 hover:text-text'
-            )}
-          >
-            <Settings className="h-3.5 w-3.5" /> Settings
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {activeLoop && (
+            <button
+              onClick={() => setLoopPaneOpen((o) => !o)}
+              title="Loop settings"
+              className={cn(
+                'press-scale flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs',
+                loopPaneOpen
+                  ? 'bg-elevated text-text'
+                  : 'text-text-muted hover:bg-white/5 hover:text-text'
+              )}
+            >
+              <Settings className="h-3.5 w-3.5" /> Settings
+            </button>
+          )}
+          <UsageMeter />
+        </div>
       </header>
 
       {activeChat.kind === 'main' && infoOpen && <SessionInfo chat={activeChat} />}
@@ -204,7 +201,8 @@ export function ChatView(): JSX.Element {
             {activeLoop ? (
               <p className="max-w-xs text-sm text-text-muted">
                 Loop <span className="font-medium text-text">{activeChat.title}</span> runs every{' '}
-                {formatInterval(activeLoop.intervalMinutes)}. First heartbeat soon — or type to intervene.
+                {formatInterval(activeLoop.intervalMinutes)}. First heartbeat soon — or type to
+                intervene.
               </p>
             ) : (
               <p className="text-sm text-text-muted"></p>
@@ -220,9 +218,7 @@ export function ChatView(): JSX.Element {
             {messages.slice(-visibleCount).map((message) => (
               <MessageBubble key={message.id} role={message.role} parts={message.parts} />
             ))}
-            {streaming !== null && (
-              <MessageBubble role="assistant" parts={streaming} streaming />
-            )}
+            {streaming !== null && <MessageBubble role="assistant" parts={streaming} streaming />}
           </div>
         )}
       </div>
@@ -239,54 +235,15 @@ export function ChatView(): JSX.Element {
                     icon={<ListTree className="h-3.5 w-3.5 text-text-subtle" />}
                   />
                   {sending && (
-                    <span className="ml-auto text-[10px] text-text-subtle">runs after this reply</span>
+                    <span className="ml-auto text-[10px] text-text-subtle">
+                      runs after this reply
+                    </span>
                   )}
                 </QueueSectionTrigger>
                 <QueueSectionContent>
                   <QueueList>
                     {queue.map((item, i) => (
-                      <QueueItem key={item.id}>
-                        <QueueItemIndicator />
-                        <div className="min-w-0 flex-1">
-                          {item.content && <QueueItemContent>{item.content}</QueueItemContent>}
-                          {item.images && item.images.length > 0 && (
-                            <QueueItemAttachment>
-                              {item.images.map((img, j) => (
-                                <QueueItemImage key={j} src={img.dataUrl} alt={img.name ?? 'image'} />
-                              ))}
-                            </QueueItemAttachment>
-                          )}
-                          {!item.content && (!item.images || item.images.length === 0) && (
-                            <QueueItemContent className="italic text-text-subtle">
-                              (empty)
-                            </QueueItemContent>
-                          )}
-                        </div>
-                        <QueueItemActions>
-                          <QueueItemAction
-                            onClick={() => moveQueued(item.id, 'up')}
-                            disabled={i === 0}
-                            title="Move up (run sooner)"
-                            className="disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-subtle"
-                          >
-                            <ChevronUp className="h-3.5 w-3.5" />
-                          </QueueItemAction>
-                          <QueueItemAction
-                            onClick={() => moveQueued(item.id, 'down')}
-                            disabled={i === queue.length - 1}
-                            title="Move down"
-                            className="disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-subtle"
-                          >
-                            <ChevronDown className="h-3.5 w-3.5" />
-                          </QueueItemAction>
-                          <QueueItemAction
-                            onClick={() => removeQueued(item.id)}
-                            title="Remove from queue"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </QueueItemAction>
-                        </QueueItemActions>
-                      </QueueItem>
+                      <QueuedMessage key={item.id} item={item} index={i} total={queue.length} />
                     ))}
                   </QueueList>
                 </QueueSectionContent>

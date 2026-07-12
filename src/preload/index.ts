@@ -107,9 +107,14 @@ const roxy: RoxyApi = {
   },
   queue: {
     list: (chatId) => ipcRenderer.invoke(CHANNELS.queueList, chatId),
-    add: (chatId, content, images) => ipcRenderer.invoke(CHANNELS.queueAdd, chatId, content, images),
+    add: (chatId, content, images) =>
+      ipcRenderer.invoke(CHANNELS.queueAdd, chatId, content, images),
     remove: (id) => ipcRenderer.invoke(CHANNELS.queueRemove, id),
-    reorder: (chatId, ids) => ipcRenderer.invoke(CHANNELS.queueReorder, chatId, ids)
+    reorder: (chatId, ids) => ipcRenderer.invoke(CHANNELS.queueReorder, chatId, ids),
+    update: (id, content, images) => ipcRenderer.invoke(CHANNELS.queueUpdate, id, content, images)
+  },
+  usage: {
+    stats: () => ipcRenderer.invoke(CHANNELS.usageStats)
   },
   llm: {
     start: (input) => ipcRenderer.invoke(CHANNELS.llmStart, input),

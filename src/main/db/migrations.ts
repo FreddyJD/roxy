@@ -151,5 +151,30 @@ export const MIGRATIONS: string[] = [
       FROM chats
       WHERE workspace_path IS NOT NULL
       GROUP BY workspace_path;
+  `,
+
+  // ---- v14: per-model-call token usage (powers the cost/usage dashboard) ----
+  // One row per model call (main turn, subagent, or loop). Costs are priced at
+  // record time from the models.dev catalog so historical spend never shifts when
+  // prices change; tokens are real provider `usage` when available, else an
+  // estimate (estimated=1). chat_id is nullable + ON DELETE SET NULL so deleting a
+  // session keeps its spend in the lifetime totals.
+  /* sql */ `
+    CREATE TABLE usage (
+      id          TEXT PRIMARY KEY,
+      chat_id     TEXT REFERENCES chats(id) ON DELETE SET NULL,
+      provider_id TEXT NOT NULL,
+      model       TEXT NOT NULL,
+      input       INTEGER NOT NULL DEFAULT 0,
+      output      INTEGER NOT NULL DEFAULT 0,
+      cache_read  INTEGER NOT NULL DEFAULT 0,
+      cache_write INTEGER NOT NULL DEFAULT 0,
+      reasoning   INTEGER NOT NULL DEFAULT 0,
+      cost        REAL NOT NULL DEFAULT 0,
+      estimated   INTEGER NOT NULL DEFAULT 0,
+      created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX idx_usage_created ON usage(created_at);
+    CREATE INDEX idx_usage_provider ON usage(provider_id, created_at);
   `
 ]

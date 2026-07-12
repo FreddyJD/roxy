@@ -18,7 +18,8 @@ import type {
   ReasoningEffort,
   SessionKind,
   ToolDiff,
-  ToolResult
+  ToolResult,
+  UsageStats
 } from './types'
 import type { McpServerConfig } from './mcp'
 
@@ -143,9 +144,22 @@ export interface LlmResult {
 export type LlmEvent =
   | { type: 'text'; delta: string }
   | { type: 'reasoning'; delta: string }
-  | { type: 'tool-start'; callId: string; tool: string; title?: string; input?: Record<string, unknown> }
+  | {
+      type: 'tool-start'
+      callId: string
+      tool: string
+      title?: string
+      input?: Record<string, unknown>
+    }
   | { type: 'tool-delta'; callId: string; chunk: string }
-  | { type: 'tool-end'; callId: string; output: string; ok: boolean; image?: string; diff?: ToolDiff }
+  | {
+      type: 'tool-end'
+      callId: string
+      output: string
+      ok: boolean
+      image?: string
+      diff?: ToolDiff
+    }
 
 export interface LlmDelta {
   requestId: string
@@ -176,6 +190,20 @@ export interface ModelInfo {
   contextLimit?: number
   /** Max output tokens, when known. */
   outputLimit?: number
+  /** USD price per 1M tokens (from models.dev), when known — powers cost math. */
+  cost?: ModelCost
+}
+
+/** USD price per 1,000,000 tokens, split by kind (as models.dev reports it). */
+export interface ModelCost {
+  /** Fresh input (prompt) tokens. */
+  input?: number
+  /** Output (completion) tokens. */
+  output?: number
+  /** Cache-read (cached input) tokens — usually far cheaper than `input`. */
+  cacheRead?: number
+  /** Cache-write tokens. */
+  cacheWrite?: number
 }
 
 /** Navigation state of the Roxy browser, for the URL-bar toolbar. */
@@ -292,7 +320,6 @@ export interface ConfigImportResult {
   error?: string
 }
 
-
 export interface RoxyApi {
   settings: {
     getAll(): Promise<AppSettings>
@@ -406,6 +433,12 @@ export interface RoxyApi {
     remove(id: string): Promise<void>
     /** Reorder a chat's queue; `ids` is the full queue front-to-back. */
     reorder(chatId: string, ids: string[]): Promise<void>
+    /** Edit a queued item in place — new text + images, same queue position. */
+    update(id: string, content: string, images?: QueueImage[]): Promise<QueueItem | undefined>
+  }
+  usage: {
+    /** The token-usage + cost dashboard payload for the last 30 days. */
+    stats(): Promise<UsageStats>
   }
   llm: {
     /** Stream a completion; text deltas arrive via onDelta. Resolves when done. */

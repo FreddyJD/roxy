@@ -290,7 +290,7 @@ export function Sidebar(): JSX.Element {
 
   if (railed) {
     return (
-      <aside className="flex h-full w-14 shrink-0 flex-col items-center border-r border-border bg-surface">
+      <aside className="sidebar-rail flex h-full shrink-0 flex-col items-center border-r border-border bg-surface">
         <div className="titlebar reserve-controls-left h-[54px] w-full shrink-0" />
         <div className="flex flex-col items-center gap-1 pt-1">
           <button
@@ -436,7 +436,10 @@ export function Sidebar(): JSX.Element {
                     }}
                   >
                     <div
-                      className={cn('flex items-center gap-1 px-1', projectDrag && 'cursor-grabbing')}
+                      className={cn(
+                        'flex items-center gap-1 px-1',
+                        projectDrag && 'cursor-grabbing'
+                      )}
                       draggable={canDragProject}
                       onDragStart={(e) => {
                         if (!canDragProject) return
