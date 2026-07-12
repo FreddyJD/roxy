@@ -33,6 +33,7 @@ import { pruneToolMessages, KEEP_RECENT_TOKENS } from '../../shared/context'
 import { DEFAULT_AGENT_ID } from '../../shared/agents'
 import * as repo from '../db/repo'
 import { listModels } from './models'
+import { pickDefaultModel } from '../../shared/models'
 import { runSessionTurn } from './session-turn'
 import { MAX_FRAME_BYTES, parseFrame, type HostFrame, type RemoteSessionInfo } from './remote-protocol'
 /**
@@ -468,16 +469,21 @@ async function runTurn(active: Share, sessionId: string, text: string, announce:
       sendFrameFor(active, { t: 'error', message: 'No provider is connected on the desktop.' })
       return
     }
-    const model =
-      settings.activeModel ||
-      provider.defaultModel ||
-      (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
-    let info: ModelInfo | undefined
+    // Fetch the catalog first so we can pick the provider's latest tool-capable
+    // model when none was explicitly chosen (mirrors the renderer). A hardcoded
+    // id may not exist on this provider, which would 404 the first phone turn.
+    let catalog: ModelInfo[] = []
     try {
-      info = (await listModels(provider.id)).find((m) => m.id === model)
+      catalog = await listModels(provider.id)
     } catch {
       // Offline model catalog — fall back to conservative defaults below.
     }
+    const model =
+      settings.activeModel ||
+      provider.defaultModel ||
+      pickDefaultModel(catalog) ||
+      (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
+    const info = catalog.find((m) => m.id === model)
     const modelContext = info?.contextLimit ?? 128_000
     const contextBudget = Math.min(
       settings.contextLimit ?? Math.min(modelContext, 200_000),

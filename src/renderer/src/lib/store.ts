@@ -22,6 +22,7 @@ import { selectPromptName, buildEnvironment, assembleSystemPrompt } from '@share
 import { PROMPT_TEXT, AGENT_PROMPT_TEXT } from '@shared/prompt-text'
 import { reconstructTurn, REPLAY_OUTPUT_CAP } from '@shared/tool-history'
 import { isOverflow, pruneToolMessages, KEEP_RECENT_TOKENS } from '@shared/context'
+import { pickDefaultModel } from '@shared/models'
 import { uniqueSlug } from '@shared/slugs'
 import { api } from './api'
 import type { ComposerImage } from './images'
@@ -629,14 +630,19 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const provider =
       get().providers.find((p) => p.id === settings?.activeProviderId) ?? get().providers[0] ?? null
     if (provider && (provider.hasCredential || provider.auth === 'none')) {
-      const model =
-        settings?.activeModel ||
-        provider.defaultModel ||
-        (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
       // Resolve the model's capabilities (reasoning support + context window) so
       // we only send reasoning params when valid and cut history to the budget.
       await get().ensureModels(provider.id)
-      const info = get().modelCatalog[provider.id]?.find((m) => m.id === model)
+      const catalog = get().modelCatalog[provider.id] ?? []
+      // No model chosen? Take the provider's latest (tool-capable) model instead
+      // of a hardcoded id that may not exist on this provider — the user never
+      // has to type a model name for a connected provider to just work.
+      const model =
+        settings?.activeModel ||
+        provider.defaultModel ||
+        pickDefaultModel(catalog) ||
+        (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
+      const info = catalog.find((m) => m.id === model)
       const modelContext = info?.contextLimit ?? 128_000
       const contextBudget = Math.min(
         settings?.contextLimit ?? Math.min(modelContext, 200_000),
@@ -838,9 +844,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const provider =
       providers.find((p) => p.id === settings?.activeProviderId) ?? providers[0] ?? null
     if (!provider || !(provider.hasCredential || provider.auth === 'none')) return
+    await get().ensureModels(provider.id)
     const model =
       settings?.activeModel ||
       provider.defaultModel ||
+      pickDefaultModel(get().modelCatalog[provider.id] ?? []) ||
       (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
     set((s) => ({ compactingChats: { ...s.compactingChats, [chatId]: true } }))
     try {

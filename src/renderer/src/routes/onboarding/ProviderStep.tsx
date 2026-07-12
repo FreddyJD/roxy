@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, Check, ChevronRight, Copy, ExternalLink, Loader2, Search } from 'lucide-react'
 import { AUTH_LABELS, SEED_PROVIDERS, isConnectableNow, resolveSeed } from '@shared/providers'
+import { pickDefaultModel } from '@shared/models'
 import type { DeviceFlowStart, SeedProvider } from '@shared/types'
 import { api } from '../../lib/api'
 import { useRoxyStore } from '../../lib/store'
@@ -187,7 +188,18 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
         baseURL: baseURL.trim() || undefined,
         defaultModel: model.trim() || undefined
       })
-      await api.settings.setActiveProvider(provider.id, model.trim() || provider.defaultModel || null)
+      // No model typed? Auto-pick the provider's latest (tool-capable) model so
+      // the composer's picker shows a real model right away and the first send
+      // just works — no one has to know a model id to get started.
+      let chosen = model.trim() || provider.defaultModel || null
+      if (!chosen) {
+        try {
+          chosen = pickDefaultModel(await api.models.list(provider.id)) ?? null
+        } catch {
+          // Offline catalog — leave it null; send-time resolution still covers it.
+        }
+      }
+      await api.settings.setActiveProvider(provider.id, chosen)
       await refreshProviders()
       onClose()
     } catch (e) {
@@ -268,7 +280,7 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
                 <Input
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  placeholder="e.g. gpt-4o, claude-3-5-sonnet"
+                  placeholder="Leave blank to use the latest model"
                 />
               </Field>
               {error && <p className="text-xs text-danger">{error}</p>}

@@ -5,6 +5,7 @@
 import { TOOLS, getTool, resolveToolIds, TOOL_CATEGORIES } from '../src/shared/tools'
 import { AGENTS, getAgent, PRIMARY_AGENTS, SUBAGENTS, DEFAULT_AGENT_ID } from '../src/shared/agents'
 import { SEED_PROVIDERS, resolveSeed, isConnectableNow } from '../src/shared/providers'
+import { pickDefaultModel } from '../src/shared/models'
 import { randomSlug, uniqueSlug } from '../src/shared/slugs'
 import { formatInterval } from '../src/shared/format'
 import {
@@ -199,6 +200,27 @@ check(
   typeof resolveSeed('__x__').wire === 'string'
 )
 check('isConnectableNow returns boolean', typeof isConnectableNow(SEED_PROVIDERS[0]) === 'boolean')
+
+// ---- default model auto-pick ----
+const mkModel = (id: string, toolCall = false): import('../src/shared/api').ModelInfo => ({
+  id,
+  name: id,
+  reasoning: false,
+  toolCall
+})
+check('pickDefaultModel: empty catalog → undefined', pickDefaultModel([]) === undefined)
+check(
+  'pickDefaultModel: prefers the first tool-capable model over an earlier non-tool one',
+  pickDefaultModel([mkModel('a-new', false), mkModel('b-tools', true)]) === 'b-tools'
+)
+check(
+  'pickDefaultModel: no tool-capable model → newest (first) overall',
+  pickDefaultModel([mkModel('newest'), mkModel('older')]) === 'newest'
+)
+check(
+  'pickDefaultModel: first entry wins when it is already tool-capable',
+  pickDefaultModel([mkModel('latest', true), mkModel('older', true)]) === 'latest'
+)
 
 // ---- structured tool history (Phase 5) ----
 const asMsg = (role: 'user' | 'assistant', parts: MessagePart[]): Message => ({
