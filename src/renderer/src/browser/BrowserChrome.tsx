@@ -82,7 +82,7 @@ export function BrowserChrome(): JSX.Element {
             onDragEnd={() => setDragId(null)}
             title={t.url}
             className={cn(
-              'group relative flex h-7 min-w-[120px] max-w-[220px] shrink-0 cursor-default items-center gap-2 rounded-t-lg px-3 text-xs transition [-webkit-app-region:no-drag]',
+              'group relative flex h-7 min-w-[120px] max-w-[220px] shrink-0 cursor-default items-center gap-2 rounded-t-lg px-3 text-xs transition-colors [-webkit-app-region:no-drag]',
               dragId === t.id && 'opacity-50',
               t.active
                 ? 'bg-elevated text-text'
@@ -99,7 +99,7 @@ export function BrowserChrome(): JSX.Element {
               }}
               title="Close tab"
               className={cn(
-                'flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-text-subtle transition hover:bg-border-strong hover:text-text',
+                'flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-text-subtle transition-colors hover:bg-border-strong hover:text-text',
                 t.active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
               )}
             >
@@ -111,7 +111,7 @@ export function BrowserChrome(): JSX.Element {
           type="button"
           onClick={() => void api.browser.newTab()}
           title="New tab"
-          className="mb-0.5 ml-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted transition hover:bg-surface-2 hover:text-text"
+          className="press-scale mb-0.5 ml-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-surface-2 hover:text-text"
         >
           <Plus className="h-4 w-4" />
         </button>
@@ -151,7 +151,7 @@ export function BrowserChrome(): JSX.Element {
             placeholder="Search or enter a URL"
             spellCheck={false}
             autoComplete="off"
-            className="h-8 w-full rounded-full border border-border bg-surface-2 pl-9 pr-3.5 text-xs text-text outline-none transition placeholder:text-text-subtle focus:border-accent focus:bg-surface focus:ring-1 focus:ring-accent/35"
+            className="h-8 w-full rounded-full border border-border bg-surface-2 pl-9 pr-3.5 text-xs text-text outline-none transition-colors placeholder:text-text-subtle focus:border-accent focus:bg-surface focus:ring-1 focus:ring-accent/35"
           />
         </div>
       </div>
@@ -176,7 +176,7 @@ function NavButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted transition hover:bg-surface-2 hover:text-text disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-text-muted"
+      className="press-scale flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-surface-2 hover:text-text disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-text-muted"
     >
       {children}
     </button>

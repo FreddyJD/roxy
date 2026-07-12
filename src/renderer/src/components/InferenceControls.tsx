@@ -49,9 +49,9 @@ function useActiveModelInfo(): ModelInfo | undefined {
 }
 
 const triggerClass =
-  'flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted transition hover:border-border-strong hover:text-text'
+  'press-scale flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted hover:border-border-strong hover:text-text'
 const popoverClass =
-  'absolute bottom-full left-0 z-50 mb-2 w-72 overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl'
+  'animate-pop-in absolute bottom-full left-0 z-50 mb-2 w-72 origin-bottom-left overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl'
 
 // ---- Thinking effort ---------------------------------------------------------
 
@@ -383,7 +383,7 @@ export function ContextMeter(): JSX.Element {
     >
       {open && (
         <div className="absolute bottom-full left-0 z-50 w-72 pb-1.5">
-          <div className="overflow-hidden rounded-xl border border-border bg-elevated p-3 shadow-2xl">
+          <div className="animate-pop-in origin-bottom-left overflow-hidden rounded-xl border border-border bg-elevated p-3 shadow-2xl">
           <div className="mb-1.5 text-xs font-medium text-text">Context Window</div>
           <div className="mb-1 flex items-baseline justify-between text-[11px] text-text-subtle">
             <span className="tabular-nums">
@@ -428,7 +428,7 @@ export function ContextMeter(): JSX.Element {
             type="button"
             onClick={() => void compactConversation()}
             disabled={compacting || counted.length === 0}
-            className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-xs text-text transition hover:border-border-strong hover:bg-elevated disabled:opacity-40"
+            className="press-scale mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-xs text-text hover:border-border-strong hover:bg-elevated disabled:opacity-40"
           >
             {compacting ? (
               <>
@@ -442,7 +442,7 @@ export function ContextMeter(): JSX.Element {
         </div>
       )}
 
-      <div className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted transition hover:border-border-strong hover:text-text">
+      <div className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted transition-colors hover:border-border-strong hover:text-text">
         {total ? (
           <>
             <span className="h-1 w-8 overflow-hidden rounded-full bg-surface-2">

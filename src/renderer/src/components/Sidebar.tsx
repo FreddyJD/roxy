@@ -296,14 +296,14 @@ export function Sidebar(): JSX.Element {
           <button
             onClick={() => setRailed(false)}
             title="Expand sidebar"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <PanelLeftOpen className="h-4 w-4" />
           </button>
           <button
             onClick={newSession}
             title="New project"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <FolderOpen className="h-4 w-4" />
           </button>
@@ -312,7 +312,7 @@ export function Sidebar(): JSX.Element {
           <button
             onClick={() => setRemoteOpen(true)}
             title="Remote Workspace"
-            className="relative flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+            className="relative press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <MonitorSmartphone className="h-4 w-4" />
             {remoteDot && (
@@ -327,21 +327,21 @@ export function Sidebar(): JSX.Element {
           <button
             onClick={() => navigate('/skills')}
             title="Skills"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <Lightbulb className="h-4 w-4" />
           </button>
           <button
             onClick={() => navigate('/mcp')}
             title="MCP Servers"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <Plug className="h-4 w-4" />
           </button>
           <button
             onClick={() => navigate('/settings')}
             title="Settings"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <SettingsIcon className="h-4 w-4" />
           </button>
@@ -369,14 +369,14 @@ export function Sidebar(): JSX.Element {
           <button
             onClick={() => navigate('/settings')}
             title="Settings"
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-7 w-7 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <SettingsIcon className="h-4 w-4" />
           </button>
           <button
             onClick={() => setRailed(true)}
             title="Collapse sidebar"
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-7 w-7 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <PanelLeftClose className="h-4 w-4" />
           </button>
@@ -387,7 +387,7 @@ export function Sidebar(): JSX.Element {
         <button
           onClick={newSession}
           title="Open a folder as a new project"
-          className="flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-white text-sm font-medium text-black transition hover:bg-white/90"
+          className="press-scale flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-white text-sm font-medium text-black hover:bg-white/90"
         >
           <FolderOpen className="h-4 w-4" /> New project
         </button>
@@ -452,11 +452,11 @@ export function Sidebar(): JSX.Element {
                     >
                       <button
                         onClick={() => toggleProject(project.path)}
-                        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs font-medium text-text-muted transition hover:text-text"
+                        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs font-medium text-text-muted transition-colors hover:text-text"
                       >
                         <ChevronRight
                           className={cn(
-                            'h-3 w-3 shrink-0 transition-transform',
+                            'h-3 w-3 shrink-0 transition-transform duration-200 ease-out-quart',
                             !isCollapsed && 'rotate-90'
                           )}
                         />
@@ -473,20 +473,20 @@ export function Sidebar(): JSX.Element {
                             }
                             title="New session or loop"
                             className={cn(
-                              'flex h-5 w-5 items-center justify-center rounded text-text-subtle transition hover:bg-white/5 hover:text-text',
+                              'flex h-5 w-5 items-center justify-center rounded text-text-subtle transition-colors hover:bg-white/5 hover:text-text',
                               addMenuFor === project.path && 'bg-white/5 text-text'
                             )}
                           >
                             <Plus className="h-3.5 w-3.5" />
                           </button>
                           {addMenuFor === project.path && (
-                            <div className="absolute right-0 top-6 z-30 w-36 overflow-hidden rounded-lg border border-border bg-elevated py-1 shadow-lg">
+                            <div className="animate-pop-in absolute right-0 top-6 z-30 w-36 origin-top-right overflow-hidden rounded-lg border border-border bg-elevated py-1 shadow-lg">
                               <button
                                 onClick={() => {
                                   setAddMenuFor(null)
                                   void newSessionInProject(project.path)
                                 }}
-                                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-text-muted transition hover:bg-white/5 hover:text-text"
+                                className="press-scale flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-text-muted hover:bg-white/5 hover:text-text"
                               >
                                 <MessageSquarePlus className="h-3.5 w-3.5 shrink-0" />
                                 Session
@@ -496,7 +496,7 @@ export function Sidebar(): JSX.Element {
                                   setAddMenuFor(null)
                                   setLoopDialogFor({ path: project.path, name: project.name })
                                 }}
-                                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-text-muted transition hover:bg-white/5 hover:text-text"
+                                className="press-scale flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-text-muted hover:bg-white/5 hover:text-text"
                               >
                                 <Repeat className="h-3.5 w-3.5 shrink-0" />
                                 Loop
@@ -508,7 +508,7 @@ export function Sidebar(): JSX.Element {
                         <button
                           onClick={() => void newSessionInProject(project.path)}
                           title="New session in this project"
-                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle transition hover:bg-white/5 hover:text-text"
+                          className="press-scale flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle hover:bg-white/5 hover:text-text"
                         >
                           <Plus className="h-3.5 w-3.5" />
                         </button>
@@ -522,7 +522,7 @@ export function Sidebar(): JSX.Element {
                               <li key={loop.id}>
                                 <div
                                   className={cn(
-                                    'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition',
+                                    'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors',
                                     loop.chatId === activeChatId
                                       ? 'bg-elevated text-text'
                                       : 'text-text-muted hover:bg-white/5 hover:text-text'
@@ -543,7 +543,7 @@ export function Sidebar(): JSX.Element {
                                   <button
                                     onClick={() => removeLoop(loop.id)}
                                     title="Delete loop"
-                                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover:opacity-100"
+                                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-danger group-hover:opacity-100"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </button>
@@ -604,7 +604,7 @@ export function Sidebar(): JSX.Element {
                               >
                                 <div
                                   className={cn(
-                                    'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition',
+                                    'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors',
                                     dragId && 'cursor-grabbing',
                                     chat.id === activeChatId
                                       ? 'bg-elevated text-text'
@@ -641,7 +641,7 @@ export function Sidebar(): JSX.Element {
                                     <button
                                       onClick={() => toggleSubs(chat.id)}
                                       title={`${subs.length} subagent${subs.length === 1 ? '' : 's'} — tap to ${subsOpen ? 'hide' : 'view'}`}
-                                      className="flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-surface-2 px-1 text-[10px] font-medium tabular-nums text-text-subtle transition hover:text-text"
+                                      className="flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-surface-2 px-1 text-[10px] font-medium tabular-nums text-text-subtle transition-colors hover:text-text"
                                     >
                                       {subs.length}
                                     </button>
@@ -649,7 +649,7 @@ export function Sidebar(): JSX.Element {
                                   <button
                                     onClick={() => deleteChat(chat.id)}
                                     title="Delete session"
-                                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover:opacity-100"
+                                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-danger group-hover:opacity-100"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </button>
@@ -660,7 +660,7 @@ export function Sidebar(): JSX.Element {
                                       <li key={sub.id}>
                                         <div
                                           className={cn(
-                                            'group/sub flex items-center gap-2 rounded-lg px-2 py-1 text-xs transition',
+                                            'group/sub flex items-center gap-2 rounded-lg px-2 py-1 text-xs transition-colors',
                                             sub.id === activeChatId
                                               ? 'bg-elevated text-text'
                                               : 'text-text-muted hover:bg-white/5 hover:text-text'
@@ -691,7 +691,7 @@ export function Sidebar(): JSX.Element {
                                           <button
                                             onClick={() => deleteChat(sub.id)}
                                             title="Delete subagent session"
-                                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle opacity-0 transition hover:bg-white/5 hover:text-danger group-hover/sub:opacity-100"
+                                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-danger group-hover/sub:opacity-100"
                                           >
                                             <Trash2 className="h-3 w-3" />
                                           </button>
@@ -733,7 +733,7 @@ export function Sidebar(): JSX.Element {
         onMouseDown={startResize}
         onDoubleClick={() => setWidth(DEFAULT_WIDTH)}
         title="Drag to resize · double-click to reset"
-        className="absolute inset-y-0 right-0 z-20 w-1 cursor-col-resize transition hover:bg-accent/50"
+        className="absolute inset-y-0 right-0 z-20 w-1 cursor-col-resize transition-colors hover:bg-accent/50"
       />
     </aside>
   )
@@ -797,7 +797,7 @@ function CustomizeNav({
           <button
             key={it.label}
             onClick={it.onClick}
-            className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm text-text-muted transition hover:bg-white/5 hover:text-text"
+            className="press-scale flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm text-text-muted hover:bg-white/5 hover:text-text"
           >
             <it.icon className="h-4 w-4 shrink-0 opacity-80" />
             <span className="flex-1 text-left">{it.label}</span>

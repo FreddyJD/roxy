@@ -148,11 +148,11 @@ export function ToolCall({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left hover:bg-elevated"
+        className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
       >
         <ChevronRight
           className={cn(
-            'h-3.5 w-3.5 shrink-0 text-text-subtle transition-transform',
+            'h-3.5 w-3.5 shrink-0 text-text-subtle transition-transform duration-200 ease-out-quart',
             open && 'rotate-90'
           )}
         />
@@ -170,7 +170,7 @@ export function ToolCall({
         </span>
       </button>
       {open && diff ? (
-        <div className="max-h-96 overflow-auto border-t border-border bg-surface">
+        <div className="animate-fade-in max-h-96 overflow-auto border-t border-border bg-surface">
           <Suspense
             fallback={
               <div className="px-3 py-2 font-mono text-xs text-text-subtle">Loading diff…</div>
@@ -180,7 +180,7 @@ export function ToolCall({
           </Suspense>
         </div>
       ) : open && tool === 'read' && state === 'done' && body && !image ? (
-        <div className="max-h-96 overflow-auto border-t border-border bg-surface">
+        <div className="animate-fade-in max-h-96 overflow-auto border-t border-border bg-surface">
           <Suspense
             fallback={<div className="px-3 py-2 font-mono text-xs text-text-subtle">Loading…</div>}
           >
@@ -190,7 +190,7 @@ export function ToolCall({
       ) : open && (tool === 'bash' || tool === 'bash_output') ? (
         <TerminalOutput text={body} state={state} />
       ) : open ? (
-        <pre className="max-h-72 overflow-auto border-t border-border bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
+        <pre className="animate-fade-in max-h-72 overflow-auto border-t border-border bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
           {body || (state === 'running' ? 'Running…' : '(no output)')}
         </pre>
       ) : null}

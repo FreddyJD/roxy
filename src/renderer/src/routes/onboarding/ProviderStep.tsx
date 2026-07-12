@@ -95,7 +95,7 @@ function RoxyHero({
   return (
     <button
       onClick={onClick}
-      className="group mt-6 flex w-full items-center gap-4 overflow-hidden rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 via-accent/5 to-transparent p-5 text-left transition hover:border-accent/70 hover:from-accent/25"
+      className="group mt-6 flex w-full items-center gap-4 overflow-hidden rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 via-accent/5 to-transparent p-5 text-left transition-colors hover:border-accent/70 hover:from-accent/25"
     >
       <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-accent/30 bg-surface-2 shadow-sm">
         <ProviderLogo id="roxy" name="Roxy" size={44} />
@@ -116,7 +116,7 @@ function RoxyHero({
           <Check className="h-4 w-4" /> Connected
         </span>
       ) : (
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-white transition group-hover:brightness-110">
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-white transition-[filter] group-hover:brightness-110">
           Use Roxy <ArrowRight className="h-4 w-4" />
         </span>
       )}
@@ -136,7 +136,7 @@ function ProviderRow({
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-white/5"
+      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/5"
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-2">
         <ProviderLogo id={seed.id} name={seed.name} size={20} />
@@ -201,12 +201,12 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-bg">
+    <div className="animate-fade-in fixed inset-0 z-50 flex flex-col bg-bg">
       <header className="titlebar reserve-controls-left reserve-controls-right flex h-14 shrink-0 items-center gap-3 border-b border-border px-5">
         <button
           onClick={onClose}
           title="Back"
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
@@ -247,7 +247,7 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
                 <button
                   type="button"
                   onClick={() => void api.system.openExternal('https://roxy.gg/dashboard')}
-                  className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-accent transition hover:underline"
+                  className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-accent transition-colors hover:underline"
                 >
                   Get an API key from your roxy.gg dashboard
                   <ExternalLink className="h-3 w-3" />
@@ -369,12 +369,12 @@ function CopilotSetup({ onConnected }: { onConnected: () => void }): JSX.Element
       </div>
       <button
         onClick={copyCode}
-        className="group flex items-center gap-3 rounded-xl border border-border bg-surface-2 px-5 py-3 transition hover:border-border-strong"
+        className="group flex items-center gap-3 rounded-xl border border-border bg-surface-2 px-5 py-3 transition-colors hover:border-border-strong"
       >
         <span className="font-mono text-2xl font-semibold tracking-[0.3em] text-text">
           {flow?.userCode ?? '••••-••••'}
         </span>
-        <Copy className="h-4 w-4 text-text-subtle transition group-hover:text-text" />
+        <Copy className="h-4 w-4 text-text-subtle transition-colors group-hover:text-text" />
       </button>
       <span className="text-xs text-text-subtle">{copied ? 'Copied!' : 'Click the code to copy'}</span>
       <Button variant="secondary" onClick={() => flow && api.system.openExternal(flow.verificationUri)}>

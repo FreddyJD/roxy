@@ -88,16 +88,19 @@ function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean 
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-text-subtle transition hover:text-text-muted"
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-text-subtle transition-colors hover:text-text-muted"
       >
         <Brain className={cn('h-3.5 w-3.5 shrink-0', streaming && 'animate-pulse text-accent')} />
         <span className="font-medium">{streaming ? 'Thinking…' : 'Reasoning'}</span>
         <ChevronRight
-          className={cn('ml-auto h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
+          className={cn(
+            'ml-auto h-3.5 w-3.5 transition-transform duration-200 ease-out-quart',
+            expanded && 'rotate-90'
+          )}
         />
       </button>
       {expanded && (
-        <div className="whitespace-pre-wrap break-words border-t border-border/60 px-3 py-2 text-xs italic leading-relaxed text-text-muted">
+        <div className="animate-fade-in whitespace-pre-wrap break-words border-t border-border/60 px-3 py-2 text-xs italic leading-relaxed text-text-muted">
           {text || '…'}
         </div>
       )}

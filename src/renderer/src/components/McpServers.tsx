@@ -221,7 +221,7 @@ export function McpServers({ showBackup = false }: { showBackup?: boolean } = {}
       ) : (
         <button
           onClick={() => setShowAdd(true)}
-          className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface/40 p-3.5 text-sm text-text-muted transition hover:border-border-strong hover:bg-surface hover:text-text"
+          className="press-scale flex items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface/40 p-3.5 text-sm text-text-muted hover:border-border-strong hover:bg-surface hover:text-text"
         >
           <Plus className="h-4 w-4" /> Add MCP server
         </button>

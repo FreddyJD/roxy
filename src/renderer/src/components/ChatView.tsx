@@ -149,7 +149,7 @@ export function ChatView(): JSX.Element {
                 onClick={() => setInfoOpen((o) => !o)}
                 title="Description & tasks"
                 className={cn(
-                  'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition',
+                  'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition-colors',
                   infoOpen
                     ? 'bg-elevated text-text'
                     : 'text-text-muted hover:bg-white/5 hover:text-text'
@@ -162,7 +162,10 @@ export function ChatView(): JSX.Element {
                   </span>
                 )}
                 <ChevronRight
-                  className={cn('h-3 w-3 transition-transform', infoOpen && 'rotate-90')}
+                  className={cn(
+                    'h-3 w-3 transition-transform duration-200 ease-out-quart',
+                    infoOpen && 'rotate-90'
+                  )}
                 />
               </button>
             )}
@@ -182,7 +185,7 @@ export function ChatView(): JSX.Element {
             onClick={() => setLoopPaneOpen((o) => !o)}
             title="Loop settings"
             className={cn(
-              'flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs transition',
+              'press-scale flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs',
               loopPaneOpen
                 ? 'bg-elevated text-text'
                 : 'text-text-muted hover:bg-white/5 hover:text-text'

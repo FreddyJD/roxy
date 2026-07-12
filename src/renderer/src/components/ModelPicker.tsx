@@ -69,7 +69,7 @@ export function ModelPicker(): JSX.Element {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted transition hover:border-border-strong hover:text-text"
+        className="press-scale flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted hover:border-border-strong hover:text-text"
       >
         {activeProvider && <ProviderLogo id={activeProvider.id} name={activeProvider.name} size={14} />}
         <span className="max-w-[200px] truncate">{triggerLabel}</span>
@@ -77,7 +77,7 @@ export function ModelPicker(): JSX.Element {
       </button>
 
       {open && (
-        <div className="absolute bottom-full left-0 z-50 mb-2 w-80 overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl">
+        <div className="animate-pop-in absolute bottom-full left-0 z-50 mb-2 w-80 origin-bottom-left overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl">
           <div className="flex items-center gap-2 border-b border-border px-3 py-2">
             <Search className="h-3.5 w-3.5 shrink-0 text-text-subtle" />
             <input

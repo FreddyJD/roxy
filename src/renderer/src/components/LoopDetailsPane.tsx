@@ -66,7 +66,7 @@ export function LoopDetailsPane({
         <button
           onClick={onClose}
           title="Close"
-          className="flex h-6 w-6 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          className="press-scale flex h-6 w-6 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
         >
           <X className="h-4 w-4" />
         </button>

@@ -23,10 +23,109 @@
   --color-success: #3fb950;
   --color-warning: #d9a441;
   --color-danger: #f0556a;
+
+  /* Motion — the built-in CSS easings are too weak to feel intentional, so we
+     register stronger custom curves as `ease-*` utilities (and :root vars). */
+  --ease-out-quart: cubic-bezier(0.23, 1, 0.32, 1); /* entrances: fast start, soft land */
+  --ease-in-out-quart: cubic-bezier(0.77, 0, 0.175, 1); /* on-screen movement */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1); /* iOS-like sheets/drawers */
 }
 
 :root {
   color-scheme: dark;
+
+  /* Shared entrance animations, referenced through vars so a single
+     reduced-motion override below re-points every popover to a plain fade
+     without touching one component. */
+  --animate-pop-in: pop-in 150ms var(--ease-out-quart) both;
+  --animate-fade-in: fade-in 130ms var(--ease-out-quart) both;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Origin-aware entrance for popovers/menus — scales up from its trigger, not
+   from center. Set `transform-origin` on the element (e.g. `origin-bottom-left`
+   for a menu that opens above the composer). */
+.animate-pop-in {
+  animation: var(--animate-pop-in);
+}
+.animate-fade-in {
+  animation: var(--animate-fade-in);
+}
+
+/* Modal entrances. Unlike popovers, modals aren't anchored to a trigger, so they
+   scale from center. The scrim fades; the panel scales+fades in together. */
+@keyframes modal-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes modal-panel-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-scrim-in {
+  animation: modal-scrim-in 160ms var(--ease-out-quart) both;
+}
+.animate-modal-in {
+  animation: modal-panel-in 200ms var(--ease-out-quart) both;
+}
+
+/* Instant, tactile press feedback — the UI should feel like it heard the click.
+   Self-contained: it owns the transition for both the color hover states and the
+   press squish (one element resolves to one `transition-property`, so we declare
+   them together and drop any separate `transition-colors`). */
+.press-scale {
+  transition:
+    transform 140ms var(--ease-out-quart),
+    background-color 140ms var(--ease-out-quart),
+    border-color 140ms var(--ease-out-quart),
+    color 140ms var(--ease-out-quart),
+    opacity 140ms var(--ease-out-quart);
+}
+.press-scale:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+/* Respect reduced-motion: keep the opacity fade (it aids comprehension) but drop
+   the scale/translate movement and the press squish. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --animate-pop-in: fade-in 120ms ease both;
+    --animate-fade-in: fade-in 120ms ease both;
+  }
+  .animate-modal-in {
+    animation: modal-scrim-in 140ms ease both;
+  }
+  .press-scale:active:not(:disabled) {
+    transform: none;
+  }
 }
 
 /* On macOS, prefer the native system font (San Francisco) over Geist so the app
@@ -57,6 +156,13 @@ summary {
 img {
   -webkit-user-drag: none;
   user-select: none;
+}
+
+/* Iconography — lucide ships a heavy 2px stroke that reads chunky at the 12–16px
+   sizes we use. A slightly lighter, uniform stroke feels more refined and keeps
+   every icon in the app visually consistent (done once here, not per-icon). */
+svg.lucide {
+  stroke-width: 1.75;
 }
 
 html,
