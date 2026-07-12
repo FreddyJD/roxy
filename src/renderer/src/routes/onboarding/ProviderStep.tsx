@@ -165,7 +165,6 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
   const refreshProviders = useRoxyStore((s) => s.refreshProviders)
   const [apiKey, setApiKey] = useState('')
   const [baseURL, setBaseURL] = useState(seed.baseURL ?? '')
-  const [model, setModel] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -185,13 +184,12 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
       const provider = await api.providers.connect({
         id: seed.id,
         apiKey: apiKey.trim() || undefined,
-        baseURL: baseURL.trim() || undefined,
-        defaultModel: model.trim() || undefined
+        baseURL: baseURL.trim() || undefined
       })
-      // No model typed? Auto-pick the provider's latest (tool-capable) model so
-      // the composer's picker shows a real model right away and the first send
-      // just works — no one has to know a model id to get started.
-      let chosen = model.trim() || provider.defaultModel || null
+      // Always auto-pick the provider's latest (tool-capable) model so the
+      // composer's picker shows a real model right away and the first send just
+      // works — no one has to know a model id to get started.
+      let chosen = provider.defaultModel || null
       if (!chosen) {
         try {
           chosen = pickDefaultModel(await api.models.list(provider.id)) ?? null
@@ -276,13 +274,6 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
                   />
                 </Field>
               )}
-              <Field label="Default model (optional)">
-                <Input
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="Leave blank to use the latest model"
-                />
-              </Field>
               {error && <p className="text-xs text-danger">{error}</p>}
               <div className="flex items-center gap-2">
                 <Button variant="primary" onClick={connect} disabled={!canConnect || connecting}>
