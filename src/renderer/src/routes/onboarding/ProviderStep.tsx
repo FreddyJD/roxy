@@ -7,8 +7,10 @@ import { useRoxyStore } from '../../lib/store'
 import { Button, Input } from '../../components/ui'
 import { ProviderLogo } from '../../lib/providerLogos'
 
-// Everything except Roxy's own inference, which gets a featured card of its own.
-const OTHER_PROVIDERS = SEED_PROVIDERS.filter((p) => p.id !== 'roxy')
+// The searchable list leads with Roxy too — a fallback for anyone who breezes
+// past the featured hero card above — followed by every other provider. (Roxy
+// is already first in SEED_PROVIDERS, so the natural order does the pinning.)
+const LISTED_PROVIDERS = SEED_PROVIDERS
 
 export function ProviderStep(): JSX.Element {
   const providers = useRoxyStore((s) => s.providers)
@@ -18,8 +20,8 @@ export function ProviderStep(): JSX.Element {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return OTHER_PROVIDERS
-    return OTHER_PROVIDERS.filter((p) => p.name.toLowerCase().includes(q) || p.id.includes(q))
+    if (!q) return LISTED_PROVIDERS
+    return LISTED_PROVIDERS.filter((p) => p.name.toLowerCase().includes(q) || p.id.includes(q))
   }, [query])
 
   return (
@@ -56,7 +58,7 @@ export function ProviderStep(): JSX.Element {
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={`Search ${OTHER_PROVIDERS.length} other providers…`}
+          placeholder={`Search ${LISTED_PROVIDERS.length} providers…`}
           className="pl-9"
         />
       </div>
@@ -144,7 +146,7 @@ function ProviderRow({
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
           <span className="truncate text-sm font-medium text-text">{seed.name}</span>
-          {seed.recommended && (
+          {seed.recommended && seed.id !== 'roxy' && (
             <span className="shrink-0 rounded-full border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
               Recommended
             </span>
