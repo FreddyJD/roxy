@@ -41,6 +41,16 @@ import {
 import type { Message, MessagePart } from '../src/shared/types'
 import type { ChatMessage } from '../src/shared/api'
 import {
+  emptyUsage,
+  addUsage,
+  totalTokens,
+  usageCost,
+  isPriced,
+  localDay,
+  aggregateUsage
+} from '../src/shared/cost'
+import type { TokenUsage, UsageRecord } from '../src/shared/types'
+import {
   estimateTokens,
   countLines,
   compactionThreshold,
@@ -1613,7 +1623,6 @@ async function main(): Promise<void> {
   check('formatInterval 1500m is 1 day 1hr', formatInterval(1500) === '1 day 1hr')
   check('formatInterval clamps sub-minute to 1m', formatInterval(0) === '1m')
 
-
   // ---- portable config bundle (export/import global skills + MCP) ----
   const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
   const goodBundle = buildBundle({
@@ -1642,12 +1651,18 @@ async function main(): Promise<void> {
     'portable: buildBundle carries skills + servers',
     goodBundle.skills.length === 1 && goodBundle.mcpServers.length === 2
   )
-  check('portable: summarizeBundle reads naturally', summarizeBundle(goodBundle) === '1 skill, 2 MCP servers')
+  check(
+    'portable: summarizeBundle reads naturally',
+    summarizeBundle(goodBundle) === '1 skill, 2 MCP servers'
+  )
 
   const roundTrip = parseBundle(serializeBundle(goodBundle))
   check('portable: serialize -> parse round-trips', roundTrip.ok === true)
   if (roundTrip.ok) {
-    check('portable: round-trip preserves the skill file', roundTrip.bundle.skills[0].files.length === 2)
+    check(
+      'portable: round-trip preserves the skill file',
+      roundTrip.bundle.skills[0].files.length === 2
+    )
     check(
       'portable: round-trip preserves a disabled server',
       roundTrip.bundle.mcpServers.find((s) => s.id === 'remote1')?.enabled === false
@@ -1656,14 +1671,19 @@ async function main(): Promise<void> {
 
   // Rejections
   check('portable: parse rejects non-JSON', parseBundle('not json').ok === false)
-  check('portable: parse rejects the wrong kind', parseBundle('{"kind":"nope","version":1}').ok === false)
+  check(
+    'portable: parse rejects the wrong kind',
+    parseBundle('{"kind":"nope","version":1}').ok === false
+  )
   check(
     'portable: parse rejects a future version',
-    parseBundle(JSON.stringify({ kind: BUNDLE_KIND, version: 999, skills: [], mcpServers: [] })).ok === false
+    parseBundle(JSON.stringify({ kind: BUNDLE_KIND, version: 999, skills: [], mcpServers: [] }))
+      .ok === false
   )
   check(
     'portable: parse rejects an empty bundle',
-    parseBundle(JSON.stringify({ kind: BUNDLE_KIND, version: 1, skills: [], mcpServers: [] })).ok === false
+    parseBundle(JSON.stringify({ kind: BUNDLE_KIND, version: 1, skills: [], mcpServers: [] }))
+      .ok === false
   )
 
   // A skill with no SKILL.md is dropped; unsafe companion paths are dropped.
@@ -1689,7 +1709,10 @@ async function main(): Promise<void> {
       ]
     })
   )
-  check('portable: parse drops a skill missing SKILL.md', dirty.ok === true && dirty.bundle.skills.length === 1)
+  check(
+    'portable: parse drops a skill missing SKILL.md',
+    dirty.ok === true && dirty.bundle.skills.length === 1
+  )
   check(
     'portable: parse strips unsafe companion paths (keeps only SKILL.md)',
     dirty.ok === true &&
@@ -1698,7 +1721,9 @@ async function main(): Promise<void> {
   )
   check(
     'portable: parse keeps only the valid MCP server',
-    dirty.ok === true && dirty.bundle.mcpServers.length === 1 && dirty.bundle.mcpServers[0].id === 'good'
+    dirty.ok === true &&
+      dirty.bundle.mcpServers.length === 1 &&
+      dirty.bundle.mcpServers[0].id === 'good'
   )
   check(
     'portable: parse infers MCP transport from url',
@@ -1711,6 +1736,145 @@ async function main(): Promise<void> {
   check('portable: safe path rejects absolute', !isSafeSkillFilePath('/etc/passwd'))
   check('portable: safe path rejects a drive letter', !isSafeSkillFilePath('C:/x'))
   check('portable: safe path rejects backslashes', !isSafeSkillFilePath('a\\b'))
+
+  // ---- usage / cost math ----
+  check(
+    'cost: emptyUsage is all zeros, not estimated',
+    totalTokens(emptyUsage()) === 0 && emptyUsage().estimated === false
+  )
+  const uA: TokenUsage = {
+    input: 100,
+    output: 50,
+    cacheRead: 10,
+    cacheWrite: 0,
+    reasoning: 5,
+    estimated: false
+  }
+  const uB: TokenUsage = {
+    input: 1,
+    output: 2,
+    cacheRead: 3,
+    cacheWrite: 4,
+    reasoning: 0,
+    estimated: true
+  }
+  const summed = addUsage(uA, uB)
+  check(
+    'cost: addUsage sums fields',
+    summed.input === 101 && summed.output === 52 && summed.cacheWrite === 4
+  )
+  check('cost: addUsage estimated is sticky', summed.estimated === true)
+  check('cost: totalTokens counts input+output+cache', totalTokens(uA) === 160)
+  // Pricing: $3/1M input, $15/1M output, $0.30/1M cache read.
+  const price = { input: 3, output: 15, cacheRead: 0.3 }
+  // 100/1e6*3 + 50/1e6*15 + 10/1e6*0.3 = 0.0003 + 0.00075 + 0.000003 = 0.001053
+  const c = usageCost(uA, price)
+  check('cost: usageCost prices input/output/cache', Math.abs(c - 0.001053) < 1e-9)
+  check('cost: usageCost is 0 with no price', usageCost(uA, undefined) === 0)
+  check(
+    'cost: cacheRead falls back to input rate',
+    usageCost(
+      { input: 0, output: 0, cacheRead: 1_000_000, cacheWrite: 0, reasoning: 0, estimated: false },
+      { input: 2 }
+    ) === 2
+  )
+  check(
+    'cost: isPriced true when any rate set',
+    isPriced({ output: 1 }) && !isPriced({}) && !isPriced(undefined)
+  )
+  check('cost: localDay formats YYYY-MM-DD', /^\d{4}-\d{2}-\d{2}$/.test(localDay(Date.now())))
+
+  // Aggregation over a fixed set of records.
+  const now = new Date('2026-02-15T12:00:00').getTime()
+  const todayStart = new Date('2026-02-15T00:00:00').getTime()
+  const DAY = 24 * 60 * 60 * 1000
+  const rec = (over: Partial<UsageRecord>): UsageRecord => ({
+    id: Math.random().toString(36).slice(2),
+    chatId: 'c1',
+    providerId: 'openai',
+    model: 'gpt-x',
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoning: 0,
+    cost: 0,
+    estimated: false,
+    createdAt: now,
+    ...over
+  })
+  const records: UsageRecord[] = [
+    rec({
+      providerId: 'openai',
+      model: 'gpt-x',
+      input: 1000,
+      output: 500,
+      cost: 0.02,
+      createdAt: now
+    }),
+    rec({
+      providerId: 'openai',
+      model: 'gpt-x',
+      input: 200,
+      output: 100,
+      cost: 0.005,
+      createdAt: now - 3 * DAY
+    }),
+    rec({
+      providerId: 'anthropic',
+      model: 'claude-y',
+      input: 4000,
+      output: 2000,
+      cost: 0.1,
+      estimated: true,
+      createdAt: now - 1 * DAY
+    }),
+    rec({
+      providerId: 'google',
+      model: 'gemini-z',
+      input: 100,
+      output: 50,
+      cost: 0,
+      createdAt: now
+    }) // unpriced
+  ]
+  const stats = aggregateUsage(
+    records,
+    { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Gemini' },
+    now,
+    todayStart
+  )
+  check('agg: overview 30d cost sums all', Math.abs(stats.overview.last30d.cost - 0.125) < 1e-9)
+  check(
+    'agg: overview 30d tokens sum all',
+    stats.overview.last30d.tokens === 1500 + 300 + 6000 + 150
+  )
+  check(
+    'agg: today only counts todayStart+',
+    stats.overview.today.tokens === 1500 + 150 && Math.abs(stats.overview.today.cost - 0.02) < 1e-9
+  )
+  check('agg: top model by token volume', stats.overview.topModel === 'claude-y')
+  check('agg: daily has 30 entries', stats.overview.daily.length === 30)
+  check(
+    'agg: last daily entry is today',
+    stats.overview.daily[29].date === localDay(now) &&
+      stats.overview.daily[29].tokens === 1500 + 150
+  )
+  check('agg: overview flags estimates', stats.overview.hasEstimates === true)
+  check('agg: overview flags unpriced', stats.overview.hasUnpriced === true)
+  check('agg: one tab per provider', stats.providers.length === 3)
+  check('agg: providers sorted by 30d cost desc', stats.providers[0].providerId === 'anthropic')
+  check('agg: provider name resolved', stats.providers[0].name === 'Anthropic')
+  const openaiTab = stats.providers.find((p) => p.providerId === 'openai')
+  check(
+    'agg: provider tab isolates its records',
+    openaiTab?.last30d.calls === 2 && openaiTab?.last30d.tokens === 1800
+  )
+  check(
+    'agg: empty records → empty overview',
+    aggregateUsage([], {}, now, todayStart).overview.last30d.tokens === 0
+  )
+
   if (fails.length) {
     console.error(`\nSHARED FAILED \u2014 ${fails.length} failing: ${fails.join(', ')}`)
     process.exit(1)
