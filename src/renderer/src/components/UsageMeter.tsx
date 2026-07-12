@@ -8,11 +8,14 @@
  * and a ~chars/4 estimate otherwise — so the numbers exist regardless of
  * provider. Cost is priced from the models.dev catalog at record time.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { BarChart3, LayoutGrid } from 'lucide-react'
 import type { ProviderUsage, UsageDay, UsageStats } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
+import { BarChart } from './dither-kit/bar-chart'
+import { Bar } from './dither-kit/bar'
+import type { ChartConfig } from './dither-kit/chart-context'
 
 /** Close-on-outside-click / Escape for the popover. */
 function usePopover(): {
@@ -73,13 +76,26 @@ function Figure({ label, value }: { label: string; value: string }): JSX.Element
   )
 }
 
-/** 30-day daily-spend bar graph. Bars scale to the max day; cost drives height,
- *  falling back to tokens when nothing is priced yet. Hover shows the day. */
+/** 30-day daily-spend bar graph, rendered with dither-kit's dithered `BarChart`.
+ *  Cost drives each bar's height, falling back to tokens when nothing is priced
+ *  yet. A decorative "spark" — the `bloom="aura"` glow plus a hover lift — makes
+ *  the fill shimmer without any crosshair/tooltip chrome. */
 function SpendGraph({ daily }: { daily: UsageDay[] }): JSX.Element {
+  const [hovered, setHovered] = useState(false)
   const priced = daily.some((d) => d.cost > 0)
   const val = (d: UsageDay): number => (priced ? d.cost : d.tokens)
-  const max = Math.max(1, ...daily.map(val))
   const peak = daily.reduce((a, b) => (val(b) > val(a) ? b : a), daily[0])
+
+  // Memoize against `daily` — the dither engine compares `data`/`config` by
+  // identity to drive its entrance replay, so a fresh array every render would
+  // loop. Each row carries the value that drives bar height.
+  const data = useMemo(
+    () => daily.map((d) => ({ date: d.date, spend: val(d) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [daily, priced]
+  )
+  const config = useMemo<ChartConfig>(() => ({ spend: { label: 'Spend', color: 'blue' } }), [])
+
   return (
     <div>
       <div className="mb-1 flex items-end justify-end">
@@ -87,23 +103,21 @@ function SpendGraph({ daily }: { daily: UsageDay[] }): JSX.Element {
           {priced ? formatUsd(peak ? peak.cost : 0) : formatTokens(peak ? peak.tokens : 0)}
         </span>
       </div>
-      <div className="flex h-16 items-end gap-[3px]">
-        {daily.map((d, i) => {
-          const h = Math.max(val(d) > 0 ? 6 : 2, Math.round((val(d) / max) * 100))
-          const isPeak = d === peak && val(d) > 0
-          return (
-            <div
-              key={d.date}
-              title={`${d.date} · ${formatUsd(d.cost)} · ${formatTokens(d.tokens)} tok`}
-              className={cn(
-                'flex-1 rounded-sm transition-colors',
-                isPeak ? 'bg-accent' : 'bg-accent/35 hover:bg-accent/60',
-                i === daily.length - 1 && !isPeak && 'bg-accent/60'
-              )}
-              style={{ height: `${h}%` }}
-            />
-          )
-        })}
+      <div
+        className="h-16 w-full"
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
+      >
+        <BarChart
+          data={data}
+          config={config}
+          interactive={false}
+          hovered={hovered}
+          bloom="aura"
+          margins={{ top: 4, right: 0, bottom: 0, left: 0 }}
+        >
+          <Bar dataKey="spend" variant="gradient" />
+        </BarChart>
       </div>
     </div>
   )
