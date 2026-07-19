@@ -434,6 +434,19 @@ async function readSse(res: Response, onJson: (json: SseJson) => void): Promise<
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  // Parse one SSE line; returns true on the `[DONE]` sentinel so the caller stops.
+  const handleLine = (line: string): boolean => {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('data:')) return false
+    const payload = trimmed.slice(5).trim()
+    if (payload === '[DONE]') return true
+    try {
+      onJson(JSON.parse(payload) as SseJson)
+    } catch {
+      // keep-alive lines / partial JSON
+    }
+    return false
+  }
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
@@ -441,15 +454,15 @@ async function readSse(res: Response, onJson: (json: SseJson) => void): Promise<
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
     for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed.startsWith('data:')) continue
-      const payload = trimmed.slice(5).trim()
-      if (payload === '[DONE]') return
-      try {
-        onJson(JSON.parse(payload) as SseJson)
-      } catch {
-        // keep-alive lines / partial JSON
-      }
+      if (handleLine(line)) return
     }
+  }
+  // Drain the trailing buffer. Some providers (notably Copilot's Anthropic proxy)
+  // close the socket right after the final `data:` frame with no trailing newline
+  // or `[DONE]` sentinel — that last frame was still sitting in `buffer`, so the
+  // reply lost its closing token(s) and looked "cut short". Flush the decoder too.
+  buffer += decoder.decode()
+  for (const line of buffer.split('\n')) {
+    if (handleLine(line)) return
   }
 }

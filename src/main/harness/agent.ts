@@ -1699,6 +1699,49 @@ async function streamOnce(
     return { text, toolCalls: toolCalls.filter((c) => c.name), usage: usage ?? estimateUsage() }
   }
 
+  // Parse one SSE line. Returns true on the `[DONE]` sentinel so the caller can
+  // stop. Shared by the streaming loop and the final drain below so the last
+  // frame is handled identically whichever way the stream ends.
+  const handleLine = (line: string): boolean => {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('data:')) return false
+    const payload = trimmed.slice(5).trim()
+    if (payload === '[DONE]') return true
+    let json: StreamDelta
+    try {
+      json = JSON.parse(payload) as StreamDelta
+    } catch {
+      return false
+    }
+    // A usage chunk (final frame; its `choices` is usually empty) → real counts.
+    if (json.usage) {
+      const cached = json.usage.prompt_tokens_details?.cached_tokens ?? 0
+      usage = {
+        input: Math.max(0, (json.usage.prompt_tokens ?? 0) - cached),
+        output: json.usage.completion_tokens ?? 0,
+        cacheRead: cached,
+        cacheWrite: 0,
+        reasoning: json.usage.completion_tokens_details?.reasoning_tokens ?? 0,
+        estimated: false
+      }
+    }
+    const delta = json.choices?.[0]?.delta
+    const reasoningDelta = delta?.reasoning_content ?? delta?.reasoning
+    if (reasoningDelta) onReasoning(reasoningDelta)
+    if (delta?.content) {
+      text += delta.content
+      onText(delta.content)
+    }
+    for (const tcd of delta?.tool_calls ?? []) {
+      const i = tcd.index ?? 0
+      if (!calls[i]) calls[i] = { id: '', name: '', args: '' }
+      if (tcd.id) calls[i].id = tcd.id
+      if (tcd.function?.name) calls[i].name = tcd.function.name
+      if (tcd.function?.arguments) calls[i].args += tcd.function.arguments
+    }
+    return false
+  }
+
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
@@ -1706,44 +1749,17 @@ async function streamOnce(
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
     for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed.startsWith('data:')) continue
-      const payload = trimmed.slice(5).trim()
-      if (payload === '[DONE]') return finish()
-      let json: StreamDelta
-      try {
-        json = JSON.parse(payload) as StreamDelta
-      } catch {
-        continue
-      }
-      // A usage chunk (final frame; its `choices` is usually empty) → real counts.
-      if (json.usage) {
-        const cached = json.usage.prompt_tokens_details?.cached_tokens ?? 0
-        usage = {
-          input: Math.max(0, (json.usage.prompt_tokens ?? 0) - cached),
-          output: json.usage.completion_tokens ?? 0,
-          cacheRead: cached,
-          cacheWrite: 0,
-          reasoning: json.usage.completion_tokens_details?.reasoning_tokens ?? 0,
-          estimated: false
-        }
-      }
-      const delta = json.choices?.[0]?.delta
-      const reasoningDelta = delta?.reasoning_content ?? delta?.reasoning
-      if (reasoningDelta) onReasoning(reasoningDelta)
-      if (delta?.content) {
-        text += delta.content
-        onText(delta.content)
-      }
-      for (const tcd of delta?.tool_calls ?? []) {
-        const i = tcd.index ?? 0
-        if (!calls[i]) calls[i] = { id: '', name: '', args: '' }
-        if (tcd.id) calls[i].id = tcd.id
-        if (tcd.function?.name) calls[i].name = tcd.function.name
-        if (tcd.function?.arguments) calls[i].args += tcd.function.arguments
-      }
+      if (handleLine(line)) return finish()
     }
   }
+  // Drain whatever the stream left buffered. Copilot's Anthropic proxy (and
+  // some OpenAI-compatible endpoints) close the socket right after the final
+  // `data:` frame WITHOUT a trailing newline or a `[DONE]` sentinel, so that
+  // last frame — the closing token(s) — never made it out of `buffer` and the
+  // reply looked "cut short". decode() with no args flushes any dangling
+  // multi-byte char too.
+  buffer += decoder.decode()
+  for (const line of buffer.split('\n')) handleLine(line)
   return finish()
 }
 
