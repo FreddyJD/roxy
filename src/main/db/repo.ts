@@ -1044,3 +1044,20 @@ export function insertBackfilledUsage(input: {
       input.createdAt
     )
 }
+
+// ---- Activity (contribution graph) -------------------------------------------
+
+/**
+ * Timestamps (epoch ms) of every agent turn — one per assistant message — at or
+ * after `since`, across all sessions (main, sub, and loop). Feeds the Settings
+ * contribution graph's per-day counts. Uses the existing (chat_id, created_at)
+ * index for a cheap scan.
+ */
+export function listAgentTurnTimestamps(since: number): number[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT created_at FROM messages WHERE role = 'assistant' AND created_at >= ? ORDER BY created_at ASC"
+    )
+    .all(since) as { created_at: number }[]
+  return rows.map((r) => r.created_at)
+}

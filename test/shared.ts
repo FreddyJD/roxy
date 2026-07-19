@@ -50,6 +50,7 @@ import {
   aggregateUsage
 } from '../src/shared/cost'
 import type { TokenUsage, UsageRecord } from '../src/shared/types'
+import { aggregateActivity, activityLevel } from '../src/shared/activity'
 import {
   estimateTokens,
   countLines,
@@ -1873,6 +1874,45 @@ async function main(): Promise<void> {
   check(
     'agg: empty records → empty overview',
     aggregateUsage([], {}, now, todayStart).overview.last30d.tokens === 0
+  )
+
+  // ---- activity (contribution graph) ----------------------------------------
+  const aNow = new Date(2026, 0, 15, 12, 0, 0).getTime() // fixed local noon
+  const DAYMS = 24 * 60 * 60 * 1000
+  check('activity: level 0 for no turns', activityLevel(0, 10) === 0)
+  check('activity: level 0 when peak is 0', activityLevel(3, 0) === 0)
+  check('activity: single turn is at least level 1', activityLevel(1, 100) === 1)
+  check('activity: peak day is level 4', activityLevel(100, 100) === 4)
+  check('activity: just over half → level 3', activityLevel(60, 100) === 3)
+  check('activity: exactly half → level 2', activityLevel(50, 100) === 2)
+  check('activity: a quarter → level 1', activityLevel(25, 100) === 1)
+
+  // Three turns today, two yesterday, one three days ago (all local-day bucketed).
+  const turns = [
+    aNow,
+    aNow - 60_000,
+    aNow - 120_000,
+    aNow - DAYMS,
+    aNow - DAYMS - 60_000,
+    aNow - 3 * DAYMS
+  ]
+  const act = aggregateActivity(turns, aNow, 182)
+  check('activity: series length matches window', act.days.length === 182)
+  check('activity: total counts every turn', act.total === 6)
+  check('activity: busiest day is 3 turns', act.max === 3)
+  check('activity: three distinct active days', act.activeDays === 3)
+  check('activity: last cell is today', act.days[181].date === localDay(aNow))
+  check(
+    'activity: today counts 3 turns at level 4',
+    act.days[181].count === 3 && act.days[181].level === 4
+  )
+  check('activity: yesterday counts 2 turns', act.days[180].count === 2)
+  check('activity: current streak spans today+yesterday', act.currentStreak === 2)
+  check('activity: longest streak is 2', act.longestStreak === 2)
+  check('activity: empty input → zeroed stats', aggregateActivity([], aNow, 182).total === 0)
+  check(
+    'activity: idle today → current streak 0',
+    aggregateActivity([aNow - 5 * DAYMS], aNow, 182).currentStreak === 0
   )
 
   if (fails.length) {

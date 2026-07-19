@@ -71,6 +71,9 @@ export const CHANNELS = {
 
   usageStats: 'usage:stats',
 
+  /** Per-day agent activity for the Settings contribution graph. */
+  activityStats: 'activity:stats',
+
   llmStart: 'llm:start',
   llmAbort: 'llm:abort',
   /** main -> renderer event carrying a streamed completion chunk */

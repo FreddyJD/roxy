@@ -365,3 +365,39 @@ export interface UsageStats {
   }
   providers: ProviderUsage[]
 }
+
+// ---- Activity (contribution graph) ------------------------------------------
+
+/**
+ * One calendar day in the Settings contribution graph. `count` is the number of
+ * agent turns (assistant replies) recorded that day across every session; `level`
+ * is the GitHub-style 0–4 intensity bucket (0 = nothing, 4 = the busiest tier),
+ * derived from the window's peak so the graph self-scales to how you actually use
+ * Roxy.
+ */
+export interface ActivityDay {
+  /** Local YYYY-MM-DD. */
+  date: string
+  count: number
+  level: 0 | 1 | 2 | 3 | 4
+}
+
+/**
+ * The activity dashboard payload for the Settings contribution graph — a
+ * zero-filled daily series (oldest → newest) plus the headline figures that ride
+ * above it (total, streaks, busiest day).
+ */
+export interface ActivityStats {
+  /** Daily activity, oldest → newest, exactly `days` entries (zero-filled). */
+  days: ActivityDay[]
+  /** Total turns counted across the window. */
+  total: number
+  /** Busiest single day's count (drives the level scale + legend). */
+  max: number
+  /** Distinct days with any activity. */
+  activeDays: number
+  /** Longest run of consecutive active days anywhere in the window. */
+  longestStreak: number
+  /** Active-day run ending today (0 if today is idle). */
+  currentStreak: number
+}

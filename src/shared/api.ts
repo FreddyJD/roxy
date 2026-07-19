@@ -6,6 +6,7 @@ import type {
   AddMessageInput,
   AppSettings,
   AppVersions,
+  ActivityStats,
   Chat,
   ConnectedProvider,
   ConnectProviderInput,
@@ -439,6 +440,10 @@ export interface RoxyApi {
   usage: {
     /** The token-usage + cost dashboard payload for the last 30 days. */
     stats(): Promise<UsageStats>
+  }
+  activity: {
+    /** Per-day agent activity (assistant turns) for the Settings contribution graph. */
+    stats(): Promise<ActivityStats>
   }
   llm: {
     /** Stream a completion; text deltas arrive via onDelta. Resolves when done. */

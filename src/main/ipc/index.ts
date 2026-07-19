@@ -21,6 +21,7 @@ import * as copilot from '../services/copilot'
 import * as browser from '../services/browser'
 import { listModels } from '../services/models'
 import { getUsageStats } from '../services/usage'
+import { getActivityStats } from '../services/activity'
 import { compactChat } from '../services/compaction'
 import { runTool, projectInstructions } from '../harness'
 import { checkForUpdates, quitAndInstall, getUpdateState } from '../services/updater'
@@ -380,6 +381,9 @@ export function registerIpc(): void {
 
   // ---- usage / cost dashboard ----
   ipcMain.handle(CHANNELS.usageStats, () => getUsageStats())
+
+  // ---- activity (Settings contribution graph) ----
+  ipcMain.handle(CHANNELS.activityStats, () => getActivityStats())
 
   // ---- llm (streamed model completions) ----
   // The turn body lives in runSessionTurn so the remote host (phone-driven)

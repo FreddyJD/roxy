@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Streamdown } from 'streamdown'
 import { Brain, ChevronRight } from 'lucide-react'
 import type { MessagePart } from '@shared/types'
@@ -17,6 +17,42 @@ const STREAM_ANIMATION = {
 } as const
 
 /**
+ * A signature that changes on every streamed delta: total streamed characters +
+ * part count + the last tool's state. When it stops changing, the turn has gone
+ * "quiet" even though it's still live (the model is building a tool call whose
+ * args stream in the main process, emitting nothing here).
+ */
+function streamSignature(parts: MessagePart[]): string {
+  let chars = 0
+  for (const p of parts) {
+    if (p.type === 'text' || p.type === 'reasoning') chars += p.text.length
+    else if (p.type === 'tool') chars += p.output?.length ?? 0
+  }
+  const last = parts[parts.length - 1]
+  return `${parts.length}:${chars}:${last?.type === 'tool' ? last.state : ''}`
+}
+
+/**
+ * True once a streaming turn has emitted nothing for `delayMs`. Resets on every
+ * delta, so it never fires during live text; it only trips during the "dead air"
+ * between visible steps (prose finished → building a tool call, or between tools).
+ */
+function useStreamQuiet(parts: MessagePart[], streaming: boolean, delayMs = 500): boolean {
+  const sig = streaming ? streamSignature(parts) : ''
+  const [quiet, setQuiet] = useState(false)
+  useEffect(() => {
+    if (!streaming) {
+      setQuiet(false)
+      return
+    }
+    setQuiet(false)
+    const t = setTimeout(() => setQuiet(true), delayMs)
+    return () => clearTimeout(t)
+  }, [sig, streaming, delayMs])
+  return quiet
+}
+
+/**
  * The single entry point for rendering an assistant turn: it walks `parts` in
  * order so reasoning, tool calls, and prose appear exactly when they happened
  * (reasoning → tool → reasoning → tool → text) instead of being grouped by kind.
@@ -29,14 +65,22 @@ export function MessageParts({
   parts: MessagePart[]
   streaming?: boolean
 }): JSX.Element {
-  // Show the cute "thinking" indicator while the turn is live but has nothing to
-  // show yet: before the first token, or waiting after a finished tool step.
+  // Keep the indicator visible for the WHOLE live turn and only hide it when
+  // something else is already signalling progress — so it can't vanish while the
+  // model is still working (the sidebar, driven by the whole-turn `sendingChats`
+  // flag, kept spinning; this now stays in sync). Two things count as "already
+  // signalling": a tool that's mid-execution (its card shows its own spinner),
+  // and text/reasoning that's actively arriving (a delta within the last 500ms).
+  // Every other live moment — before the first token, between steps, or while the
+  // model silently builds a tool call (its args stream in the main process,
+  // emitting nothing here) — shows the indicator. `quiet` covers text AND
+  // reasoning, closing the old gap where a finished reasoning block hid it.
   const last = parts[parts.length - 1]
-  const waiting =
-    streaming &&
-    (last === undefined ||
-      (last.type === 'tool' && last.state !== 'running') ||
-      ((last.type === 'text' || last.type === 'reasoning') && last.text.trim() === ''))
+  const quiet = useStreamQuiet(parts, streaming)
+  const runningTool = last?.type === 'tool' && last.state === 'running'
+  const liveText =
+    (last?.type === 'text' || last?.type === 'reasoning') && last.text.trim() !== '' && !quiet
+  const waiting = streaming && !runningTool && !liveText
   return (
     <div className="flex flex-col gap-1 text-sm leading-relaxed text-text">
       {parts.map((part, i) => {
@@ -75,7 +119,16 @@ export function MessageParts({
           </div>
         )
       })}
-      {waiting && <ThinkingIndicator />}
+      {waiting && (
+        <ThinkingIndicator
+          label={
+            last === undefined ||
+            ((last.type === 'text' || last.type === 'reasoning') && last.text.trim() === '')
+              ? 'thinking'
+              : 'working'
+          }
+        />
+      )}
     </div>
   )
 }

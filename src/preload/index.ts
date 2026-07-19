@@ -116,6 +116,9 @@ const roxy: RoxyApi = {
   usage: {
     stats: () => ipcRenderer.invoke(CHANNELS.usageStats)
   },
+  activity: {
+    stats: () => ipcRenderer.invoke(CHANNELS.activityStats)
+  },
   llm: {
     start: (input) => ipcRenderer.invoke(CHANNELS.llmStart, input),
     abort: (requestId) => ipcRenderer.invoke(CHANNELS.llmAbort, requestId),
