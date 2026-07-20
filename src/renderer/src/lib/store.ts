@@ -582,7 +582,10 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const text = content.trim()
     if (!text && (!images || images.length === 0)) return
     // This chat is busy → queue it (text + any images); otherwise send now.
-    if (get().sendingChats[chatId]) {
+    // "Busy" means a local send is streaming *or* a phone-driven turn is running
+    // into this same session (`remoteTurns`) — so a desktop prompt lands in the
+    // shared FIFO behind a phone turn instead of starting a second concurrent one.
+    if (get().sendingChats[chatId] || remoteTurns.has(chatId)) {
       await api.queue.add(
         chatId,
         text,

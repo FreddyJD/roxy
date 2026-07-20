@@ -79,6 +79,10 @@ interface Share {
   error?: string
   /** Abort handles for in-flight remote turns, keyed by sessionId (one per session). */
   turns: Map<string, AbortController>
+  /** Sessions with an in-flight *desktop-driven* turn (via `llm:start`), tracked
+   *  through the relay hooks so a phone prompt queues behind a local turn instead
+   *  of starting a second concurrent one on the same session. */
+  localTurns: Set<string>
   /** Live parts accumulators for in-flight turns, so a guest that joins/switches
    *  mid-turn can be seeded with the reply-so-far (keyed by sessionId). */
   liveTurns: Map<string, PartsAccumulator>
@@ -410,11 +414,21 @@ function partsToContent(parts: MessagePart[]): string {
 // --- The crux: run a guest's prompt exactly like a local one ---------------
 
 /**
+ * Is a turn already in flight for this session — from *either* end? A phone turn
+ * lives in `turns`; a desktop turn (via `llm:start`) is tracked in `localTurns`
+ * through the relay hooks. Both queue gates consult this so the phone and desktop
+ * share one FIFO instead of each only respecting its own in-flight turn.
+ */
+function isSessionBusy(active: Share, sessionId: string): boolean {
+  return active.turns.has(sessionId) || active.localTurns.has(sessionId)
+}
+
+/**
  * Handle a prompt typed on the phone. Mirrors the desktop's `submit`: if a turn
- * is already running for this session — or prompts are already queued — append
- * it to the shared FIFO instead of starting a second turn. Otherwise run it now.
- * The queue is the same persisted `repo` queue the desktop uses, so the pending
- * list stays identical on both ends.
+ * is already running for this session — from the phone OR the desktop — or prompts
+ * are already queued, append it to the shared FIFO instead of starting a second
+ * turn. Otherwise run it now. The queue is the same persisted `repo` queue the
+ * desktop uses, so the pending list stays identical on both ends.
  */
 async function handlePrompt(sessionId: string, text: string): Promise<void> {
   const active = share
@@ -423,11 +437,12 @@ async function handlePrompt(sessionId: string, text: string): Promise<void> {
     sendFrame({ t: 'error', message: 'That session no longer exists.' })
     return
   }
-  // A turn is already running for this session → queue it (FIFO), mirror the
-  // updated queue to the phone(s), and nudge the desktop so its queue view
-  // refreshes too. Draining happens automatically when the current turn ends.
-  // (Matches the desktop's single gate: queue only while a turn is in flight.)
-  if (active.turns.has(sessionId)) {
+  // A turn is already running for this session (either end) — or prompts are
+  // already queued — so queue this one (FIFO), mirror the updated queue to the
+  // phone(s), and nudge the desktop so its queue view refreshes too. Draining
+  // happens automatically when the current turn ends. (Matches the desktop's
+  // single gate: queue while a turn is in flight or a backlog already exists.)
+  if (isSessionBusy(active, sessionId) || repo.listQueue(sessionId).length > 0) {
     repo.enqueue(sessionId, text.trim())
     sendQueue(sessionId)
     bumpFor(active)
@@ -450,8 +465,9 @@ async function handlePrompt(sessionId: string, text: string): Promise<void> {
 async function runTurn(active: Share, sessionId: string, text: string, announce: boolean): Promise<void> {
   // Serialize turns *per session*: claim the slot synchronously so two quick
   // prompts can't start concurrent turns on the same session (mirrors the
-  // renderer's guard). Different sessions can still run independently.
-  if (active.turns.has(sessionId)) {
+  // renderer's guard). Different sessions can still run independently. Also
+  // yields to an in-flight desktop turn (tracked in `localTurns`).
+  if (isSessionBusy(active, sessionId)) {
     // A turn slipped in first — fall back to queuing so nothing is lost.
     repo.enqueue(sessionId, text)
     sendQueue(sessionId)
@@ -563,7 +579,7 @@ async function runTurn(active: Share, sessionId: string, text: string, announce:
  * share was replaced, a turn is already running, or the queue is empty.
  */
 async function drainRemoteQueue(active: Share, sessionId: string): Promise<void> {
-  if (share !== active || active.turns.has(sessionId)) return
+  if (share !== active || isSessionBusy(active, sessionId)) return
   const items = repo.listQueue(sessionId)
   if (items.length === 0) {
     sendQueue(sessionId)
@@ -609,6 +625,9 @@ export interface LocalTurnRelay {
 export function relayLocalTurnStart(sessionId: string, userText?: string): LocalTurnRelay | null {
   const active = share
   if (!active) return null
+  // Mark the session busy so a phone prompt queues behind this desktop turn
+  // instead of starting a second concurrent one (the shared busy gate).
+  active.localTurns.add(sessionId)
   const acc = new PartsAccumulator()
   active.liveTurns.set(sessionId, acc)
   // `userText` mirrors the drained-queue announce path: the phone never echoed a
@@ -629,13 +648,21 @@ export function relayLocalTurnEvent(relay: LocalTurnRelay, event: LlmEvent): voi
 }
 
 /**
- * Close out a relayed desktop turn: drop the live accumulator and tell the
- * phone(s) the turn is idle so they flush the streamed reply into the transcript.
- * The desktop persisted the reply itself (renderer `finishTurn`); the phone's own
- * authoritative snapshot reconciles it on the next switch/reconnect.
+ * Close out a relayed desktop turn: release the busy slot, drop the live
+ * accumulator, and tell the phone(s) the turn is idle so they flush the streamed
+ * reply into the transcript. The desktop persisted the reply itself (renderer
+ * `finishTurn`); the phone's own authoritative snapshot reconciles it on the next
+ * switch/reconnect.
+ *
+ * We deliberately do NOT drain the shared queue here: the desktop renderer's
+ * `finishTurn` already drains it after a local turn (via `drainQueue`), so a
+ * prompt the phone queued behind this turn runs as the desktop's next send.
+ * Kicking `drainRemoteQueue` too would race that renderer drain into two
+ * concurrent turns on the same session.
  */
 export function relayLocalTurnEnd(relay: LocalTurnRelay): void {
   const { active, sessionId, acc } = relay
+  active.localTurns.delete(sessionId)
   if (active.liveTurns.get(sessionId) === acc) active.liveTurns.delete(sessionId)
   sendFrameFor(active, { t: 'turn', sessionId, state: 'idle' })
 }
@@ -779,6 +806,7 @@ function teardown(): void {
   }
   for (const controller of active.turns.values()) controller.abort()
   active.turns.clear()
+  active.localTurns.clear()
   active.liveTurns.clear()
   const sock = active.socket
   active.socket = null
@@ -875,6 +903,7 @@ async function startInternal(input: RemoteStartInput): Promise<RemoteState> {
     guests: 0,
     phase: 'starting',
     turns: new Map(),
+    localTurns: new Set(),
     liveTurns: new Map(),
     reconnectAttempts: 0,
     reconnectTimer: null,
