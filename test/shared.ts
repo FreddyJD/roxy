@@ -1525,6 +1525,7 @@ console.log('\nremote workspace ipc parity\n')
   check('remote:stop channel value', CHANNELS.remoteStop === 'remote:stop')
   check('remote:status channel value', CHANNELS.remoteStatus === 'remote:status')
   check('remote:state channel value', CHANNELS.remoteState === 'remote:state')
+  check('remote:delta channel value', CHANNELS.remoteDelta === 'remote:delta')
 
   // Each invoke channel is wired end-to-end: preload bridge + a main handler.
   for (const key of ['remoteStart', 'remoteStop', 'remoteStatus'] as const) {
@@ -1543,15 +1544,28 @@ console.log('\nremote workspace ipc parity\n')
   )
   check('main emits remote:state', service.includes('CHANNELS.remoteState'))
 
+  // The live-stream push: preload subscribes *and* unsubscribes; main emits it.
+  check(
+    'preload subscribes to remote:delta',
+    preload.includes('ipcRenderer.on(CHANNELS.remoteDelta')
+  )
+  check(
+    'preload unsubscribes from remote:delta',
+    preload.includes('removeListener(CHANNELS.remoteDelta')
+  )
+  check('main emits remote:delta', service.includes('CHANNELS.remoteDelta'))
+
   // window.roxy.remote.* must match the RoxyApi type surface exactly.
   check('preload exposes remote.start', /\bstart:/.test(preloadRemote))
   check('preload exposes remote.stop', /\bstop:/.test(preloadRemote))
   check('preload exposes remote.status', /\bstatus:/.test(preloadRemote))
   check('preload exposes remote.onState', /\bonState:/.test(preloadRemote))
+  check('preload exposes remote.onDelta', /\bonDelta:/.test(preloadRemote))
   check('api declares remote.start', /\bstart\(/.test(apiRemote))
   check('api declares remote.stop', /\bstop\(/.test(apiRemote))
   check('api declares remote.status', /\bstatus\(/.test(apiRemote))
   check('api declares remote.onState', /\bonState\(/.test(apiRemote))
+  check('api declares remote.onDelta', /\bonDelta\(/.test(apiRemote))
 }
 
 async function main(): Promise<void> {

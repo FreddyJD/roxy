@@ -8,6 +8,7 @@ import type {
   BrowserState,
   BrowserTab,
   RemoteState,
+  RemoteDelta,
   UpdateState
 } from '../shared/api'
 
@@ -180,6 +181,12 @@ const roxy: RoxyApi = {
         callback(state)
       ipcRenderer.on(CHANNELS.remoteState, handler)
       return () => ipcRenderer.removeListener(CHANNELS.remoteState, handler)
+    },
+    onDelta: (callback) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: RemoteDelta): void =>
+        callback(payload)
+      ipcRenderer.on(CHANNELS.remoteDelta, handler)
+      return () => ipcRenderer.removeListener(CHANNELS.remoteDelta, handler)
     }
   }
 }

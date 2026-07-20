@@ -291,6 +291,21 @@ export interface RemoteStartInput {
   sessionId: string
 }
 
+/**
+ * A streamed step of a phone-driven turn, pushed to the desktop renderer (via
+ * `remote:delta`) so the PC mirrors the reply token-by-token — exactly like a
+ * local turn's `LlmDelta` — instead of only reloading from disk when it ends.
+ * Tagged with `sessionId` (not a requestId) since the renderer keys the live
+ * mirror by chat, and a phone turn isn't tied to a local llm request.
+ *
+ * `turn` frames bracket the stream so the desktop knows precisely when to open
+ * the live bubble and when to drop it (queue edits also bump `remote:state`, so
+ * turn boundaries can't be inferred from the rev alone).
+ */
+export type RemoteDelta =
+  | { sessionId: string; kind: 'event'; event: LlmEvent }
+  | { sessionId: string; kind: 'turn'; state: 'running' | 'idle' }
+
 /** Outcome of exporting the portable config bundle (skills + MCP servers). */
 export interface ConfigExportResult {
   /** True when a file was written; false when the user cancelled the dialog. */
@@ -497,5 +512,11 @@ export interface RoxyApi {
     status(): Promise<RemoteState>
     /** Subscribe to sharing status changes; returns an unsubscribe fn. */
     onState(callback: (state: RemoteState) => void): () => void
+    /**
+     * Subscribe to streamed events from a phone-driven turn, so the desktop can
+     * mirror the reply live (token-by-token) instead of only on turn end.
+     * Returns an unsubscribe fn.
+     */
+    onDelta(callback: (payload: RemoteDelta) => void): () => void
   }
 }

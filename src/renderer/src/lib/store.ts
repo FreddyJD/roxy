@@ -16,6 +16,7 @@ import type {
   CreateLoopInput,
   LlmEvent,
   ModelInfo,
+  RemoteDelta,
   RemoteState,
   TaskUpdate
 } from '@shared/api'
@@ -114,6 +115,7 @@ let loopTickSubscribed = false
 let llmDeltaSubscribed = false
 let taskUpdateSubscribed = false
 let remoteStateSubscribed = false
+let remoteDeltaSubscribed = false
 /** Routes streamed completion events to the in-flight send for a request id. */
 const deltaHandlers = new Map<string, (event: LlmEvent) => void>()
 /** The active llm request id per chat, so stop() can abort the right stream. */
@@ -122,6 +124,12 @@ const chatRequests = new Map<string, string>()
 const modelCatalogCache = new Map<string, ModelInfo[]>()
 /** Set when a remote turn lands while a local send streams into the shared chat. */
 const remoteMirror = { deferred: false }
+/**
+ * Live parts for the in-flight *phone-driven* turn per session, so the desktop
+ * mirrors a remote reply token-by-token (the twin of a local send's `parts`).
+ * A turn:idle frame clears the entry once the persisted reply takes over.
+ */
+const remoteTurns = new Map<string, { parts: MessagePart[]; callIndex: Map<string, number> }>()
 
 /**
  * Desktop live-mirror: reload the shared chat's transcript from disk after a
@@ -139,6 +147,106 @@ async function mirrorSharedChat(sessionId: string, rev: number): Promise<void> {
     return
   }
   useRoxyStore.setState({ messages })
+}
+
+/**
+ * Fold one phone-driven turn's streamed event (or turn boundary) into a live
+ * parts list and, when that session is on screen, reflect it into `streamingChats`
+ * so the desktop shows the reply token-by-token — the remote twin of a local
+ * send's delta handler. A `turn:idle` clears the live parts; the persisted reply
+ * (reconciled from disk by `mirrorSharedChat` on the state bump) then takes over,
+ * so there's no gap between the live bubble and the saved message.
+ */
+function applyRemoteDelta(payload: RemoteDelta): void {
+  const { sessionId } = payload
+  const reflect = (parts: MessagePart[] | null): void => {
+    if (useRoxyStore.getState().activeChatId !== sessionId) return
+    // Never clobber a local send streaming into the same chat — its own handler
+    // owns `streamingChats[sessionId]` until finishTurn reconciles.
+    if (useRoxyStore.getState().sendingChats[sessionId]) return
+    useRoxyStore.setState((s) => {
+      const next = { ...s.streamingChats }
+      if (parts === null) delete next[sessionId]
+      else next[sessionId] = parts
+      return { streamingChats: next }
+    })
+  }
+
+  if (payload.kind === 'turn') {
+    if (payload.state === 'running') {
+      // Open an empty live bubble (a "thinking" indicator) the moment the turn
+      // starts, so the desktop isn't blank while the first token is resolved.
+      remoteTurns.set(sessionId, { parts: [], callIndex: new Map() })
+      reflect([])
+    } else {
+      remoteTurns.delete(sessionId)
+      reflect(null)
+    }
+    return
+  }
+
+  // A stream event: fold it into this session's live parts (mirrors the main
+  // process's PartsAccumulator and the local send's delta handler).
+  const turn = remoteTurns.get(sessionId) ?? { parts: [], callIndex: new Map() }
+  remoteTurns.set(sessionId, turn)
+  const { event } = payload
+  let { parts } = turn
+  if (event.type === 'text') {
+    const last = parts[parts.length - 1]
+    if (last && last.type === 'text') {
+      parts = parts.map((p, i) =>
+        i === parts.length - 1 ? { type: 'text', text: last.text + event.delta } : p
+      )
+    } else {
+      parts = [...parts, { type: 'text', text: event.delta }]
+    }
+  } else if (event.type === 'reasoning') {
+    const last = parts[parts.length - 1]
+    if (last && last.type === 'reasoning') {
+      parts = parts.map((p, i) =>
+        i === parts.length - 1 ? { type: 'reasoning', text: last.text + event.delta } : p
+      )
+    } else {
+      parts = [...parts, { type: 'reasoning', text: event.delta }]
+    }
+  } else if (event.type === 'tool-start') {
+    turn.callIndex.set(event.callId, parts.length)
+    parts = [
+      ...parts,
+      {
+        type: 'tool',
+        tool: event.tool,
+        state: 'running',
+        title: event.title,
+        callId: event.callId,
+        input: event.input
+      }
+    ]
+  } else if (event.type === 'tool-delta') {
+    const idx = turn.callIndex.get(event.callId)
+    if (idx !== undefined) {
+      parts = parts.map((p, i) =>
+        i === idx && p.type === 'tool' ? { ...p, output: (p.output ?? '') + event.chunk } : p
+      )
+    }
+  } else if (event.type === 'tool-end') {
+    const idx = turn.callIndex.get(event.callId)
+    if (idx !== undefined) {
+      parts = parts.map((p, i) =>
+        i === idx && p.type === 'tool'
+          ? {
+              ...p,
+              state: event.ok ? 'done' : 'error',
+              output: event.output,
+              image: event.image,
+              diff: event.diff
+            }
+          : p
+      )
+    }
+  }
+  turn.parts = parts
+  reflect(parts)
 }
 
 export const useRoxyStore = create<RoxyStore>((set, get) => ({
@@ -247,6 +355,15 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       })
       // A share may already be live from before this window (re)loaded.
       void get().refreshRemote()
+    }
+
+    // Remote Workspace live stream: a phone-driven turn's tokens arrive here so
+    // the desktop mirrors the reply as it streams (not just on turn end). Kept
+    // separate from the state subscription because it fires far more often (once
+    // per token) and folds into `streamingChats` rather than reloading from disk.
+    if (!remoteDeltaSubscribed) {
+      remoteDeltaSubscribed = true
+      api.remote.onDelta((payload) => applyRemoteDelta(payload))
     }
 
     const firstSession = chats.find((c) => c.kind === 'main')

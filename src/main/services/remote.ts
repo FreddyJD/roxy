@@ -23,6 +23,7 @@ import type {
   ChatMessage,
   LlmEvent,
   ModelInfo,
+  RemoteDelta,
   RemotePhase,
   RemoteState,
   RemoteStartInput
@@ -115,6 +116,19 @@ function broadcast(): void {
   const state = toState()
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(CHANNELS.remoteState, state)
+  }
+}
+
+/**
+ * Push a phone-driven turn's live event to every open window so the desktop
+ * mirrors the reply token-by-token (the local `llm:delta` twin for remote turns).
+ * Share-bound: a no-op once `active` is no longer the current share, so a stale
+ * turn can't leak deltas into a replaced session.
+ */
+function broadcastDeltaFor(active: Share, payload: RemoteDelta): void {
+  if (share !== active) return
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(CHANNELS.remoteDelta, payload)
   }
 }
 
@@ -459,6 +473,9 @@ async function runTurn(active: Share, sessionId: string, text: string, announce:
     // bubble (a direct send already echoed it locally). `sendQueue` above already
     // removed it from the pending list, so it moves cleanly from queue → turn.
     sendFrameFor(active, { t: 'turn', sessionId, state: 'running', userText: announce ? text : undefined })
+    // Mirror the turn start to the desktop so it opens a live bubble now (the
+    // user message was just persisted + bumped above; the reply streams next).
+    broadcastDeltaFor(active, { sessionId, kind: 'turn', state: 'running' })
 
     // Reproduce the renderer's provider/model/budget resolution in the main process.
     const settings = repo.getSettings()
@@ -506,6 +523,9 @@ async function runTurn(active: Share, sessionId: string, text: string, announce:
       (event) => {
         acc.apply(event)
         sendFrameFor(active, { t: 'delta', sessionId, event })
+        // Fan the same event to the desktop renderer so the PC streams the reply
+        // live, exactly like a local turn (the phone and desktop stay in lockstep).
+        broadcastDeltaFor(active, { sessionId, kind: 'event', event })
       },
       controller.signal
     )
@@ -526,6 +546,9 @@ async function runTurn(active: Share, sessionId: string, text: string, announce:
     if (active.turns.get(sessionId) === controller) active.turns.delete(sessionId)
     if (active.liveTurns.get(sessionId) === acc) active.liveTurns.delete(sessionId)
     sendFrameFor(active, { t: 'turn', sessionId, state: 'idle' })
+    // Drop the desktop's live bubble; the persisted reply (bumped above) is
+    // reconciled from disk by the renderer's mirror, so this hands off cleanly.
+    broadcastDeltaFor(active, { sessionId, kind: 'turn', state: 'idle' })
     // A turn stopped by the user shouldn't auto-run the backlog — a phone abort
     // leaves the queued prompts in place (the phone can drain them with a fresh
     // send, mirroring the desktop's Stop). Otherwise drain the next queued prompt.

@@ -117,7 +117,9 @@ export const CHANNELS = {
   remoteStop: 'remote:stop',
   remoteStatus: 'remote:status',
   /** main -> renderer: Remote Workspace sharing status changed */
-  remoteState: 'remote:state'
+  remoteState: 'remote:state',
+  /** main -> renderer: a streamed event from a phone-driven turn (live desktop mirror) */
+  remoteDelta: 'remote:delta'
 } as const
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS]
