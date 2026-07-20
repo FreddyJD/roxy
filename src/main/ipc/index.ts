@@ -392,6 +392,12 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.llmStart, async (event, input: LlmStartInput) => {
     const controller = new AbortController()
     llmControllers.set(input.requestId, controller)
+    // If this session is shared to a phone, relay the turn there too so the phone
+    // streams a desktop-typed reply live (the mirror of a phone turn on the PC).
+    // The current prompt is the last user message; announce it so the phone shows
+    // the bubble it never echoed. `null` when nothing's shared → zero overhead.
+    const lastUser = [...input.messages].reverse().find((m) => m.role === 'user')
+    const relay = remote.relayLocalTurnStart(input.sessionId, lastUser?.content)
     try {
       return await runSessionTurn(
         input,
@@ -399,11 +405,13 @@ export function registerIpc(): void {
           if (!event.sender.isDestroyed()) {
             event.sender.send(CHANNELS.llmDelta, { requestId: input.requestId, event: llmEvent })
           }
+          if (relay) remote.relayLocalTurnEvent(relay, llmEvent)
         },
         controller.signal
       )
     } finally {
       llmControllers.delete(input.requestId)
+      if (relay) remote.relayLocalTurnEnd(relay)
     }
   })
   ipcMain.handle(CHANNELS.llmAbort, (_e, requestId: string) => {

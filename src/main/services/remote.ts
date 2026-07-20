@@ -585,6 +585,61 @@ export function notifyQueueChanged(): void {
   if (share) sendQueue(share.currentSessionId)
 }
 
+// --- Relaying a *desktop-driven* turn to the phone -------------------------
+
+/** Opaque handle threading one local turn's relay state through the IPC layer. */
+export interface LocalTurnRelay {
+  active: Share
+  sessionId: string
+  acc: PartsAccumulator
+}
+
+/**
+ * Relay a *desktop-typed* turn to the phone(s) — the mirror of `runTurn` for
+ * locally-driven prompts. The phone shows the same user bubble, streams the reply
+ * token-by-token, and flushes it on end, exactly like a phone-typed turn appears
+ * on the desktop. Returns a handle the caller feeds events into, or `null` when
+ * nothing is shared (so the local `llm:start` path skips the per-token overhead).
+ *
+ * A live accumulator is registered in `liveTurns` so a phone that joins/switches
+ * to this session mid-turn is still seeded with the reply-so-far via `sendTurnState`.
+ * Only phones viewing this session react (`forCurrent`); one on another session
+ * re-syncs from the snapshot when it switches back — code/files never cross.
+ */
+export function relayLocalTurnStart(sessionId: string, userText?: string): LocalTurnRelay | null {
+  const active = share
+  if (!active) return null
+  const acc = new PartsAccumulator()
+  active.liveTurns.set(sessionId, acc)
+  // `userText` mirrors the drained-queue announce path: the phone never echoed a
+  // desktop-typed prompt, so it shows the bubble now and opens the streaming spinner.
+  sendFrameFor(active, {
+    t: 'turn',
+    sessionId,
+    state: 'running',
+    userText: userText && userText.trim() ? userText : undefined
+  })
+  return { active, sessionId, acc }
+}
+
+/** Fan one streamed event of a desktop-driven turn to the phone(s). */
+export function relayLocalTurnEvent(relay: LocalTurnRelay, event: LlmEvent): void {
+  relay.acc.apply(event)
+  sendFrameFor(relay.active, { t: 'delta', sessionId: relay.sessionId, event })
+}
+
+/**
+ * Close out a relayed desktop turn: drop the live accumulator and tell the
+ * phone(s) the turn is idle so they flush the streamed reply into the transcript.
+ * The desktop persisted the reply itself (renderer `finishTurn`); the phone's own
+ * authoritative snapshot reconciles it on the next switch/reconnect.
+ */
+export function relayLocalTurnEnd(relay: LocalTurnRelay): void {
+  const { active, sessionId, acc } = relay
+  if (active.liveTurns.get(sessionId) === acc) active.liveTurns.delete(sessionId)
+  sendFrameFor(active, { t: 'turn', sessionId, state: 'idle' })
+}
+
 // --- Socket lifecycle ------------------------------------------------------
 
 function connect(): void {
