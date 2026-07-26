@@ -3,6 +3,7 @@ import { Brain, Check, ChevronsUpDown, Search, Wrench } from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
 import { resolveSessionConfig } from '@shared/session-config'
 import { ProviderLogo } from '../lib/providerLogos'
+import { triggerClass } from './InferenceControls'
 import { useMenuAnchor } from '../lib/useMenuAnchor'
 import { cn } from '../lib/cn'
 
@@ -86,11 +87,7 @@ export function ModelPicker(): JSX.Element {
 
   return (
     <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="press-scale flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted hover:border-border-strong hover:text-text"
-      >
+      <button type="button" onClick={() => setOpen((o) => !o)} className={triggerClass}>
         {activeProvider && (
           <ProviderLogo id={activeProvider.id} name={activeProvider.name} size={14} />
         )}
