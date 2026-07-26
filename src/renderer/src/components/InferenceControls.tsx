@@ -75,8 +75,20 @@ function useActiveModelInfo(): ModelInfo | undefined {
   return modelCatalog[activeProvider.id]?.find((m) => m.id === config.model)
 }
 
-const triggerClass =
-  'press-scale flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted hover:border-border-strong hover:text-text'
+/**
+ * The shared look for every control in the composer's footer row.
+ *
+ * Deliberately chrome-less. A bordered, filled pill per control turned one row
+ * into five boxed objects competing with the caret directly above them — and
+ * `bg-surface` on `bg-surface-2` is a 7-point step, just enough to read as a
+ * seam without ever looking intentional. These are settings you set once and
+ * then glance at, so they get the same grammar as the workstream strip below:
+ * bare label, background only on hover.
+ *
+ * Exported so the model picker (own file, same row) cannot drift from it.
+ */
+export const triggerClass =
+  'press-scale flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-text-muted hover:bg-white/5 hover:text-text'
 const popoverClass =
   'animate-pop-in absolute bottom-full left-0 z-50 mb-2 w-72 origin-bottom-left overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl'
 
@@ -470,10 +482,10 @@ export function ContextMeter(): JSX.Element {
         </div>
       )}
 
-      <div className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted transition-colors hover:border-border-strong hover:text-text">
+      <div className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-text-muted transition-colors hover:bg-white/5 hover:text-text">
         {total ? (
           <>
-            <span className="h-1 w-8 overflow-hidden rounded-full bg-surface-2">
+            <span className="h-1 w-8 overflow-hidden rounded-full bg-white/10">
               <span
                 className={cn(
                   'block h-full rounded-full',
