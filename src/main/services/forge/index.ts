@@ -20,7 +20,8 @@ import type {
   ForgeStatusView,
   ForgeError,
   ForgeKind,
-  ForgeHostView
+  ForgeHostView,
+  SyncTarget
 } from '../../../shared/forge'
 import { branchLifecycle, parseRemote, detectHost } from '../../../shared/forge'
 import * as git from '../git'
@@ -103,6 +104,30 @@ export async function forgeStatus(
     dirty: st?.dirty ?? false
   }
 
+  // Computed from the status we already have - no extra git spawn, so it rides
+  // the 5s poll for free. Null when there is no upstream: with nothing to sync
+  // against, the panel must not offer to sync.
+  const syncTarget: SyncTarget | null = st?.upstream
+    ? {
+        upstream: st.upstream,
+        behind: st.behind,
+        ahead: st.ahead,
+        changed: st.changed,
+        // Deliberately NOT `behind > 0`. That count comes from the last fetch,
+        // and nothing fetches on a timer (background network churn per session
+        // per 5s is not a trade worth making) - so "0 behind" really means "0
+        // behind as of whenever we last looked", which may be hours ago.
+        // Greying the button out on that number would disable it in precisely
+        // the moment the user wants to check for new commits, which is the
+        // dead end this whole panel exists to remove.
+        //
+        // `ahead === 0` is the honest predicate: with no local commits, the
+        // action can only no-op or fast-forward - it cannot fail. So it stays
+        // clickable, fetches, and answers "Already up to date" or updates.
+        canFastForward: st.ahead === 0
+      }
+    : null
+
   const remote = await resolveForge(cwd)
   // Distinguish "no remote at all" from "a real host we can't classify". The
   // second is a question we can ask the user once; the first isn't.
@@ -121,6 +146,7 @@ export async function forgeStatus(
       remote: remote && summarize(remote),
       lifecycle: branchLifecycle({ sync, pr: null, forgeKnown: false }),
       pull: null,
+      syncTarget,
       error: null,
       refreshing: false,
       unknownHost
@@ -154,6 +180,7 @@ export async function forgeStatus(
       forgeKnown: !!current && !current.error
     }),
     pull,
+    syncTarget,
     error: current?.error ?? null,
     refreshing: !!current?.inflight,
     unknownHost: null

@@ -107,6 +107,26 @@ export interface GitStatus {
   branch: string | null
   /** True when the branch has an upstream to compare against. */
   hasUpstream: boolean
+  /**
+   * The upstream ref this branch is measured against, e.g. `origin/main`.
+   *
+   * Kept alongside `hasUpstream` because it is what a sync action has to NAME.
+   * "Update from origin/main" is a promise the user can verify; "pull" is a
+   * guess about which of possibly several remotes we meant.
+   */
+  upstream: string | null
+}
+
+/** The outcome of a fast-forward or a reset. */
+export interface SyncResult {
+  ok: boolean
+  error?: string
+  /** The ref we synced to (or would have), once we knew it. */
+  upstream?: string
+  /** False when the branch was already there and nothing moved. */
+  updated?: boolean
+  /** True when a reset parked uncommitted work in the stash first. */
+  stashed?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -377,9 +397,24 @@ export async function defaultBranch(cwd: string): Promise<string | null> {
   return await currentBranch(cwd)
 }
 
-/** Fetch from origin. Fails harmlessly when there's no remote or no network. */
-export async function fetchOrigin(cwd: string): Promise<GitResult> {
-  return git(['fetch', '--quiet', 'origin'], cwd, FETCH_TIMEOUT_MS)
+/** Fetch from a remote (default `origin`). Fails harmlessly when offline. */
+export async function fetchOrigin(cwd: string, remote = 'origin'): Promise<GitResult> {
+  return git(['fetch', '--quiet', remote], cwd, FETCH_TIMEOUT_MS)
+}
+
+/**
+ * The remote a branch tracks, e.g. `origin`.
+ *
+ * Read from config rather than split off the front of `origin/main`: a remote
+ * name may itself contain a slash, and guessing wrong means fetching the wrong
+ * server and then "updating" from a stale ref — a silent wrong answer, which is
+ * the worst kind for a sync button.
+ */
+export async function upstreamRemote(cwd: string, branch: string): Promise<string | null> {
+  if (!cwd || !branch) return null
+  const r = await git(['config', '--get', `branch.${branch}.remote`], cwd)
+  const name = r.stdout.trim()
+  return r.ok && name ? name : null
 }
 
 /** Whether the repo has an `origin` remote configured. */
@@ -438,7 +473,7 @@ export async function status(cwd: string): Promise<GitStatus | null> {
   let branch: string | null = null
   let ahead = 0
   let behind = 0
-  let hasUpstream = false
+  let upstream: string | null = null
   let changed = 0
   for (const raw of r.stdout.split('\n')) {
     const line = raw.trimEnd()
@@ -447,7 +482,7 @@ export async function status(cwd: string): Promise<GitStatus | null> {
       const v = line.slice('# branch.head '.length).trim()
       branch = v === '(detached)' ? null : v
     } else if (line.startsWith('# branch.upstream ')) {
-      hasUpstream = true
+      upstream = line.slice('# branch.upstream '.length).trim() || null
     } else if (line.startsWith('# branch.ab ')) {
       const m = /\+(\d+)\s+-(\d+)/.exec(line)
       if (m) {
@@ -458,7 +493,113 @@ export async function status(cwd: string): Promise<GitStatus | null> {
       changed++
     }
   }
-  return { dirty: changed > 0, changed, ahead, behind, branch, hasUpstream }
+  return { dirty: changed > 0, changed, ahead, behind, branch, hasUpstream: !!upstream, upstream }
+}
+
+// ---------------------------------------------------------------------------
+// Getting back in sync with the remote
+// ---------------------------------------------------------------------------
+
+/**
+ * Fast-forward the checked-out branch onto its upstream.
+ *
+ * Explicitly NOT `git pull`. `pull` is two operations wearing one name, and
+ * which ones depend on `pull.rebase`, `pull.ff` and the user's global config —
+ * so the same button would merge on one machine, rebase on another, and open an
+ * editor on a third. This does exactly one thing on every machine:
+ *
+ *   fetch, then move the branch pointer forward IF that is all it takes.
+ *
+ * `--ff-only` is the entire safety model. When the branch has local commits the
+ * upstream doesn't, git refuses and nothing is touched: no merge commit, no
+ * half-finished rebase with conflict markers in a tree an agent is editing, no
+ * state the user has to know git to get out of. They get told to reset (which
+ * stashes) or to resolve it themselves, deliberately.
+ */
+export async function pullFastForward(cwd: string): Promise<SyncResult> {
+  if (!cwd) return { ok: false, error: 'pull: missing cwd' }
+  const st = await status(cwd)
+  if (!st?.branch) return { ok: false, error: 'Not on a branch (detached HEAD).' }
+  if (!st.upstream) return { ok: false, error: `"${st.branch}" has no upstream to pull from.` }
+
+  // Fetch first so "behind" is measured against what the server has NOW, not
+  // whatever the last poll happened to see.
+  const remote = (await upstreamRemote(cwd, st.branch)) ?? 'origin'
+  const fetched = await fetchOrigin(cwd, remote)
+  if (!fetched.ok) return { ok: false, error: cleanGitError(fetched, `Could not reach ${remote}`) }
+
+  const after = await status(cwd)
+  if ((after?.behind ?? 0) === 0) {
+    return { ok: true, upstream: st.upstream, updated: false }
+  }
+
+  // A dirty tree is fine for a fast-forward as long as no incoming file
+  // collides with a local edit — git checks that itself and refuses if so, and
+  // its refusal names the files, which is better than any pre-flight we could
+  // write here.
+  const r = await git(['merge', '--ff-only', st.upstream], cwd, FETCH_TIMEOUT_MS)
+  if (!r.ok)
+    return { ok: false, error: cleanGitError(r, 'Could not fast-forward'), upstream: st.upstream }
+  return { ok: true, upstream: st.upstream, updated: true }
+}
+
+/**
+ * Hard-reset the branch onto a ref, parking any local work in a stash first.
+ *
+ * This is the "just give me what's on the server" escape hatch, and it is
+ * destructive by definition — so the one thing it guarantees is that nothing is
+ * unrecoverable. Uncommitted changes go to the stash BEFORE the reset, with a
+ * message naming Roxy and the branch, so `git stash list` shows exactly what
+ * happened and `git stash pop` undoes it.
+ *
+ * `--include-untracked` matters more than it looks: an agent's brand-new files
+ * are untracked, and a plain stash would leave them behind to be wiped by the
+ * clean step or to collide with incoming files.
+ *
+ * Local COMMITS are not stashed — they don't need to be. They stay in the reflog
+ * and the caller is told the sha to get back to.
+ */
+export async function resetToUpstream(cwd: string): Promise<SyncResult> {
+  if (!cwd) return { ok: false, error: 'reset: missing cwd' }
+  const st = await status(cwd)
+  if (!st?.branch) return { ok: false, error: 'Not on a branch (detached HEAD).' }
+  if (!st.upstream) return { ok: false, error: `"${st.branch}" has no upstream to reset to.` }
+
+  const remote = (await upstreamRemote(cwd, st.branch)) ?? 'origin'
+  const fetched = await fetchOrigin(cwd, remote)
+  if (!fetched.ok) return { ok: false, error: cleanGitError(fetched, `Could not reach ${remote}`) }
+
+  // Resolve the target BEFORE touching anything, so a typo'd or vanished
+  // upstream fails while the tree is still intact.
+  const target = await git(['rev-parse', '--verify', '--quiet', `${st.upstream}^{commit}`], cwd)
+  if (!target.ok || !target.stdout.trim()) {
+    return { ok: false, error: `Could not resolve ${st.upstream}.`, upstream: st.upstream }
+  }
+
+  let stashed = false
+  if (st.dirty) {
+    const label = `roxy: before reset of ${st.branch}`
+    const stash = await git(['stash', 'push', '--include-untracked', '-m', label], cwd)
+    // Refuse rather than reset anyway: the whole promise of this button is that
+    // the work is recoverable, and a failed stash breaks exactly that.
+    if (!stash.ok) {
+      return {
+        ok: false,
+        error: cleanGitError(stash, 'Could not stash your changes, so nothing was reset'),
+        upstream: st.upstream
+      }
+    }
+    // `stash push` exits 0 with "No local changes to save" when everything that
+    // looked dirty was ignored - claiming a stash exists then would send the
+    // user to `git stash pop` for something that isn't there.
+    stashed = !/no local changes/i.test(stash.stdout + stash.stderr)
+  }
+
+  const r = await git(['reset', '--hard', target.stdout.trim()], cwd)
+  if (!r.ok) {
+    return { ok: false, error: cleanGitError(r, 'Reset failed'), upstream: st.upstream, stashed }
+  }
+  return { ok: true, upstream: st.upstream, updated: true, stashed }
 }
 
 // ---------------------------------------------------------------------------
