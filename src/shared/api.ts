@@ -14,6 +14,7 @@ import type {
   IntegrationConnection,
   Loop,
   Message,
+  MessagePart,
   QueueImage,
   QueueItem,
   ReasoningEffort,
@@ -260,6 +261,33 @@ export type LlmChildEvent = Exclude<LlmEvent, { type: 'tool-child' }>
 export interface LlmDelta {
   requestId: string
   event: LlmEvent
+}
+
+/**
+ * One step of a subagent's turn, tagged with the SUB session's own id.
+ *
+ * The twin of `LlmDelta`'s `tool-child` wrapper, aimed the other way. That one
+ * addresses the parent's `task` card (keyed by the parent's requestId + callId)
+ * so the launching session shows the delegate working. This one addresses the
+ * subagent's OWN session, so opening it mid-run streams live instead of sitting
+ * on the seeded prompt until the run ends. Same events, two audiences.
+ *
+ * `run` frames bracket the stream so the renderer knows exactly when to open the
+ * live bubble and when to drop it in favour of the persisted transcript.
+ */
+export type SubagentDelta =
+  | { subChatId: string; kind: 'event'; event: LlmChildEvent }
+  | { subChatId: string; kind: 'run'; state: 'running' | 'completed' | 'error' }
+
+/** A subagent run in flight, for restoring live state after a window (re)load. */
+export interface SubagentRunView {
+  subChatId: string
+  parentChatId: string | null
+  description: string
+  subagentType: string
+  /** True for a detached (`background: true`) run — it outlives its launching turn. */
+  background: boolean
+  startedAt: number
 }
 
 /** A background subagent task's lifecycle state, broadcast to all windows. */
@@ -568,6 +596,26 @@ export interface RoxyApi {
     cancel(jobId: string): Promise<void>
     /** Subscribe to background-task state changes; returns an unsubscribe fn. */
     onUpdate(callback: (update: TaskUpdate) => void): () => void
+  }
+  subagents: {
+    /**
+     * Live parts of a subagent already mid-run, for a window that opens its
+     * session halfway through. Null when nothing is running for that id (its
+     * persisted transcript is then the truth).
+     */
+    snapshot(subChatId: string): Promise<MessagePart[] | null>
+    /** Every subagent currently running — restores live state after a window reload. */
+    listRunning(): Promise<SubagentRunView[]>
+    /**
+     * Tell main which chat is on screen, so the end-of-turn prune spares a sub
+     * session the user is reading. Pass null when the open chat isn't a sub.
+     */
+    setViewed(chatId: string | null): Promise<void>
+    /**
+     * Subscribe to a subagent's own live stream, keyed by ITS session id, so its
+     * individual chat view streams like any other. Returns an unsubscribe fn.
+     */
+    onDelta(callback: (payload: SubagentDelta) => void): () => void
   }
   models: {
     /** Live model list for a provider id, from models.dev. */

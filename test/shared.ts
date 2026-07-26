@@ -1135,6 +1135,73 @@ check('renderBackgroundStarted warns against polling', /DO NOT poll/i.test(start
 }
 
 {
+  // ---- PartsFold.seed: resuming a run already in progress ----
+  // Opening a subagent's session mid-run seeds the renderer's fold from main's
+  // snapshot. Seeding must rebuild the call-id index, or every card inherited
+  // from the snapshot would ignore its own tool-end and spin forever.
+  const live = new PartsFold()
+  live.apply({ type: 'text', delta: 'looking' })
+  live.apply({ type: 'tool-start', callId: 'c1', tool: 'bash', title: 'ls' })
+  live.apply({ type: 'tool-start', callId: 'c2', tool: 'read', title: 'a.ts' })
+  const snapshot = live.parts
+
+  const viewer = new PartsFold()
+  viewer.seed(snapshot)
+  check('fold/seed: adopts the snapshot as-is', viewer.parts.length === 3)
+
+  // The events that arrive AFTER the viewer joined must land on the right cards.
+  viewer.apply({ type: 'tool-end', callId: 'c1', output: 'a.ts b.ts', ok: true })
+  viewer.apply({ type: 'tool-end', callId: 'c2', output: 'contents', ok: false })
+  const c1 = viewer.parts[1]
+  const c2 = viewer.parts[2]
+  check(
+    'fold/seed: a tool started before the viewer joined still resolves',
+    c1.type === 'tool' && c1.state === 'done' && c1.output === 'a.ts b.ts'
+  )
+  check(
+    'fold/seed: and an error result lands on the right card too',
+    c2.type === 'tool' && c2.state === 'error' && c2.output === 'contents'
+  )
+
+  // Prose keeps growing from where the snapshot left off rather than fragmenting.
+  viewer.apply({ type: 'text', delta: ' more' })
+  const tail = viewer.parts[viewer.parts.length - 1]
+  check(
+    'fold/seed: text after a seed appends a fresh part, not a rewrite',
+    tail.type === 'text' && tail.text === ' more'
+  )
+
+  // Seeding is immutable toward the snapshot: main keeps folding into its own
+  // instance, and a viewer must never mutate the array it was handed.
+  check('fold/seed: does not mutate the source parts', snapshot.length === 3)
+}
+
+{
+  // A seeded fold must also resume NESTED transcripts — a subagent's task card
+  // rebuilt from a snapshot has to keep folding its own children correctly.
+  const live = new PartsFold()
+  live.apply({ type: 'tool-start', callId: 't1', tool: 'task', title: 'delegate' })
+  live.apply({
+    type: 'tool-child',
+    callId: 't1',
+    event: { type: 'tool-start', callId: 'n1', tool: 'grep', title: 'find' }
+  })
+  const viewer = new PartsFold()
+  viewer.seed(live.parts)
+  viewer.apply({
+    type: 'tool-child',
+    callId: 't1',
+    event: { type: 'tool-end', callId: 'n1', output: 'found', ok: true }
+  })
+  const card = viewer.parts[0]
+  const nested = card.type === 'tool' ? card.children?.[0] : undefined
+  check(
+    'fold/seed: nested children resume on the right slots',
+    nested?.type === 'tool' && nested.state === 'done' && nested.output === 'found'
+  )
+}
+
+{
   // A subagent's steps are display-only: replaying them as the parent's own
   // tool_calls would feed the model calls it never made.
   const replayed = reconstructAssistant([

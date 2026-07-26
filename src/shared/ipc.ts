@@ -86,6 +86,15 @@ export const CHANNELS = {
   /** renderer -> main: cancel a running background task */
   tasksCancel: 'tasks:cancel',
 
+  /** main -> renderer: one live step of a subagent, tagged with ITS OWN session id */
+  subagentDelta: 'subagent:delta',
+  /** renderer -> main: catch-up parts for a subagent already mid-run */
+  subagentSnapshot: 'subagent:snapshot',
+  /** renderer -> main: every subagent currently running (window (re)load) */
+  subagentListRunning: 'subagent:listRunning',
+  /** renderer -> main: which chat is on screen, so a viewed sub session isn't pruned */
+  subagentSetViewed: 'subagent:setViewed',
+
   modelsList: 'models:list',
 
   contextCompact: 'context:compact',

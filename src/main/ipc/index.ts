@@ -46,6 +46,12 @@ import {
   cancelSessionBackgroundJobs,
   listRunningBackgroundJobs
 } from '../services/background-tasks'
+import {
+  endSubagentRuns,
+  listRunningSubagents,
+  setViewedSubChat,
+  subagentSnapshot
+} from '../services/subagent-stream'
 import { mcpServerSummaries, reconnectMcpServer, disposeConnection } from '../services/mcp'
 import {
   listSkills,
@@ -137,6 +143,11 @@ export function registerIpc(): void {
     // Cancel any background subagents this session launched before it's deleted,
     // so detached work doesn't keep running against a gone parent.
     cancelSessionBackgroundJobs(id)
+    // Drop any live subagent stream for this session (and, when a parent goes,
+    // for its delegates too). The run itself is cancelled above or dies with the
+    // parent turn; this just stops a gone session pinning a registry entry that
+    // would keep broadcasting to a chat view nobody can open.
+    endSubagentRuns(id)
     // Stop this session's background processes (dev servers, watchers). Every
     // process is registered under a ROOT session id, so passing `id` raw does the
     // right thing both ways: deleting a main session also stops the servers its
@@ -458,6 +469,18 @@ export function registerIpc(): void {
     listRunningBackgroundJobs(sessionId)
   )
   ipcMain.handle(CHANNELS.tasksCancel, (_e, jobId: string) => cancelBackgroundJob(jobId))
+
+  // ---- subagent live sessions ----
+  // A subagent's own session streams like any other chat: `subagent:delta` is
+  // pushed to every window (the run outlives the launching request, so it can't
+  // ride the requestId-keyed llm:delta channel), and these two reads let a window
+  // that opens mid-run, or reloads entirely, catch up instead of showing a stale
+  // prompt with no reply.
+  ipcMain.handle(CHANNELS.subagentSnapshot, (_e, subChatId: string) => subagentSnapshot(subChatId))
+  ipcMain.handle(CHANNELS.subagentListRunning, () => listRunningSubagents())
+  ipcMain.handle(CHANNELS.subagentSetViewed, (_e, chatId: string | null) =>
+    setViewedSubChat(chatId)
+  )
 
   // ---- models (models.dev catalog) ----
   ipcMain.handle(CHANNELS.modelsList, (_e, providerId: string) => listModels(providerId))
