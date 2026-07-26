@@ -235,6 +235,45 @@ body {
   display: none;
 }
 
+/* Keep a scroller that is ALSO a positioned element positioned.
+ *
+ * We initialize OverlayScrollbars with `viewport: target` (see
+ * lib/overlayScroll.ts), which makes the element its own scrollport. The
+ * library then stamps `data-overlayscrollbars-viewport` on it, and its
+ * stylesheet's structure rules include:
+ *
+ *   [data-overlayscrollbars-viewport]:not([data-overlayscrollbars]) {
+ *     position: relative;
+ *   }
+ *
+ * That is written for the wrapper mode, where the viewport is an injected child
+ * that SHOULD be relative. In target mode it lands on OUR element and silently
+ * overwrites `position: absolute` with `relative` — the moment the popover
+ * mounts, it stops being out-of-flow, `bottom-full` resolves against a
+ * different box, and it drops into the composer's footer row, shoving every
+ * control sideways. That is the "dropdowns bug the chat" symptom exactly.
+ *
+ * Specificity is what makes this a real fix rather than a coin flip: the
+ * library's selector is one attribute (0,1,0) and ours is attribute + class
+ * (0,2,0), so we win regardless of stylesheet import order. It is also
+ * UNLAYERED on purpose — Tailwind v4 puts `.absolute` inside `@layer
+ * utilities`, and layered rules always lose to unlayered ones, so a plain
+ * `.absolute` could not defend itself here even at equal specificity.
+ *
+ * Only `position` needs rescuing: the library's `display:flex` /
+ * `flex-direction:row !important` block is keyed to `[data-overlayscrollbars~=host]`,
+ * and in target mode that attribute is set to the empty string, so `~=host`
+ * never matches. Verified against overlayscrollbars 2.16.0 in Electron. */
+[data-overlayscrollbars-viewport].absolute {
+  position: absolute;
+}
+[data-overlayscrollbars-viewport].fixed {
+  position: fixed;
+}
+[data-overlayscrollbars-viewport].sticky {
+  position: sticky;
+}
+
 /* The overlay handle itself: a translucent capsule with nothing behind it, so
  * it reads as floating over the content instead of sitting in a gutter. Sized
  * 10px like the old native bar, but since it's an overlay it costs no layout
