@@ -84,15 +84,31 @@ export function WorkstreamStrip(): JSX.Element | null {
             workstream menu above is the branch picker. */}
         <span
           className="flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-text-muted"
-          title={branch ? `On branch ${branch}` : undefined}
+          title={
+            branch
+              ? dirty
+                ? `On branch ${branch} \u2014 ${changed} uncommitted change${changed === 1 ? '' : 's'}`
+                : `On branch ${branch}`
+              : undefined
+          }
         >
           <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
           <span className="truncate">{branch ?? 'detached'}</span>
-          {dirty && (
-            <span
-              className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"
-              title={`${changed} uncommitted change${changed === 1 ? '' : 's'}`}
-            />
+          {/* Uncommitted work. A bare dot was unreadable - it's a 6px target
+              nested inside a parent that has its own tooltip, so its `title`
+              was effectively unreachable and people (correctly) read it as
+              decoration. The count makes it self-explanatory, which beats a
+              better tooltip: the best hover text is the one nobody needs. */}
+          {dirty && changed > 0 && (
+            <span className="flex shrink-0 items-center gap-1 text-warning">
+              <span className="h-1.5 w-1.5 rounded-full bg-warning" />
+              <span className="tabular-nums">{changed}</span>
+            </span>
+          )}
+          {/* `dirty` with no count: git says the tree is modified but gave us
+              no entries to count. Rare, but the dot must not silently vanish. */}
+          {dirty && changed === 0 && (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
           )}
         </span>
 
