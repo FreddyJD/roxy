@@ -7,7 +7,7 @@ import * as copilot from '../services/copilot'
 import * as browser from '../services/browser'
 import { listModels } from '../services/models'
 import { compactChat } from '../services/compaction'
-import { runTool, projectInstructions } from '../harness'
+import { runTool, projectInstructions, killSessionBackground } from '../harness'
 import { checkForUpdates, quitAndInstall, getUpdateState } from '../services/updater'
 import {
   cancelBackgroundJob,
@@ -93,6 +93,12 @@ export function registerIpc(): void {
     // Cancel any background subagents this session launched before it's deleted,
     // so detached work doesn't keep running against a gone parent.
     cancelSessionBackgroundJobs(id)
+    // Stop this session's background processes (dev servers, watchers). Every
+    // process is registered under a ROOT session id, so passing `id` raw does the
+    // right thing both ways: deleting a main session also stops the servers its
+    // subagents started, while deleting a sub session matches nothing and leaves
+    // its parent's servers alone. Without this they'd live until app quit.
+    killSessionBackground(id)
     // Close this session's browser window (if any) so it doesn't linger orphaned.
     browser.disposeSession(id)
     return repo.removeChat(id)

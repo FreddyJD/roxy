@@ -14,7 +14,7 @@ import { app } from 'electron'
 
 import * as repo from '../src/main/db/repo'
 import { closeDb } from '../src/main/db/database'
-import { runTool } from '../src/main/harness'
+import { runTool, killSessionBackground } from '../src/main/harness'
 import * as browser from '../src/main/services/browser'
 import {
   boundToolOutput,
@@ -394,6 +394,76 @@ async function main(): Promise<void> {
   const bgKill = await run('bash_kill', { id: bgId })
   check('bash_kill stops the process', bgKill.ok, bgKill.output)
   check('bash_output rejects an unknown id', !(await run('bash_output', { id: 'bg_nope' })).ok)
+
+  // ---- background procs are owned per SESSION, not per cwd ----
+  // Two sessions open on the SAME folder must not see or kill each other's dev
+  // servers, and a subagent's processes must be owned by its parent session.
+  {
+    const sessA = repo.createChat({ title: 'bg A', kind: 'main', workspacePath: ws })
+    const sessB = repo.createChat({ title: 'bg B', kind: 'main', workspacePath: ws })
+    const subOfA = repo.createChat({ title: 'sub of A', kind: 'sub', parentId: sessA.id })
+    check('rootSessionId: a main session is its own root', repo.rootSessionId(sessA.id) === sessA.id)
+    check('rootSessionId: a sub resolves to its parent', repo.rootSessionId(subOfA.id) === sessA.id)
+    check('rootSessionId: an unknown id is returned as-is', repo.rootSessionId('nope') === 'nope')
+
+    const inSession = (
+      sessionId: string,
+      name: string,
+      input: Record<string, unknown>
+    ): ReturnType<typeof runTool> => runTool(name, input, { cwd: ws, sessionId })
+
+    const aStart = await inSession(sessA.id, 'bash', { command: bgCmd, background: true })
+    const aId = aStart.output.match(/bg_\d+/)?.[0] ?? ''
+    check('session A starts a background process', aStart.ok && aId !== '', aStart.output)
+
+    // Same cwd, different session — the old cwd-keyed code leaked here.
+    const bList = await inSession(sessB.id, 'bash_list', {})
+    check(
+      "session B cannot SEE session A's process (same folder)",
+      bList.ok && !bList.output.includes(aId),
+      bList.output
+    )
+    const bKill = await inSession(sessB.id, 'bash_kill', { id: aId })
+    check("session B cannot KILL session A's process", !bKill.ok, bKill.output)
+    const bOut = await inSession(sessB.id, 'bash_output', { id: aId })
+    check("session B cannot READ session A's process output", !bOut.ok, bOut.output)
+
+    const aList = await inSession(sessA.id, 'bash_list', {})
+    check('session A still sees its own process', aList.ok && aList.output.includes(aId), aList.output)
+
+    // A subagent's process is registered under the PARENT, so the parent's
+    // bash_list sees it (and deleting the parent will stop it).
+    const subStart = await inSession(subOfA.id, 'bash', { command: bgCmd, background: true })
+    const subId = subStart.output.match(/bg_\d+/)?.[0] ?? ''
+    check('a subagent can start a background process', subStart.ok && subId !== '', subStart.output)
+    const aList2 = await inSession(sessA.id, 'bash_list', {})
+    check(
+      "a subagent's process shows up in its PARENT's bash_list",
+      aList2.ok && aList2.output.includes(subId),
+      aList2.output
+    )
+    const bList2 = await inSession(sessB.id, 'bash_list', {})
+    check(
+      "an unrelated session still can't see the subagent's process",
+      bList2.ok && !bList2.output.includes(subId),
+      bList2.output
+    )
+
+    // Deleting a session stops its processes (previously they lived until quit).
+    const killedCount = killSessionBackground(sessA.id)
+    check('killSessionBackground kills the session + subagent processes', killedCount === 2)
+    const aList3 = await inSession(sessA.id, 'bash_list', {})
+    check(
+      'the registry is emptied for that session after the kill',
+      aList3.ok && !aList3.output.includes(aId) && !aList3.output.includes(subId),
+      aList3.output
+    )
+    check('killSessionBackground on an unknown session is a no-op', killSessionBackground('nope') === 0)
+    check('killSessionBackground ignores an empty id', killSessionBackground('') === 0)
+
+    repo.removeChat(sessA.id)
+    repo.removeChat(sessB.id)
+  }
 
   // ---- change_session_metadata (the agent organizing its own session) ----
   const metaChat = repo.createChat({ title: 'Session 1', workspacePath: ws, kind: 'main' })

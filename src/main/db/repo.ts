@@ -390,6 +390,29 @@ export function removeChat(id: string): void {
   if (workspace) pruneProjectIfEmpty(workspace)
 }
 
+/**
+ * Walk `parent_id` up to the top-level session that owns this chat.
+ *
+ * Subagent chats (kind='sub') are transient children of a real session, so any
+ * resource they create — a background dev server, for one — must be owned by the
+ * session the user actually sees, not by the sub chat that gets pruned after the
+ * turn. Returns `chatId` unchanged when it has no parent or isn't in the DB (a
+ * keyless/test caller), and bails out on a cycle rather than looping forever.
+ */
+export function rootSessionId(chatId: string): string {
+  if (!chatId) return chatId
+  const stmt = getDb().prepare('SELECT parent_id FROM chats WHERE id = ?')
+  const seen = new Set<string>([chatId])
+  let cur = chatId
+  for (;;) {
+    const row = stmt.get(cur) as { parent_id: string | null } | undefined
+    const parent = row?.parent_id
+    if (!parent || seen.has(parent)) return cur
+    seen.add(parent)
+    cur = parent
+  }
+}
+
 /** Subagent sessions spawned by a given chat, newest first. */
 export function listSubchats(parentId: string): Chat[] {
   const rows = getDb()

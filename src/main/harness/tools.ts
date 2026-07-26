@@ -71,6 +71,13 @@ interface BgProc {
   id: string
   command: string
   cwd: string
+  /**
+   * The session that OWNS this process — always a ROOT session id (a subagent's
+   * processes are owned by its parent; see `owningSessionId`). Ownership is by
+   * session, not cwd: two sessions open on the same folder must not see or kill
+   * each other's dev servers.
+   */
+  sessionId: string
   child: ReturnType<typeof spawn>
   output: string
   /** How far bash_output has already read, so each read returns only new output. */
@@ -92,14 +99,15 @@ export async function runTool(
       case 'bash':
         return await runBash(str(input.command), ctx.cwd, ctx.onChunk, {
           timeout: num(input.timeout),
-          background: bool(input.background)
+          background: bool(input.background),
+          sessionId: owningSessionId(ctx)
         })
       case 'bash_list':
-        return runBashList(ctx.cwd)
+        return runBashList(owningSessionId(ctx))
       case 'bash_output':
-        return runBashOutput(str(input.id ?? input.process), ctx.cwd)
+        return runBashOutput(str(input.id ?? input.process), owningSessionId(ctx))
       case 'bash_kill':
-        return runBashKill(str(input.id ?? input.process), ctx.cwd)
+        return runBashKill(str(input.id ?? input.process), owningSessionId(ctx))
       case 'read':
         return await runRead(str(input.path ?? input.file), ctx.cwd)
       case 'write':
@@ -190,6 +198,26 @@ function browserKey(ctx: ToolContext): string | undefined {
   return ctx.browserKey ?? ctx.sessionId
 }
 
+/**
+ * Which session OWNS the background processes started by this turn.
+ *
+ * Always the ROOT session: a subagent runs in its parent's tree and its dev
+ * server has to show up in the parent's `bash_list` (and die when the parent is
+ * deleted), so it is registered under the parent rather than the transient sub
+ * chat. Falls back to '' for keyless callers (the smoke harness), which then
+ * share one bucket — matching the old cwd-less behaviour.
+ */
+function owningSessionId(ctx: ToolContext): string {
+  const id = ctx.sessionId ?? ''
+  if (!id) return ''
+  try {
+    return repo.rootSessionId(id)
+  } catch {
+    // No DB (tests) or an unknown id — own it directly.
+    return id
+  }
+}
+
 function bool(v: unknown): boolean {
   return v === true || v === 'true' || v === 1 || v === '1'
 }
@@ -238,11 +266,11 @@ function runBash(
   command: string,
   cwd: string,
   onChunk?: (chunk: string) => void,
-  opts: { timeout?: number; background?: boolean } = {}
+  opts: { timeout?: number; background?: boolean; sessionId?: string } = {}
 ): Promise<ToolResult> {
   if (!command.trim()) return Promise.resolve({ ok: false, output: 'bash: missing "command"' })
   // Long-running commands (dev servers, watchers) run detached; poll via bash_output.
-  if (opts.background) return Promise.resolve(startBackground(command, cwd))
+  if (opts.background) return Promise.resolve(startBackground(command, cwd, opts.sessionId ?? ''))
   const timeoutMs = Math.min(Math.max((opts.timeout ?? 60) * 1000, 1000), FG_TIMEOUT_MAX)
   const { cmd, args } = shellInvocation(command)
   return new Promise((resolve) => {
@@ -295,7 +323,7 @@ function runBash(
 }
 
 /** Start a long-running command that keeps running after this call returns. */
-function startBackground(command: string, cwd: string): ToolResult {
+function startBackground(command: string, cwd: string, sessionId: string): ToolResult {
   const id = `bg_${++bgCounter}`
   const { cmd, args } = shellInvocation(command)
   const child = spawn(cmd, args, {
@@ -307,6 +335,7 @@ function startBackground(command: string, cwd: string): ToolResult {
     id,
     command,
     cwd,
+    sessionId,
     child,
     output: `$ ${command}\n`,
     readCursor: 0,
@@ -337,14 +366,14 @@ function startBackground(command: string, cwd: string): ToolResult {
     ok: true,
     output:
       `Started background process ${id}: $ ${command}\n` +
-      `It runs in the background in this workspace. ` +
+      `It runs in the background in this session. ` +
       `Use bash_output({ id: "${id}" }) to read new logs, bash_kill({ id: "${id}" }) to stop it, or bash_list to see all running processes.`
   }
 }
 
-function ownedBg(id: string, cwd: string): BgProc | undefined {
+function ownedBg(id: string, sessionId: string): BgProc | undefined {
   const p = bgProcs.get(id)
-  return p && p.cwd === cwd ? p : undefined
+  return p && p.sessionId === sessionId ? p : undefined
 }
 
 /** A short status label for a background process, e.g. `running 12s` / `exited (exit 0)`. */
@@ -355,17 +384,17 @@ function bgState(p: BgProc): string {
   return p.status
 }
 
-function runBashList(cwd: string): ToolResult {
-  const mine = [...bgProcs.values()].filter((p) => p.cwd === cwd)
-  if (!mine.length) return { ok: true, output: 'No background processes in this workspace.' }
+function runBashList(sessionId: string): ToolResult {
+  const mine = [...bgProcs.values()].filter((p) => p.sessionId === sessionId)
+  if (!mine.length) return { ok: true, output: 'No background processes in this session.' }
   return { ok: true, output: mine.map((p) => `${p.id}  [${bgState(p)}]  $ ${p.command}`).join('\n') }
 }
 
-function runBashOutput(id: string, cwd: string): ToolResult {
+function runBashOutput(id: string, sessionId: string): ToolResult {
   if (!id) return { ok: false, output: 'bash_output: missing "id"' }
-  const p = ownedBg(id, cwd)
+  const p = ownedBg(id, sessionId)
   if (!p)
-    return { ok: false, output: `No background process "${id}" in this workspace. Use bash_list to see them.` }
+    return { ok: false, output: `No background process "${id}" in this session. Use bash_list to see them.` }
   let fresh = p.output.slice(p.readCursor)
   p.readCursor = p.output.length
   if (fresh.length > MAX_OUTPUT) fresh = '…(truncated)\n' + fresh.slice(fresh.length - MAX_OUTPUT)
@@ -373,10 +402,10 @@ function runBashOutput(id: string, cwd: string): ToolResult {
   return { ok: true, output: `[${id} ${bgState(p)}]\n${body}` }
 }
 
-function runBashKill(id: string, cwd: string): ToolResult {
+function runBashKill(id: string, sessionId: string): ToolResult {
   if (!id) return { ok: false, output: 'bash_kill: missing "id"' }
-  const p = ownedBg(id, cwd)
-  if (!p) return { ok: false, output: `No background process "${id}" in this workspace.` }
+  const p = ownedBg(id, sessionId)
+  if (!p) return { ok: false, output: `No background process "${id}" in this session.` }
   if (p.status === 'running') {
     p.status = 'killed'
     killProc(p.child)
@@ -414,6 +443,29 @@ function killProc(child: ReturnType<typeof spawn>): void {
   }
 }
 
+/**
+ * Kill every background process owned by a session, and forget them.
+ *
+ * Called when a session is deleted so its dev servers don't outlive it (they
+ * used to survive until app quit). Returns how many were still running. Takes a
+ * ROOT session id — subagent processes are registered under their parent, so
+ * deleting the parent stops them too.
+ */
+export function killSessionBackground(sessionId: string): number {
+  if (!sessionId) return 0
+  let killed = 0
+  for (const [id, p] of [...bgProcs.entries()]) {
+    if (p.sessionId !== sessionId) continue
+    if (p.status === 'running') {
+      p.status = 'killed'
+      killProc(p.child)
+      killed++
+    }
+    bgProcs.delete(id)
+  }
+  return killed
+}
+
 /** Kill every background process — called on app quit so dev servers aren't orphaned. */
 export function killAllBackground(): void {
   for (const p of bgProcs.values()) {
@@ -422,6 +474,12 @@ export function killAllBackground(): void {
       killProc(p.child)
     }
   }
+}
+
+/** Test-only: kill and clear the whole background registry between smoke cases. */
+export function _resetBackgroundProcs(): void {
+  killAllBackground()
+  bgProcs.clear()
 }
 
 /** How to invoke a shell command per platform (PowerShell on Windows, sh elsewhere). */
