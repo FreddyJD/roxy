@@ -257,9 +257,9 @@ export function ChatView(): JSX.Element {
 
       <ServicesPanel />
 
-      <WorkstreamStrip />
-
       <Composer onSend={submit} sending={sending} onStop={stop} />
+
+      <WorkstreamStrip />
 
       {loopPaneOpen && activeLoop && (
         <LoopDetailsPane
