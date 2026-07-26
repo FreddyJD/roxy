@@ -149,6 +149,12 @@ interface RoxyStore {
   /** Load + cache a workspace's instruction files (AGENTS.md etc.) for sizing. */
   ensureProjectInstructions: (workspacePath: string) => Promise<void>
   deleteChat: (id: string) => Promise<void>
+  /**
+   * Copy a session's history into a new session and open it. Use it to take a
+   * line of work somewhere else without starting from scratch or disturbing
+   * what's already running there.
+   */
+  forkChat: (id: string) => Promise<void>
   renameChat: (id: string, title: string) => Promise<void>
   /** Persist a project's session order (optimistic). `ids` = full project list, top-to-bottom. */
   reorderSessions: (workspacePath: string | null, ids: string[]) => Promise<void>
@@ -1127,6 +1133,21 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       return { sendingChats, streamingChats, stopChats }
     })
     if (get().activeChatId === id) get().clearActive()
+  },
+
+  forkChat: async (id) => {
+    const source = get().chats.find((c) => c.id === id)
+    // Name the copy like a new session rather than "X (fork)": the fork is about
+    // to go somewhere else, and inheriting the old title (plus, for a
+    // workstream, a branch derived from it) would make two unrelated pieces of
+    // work look like the same one. The agent renames it on its first turn, same
+    // as any other session.
+    const taken = get()
+      .chats.filter((c) => c.kind === 'main' && c.workspacePath === source?.workspacePath)
+      .map((c) => c.title)
+    const chat = await api.chats.fork(id, { title: uniqueSlug(taken) })
+    await get().refreshChats()
+    await get().selectChat(chat.id)
   },
 
   renameChat: async (id, title) => {

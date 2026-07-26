@@ -17,6 +17,8 @@ export const CHANNELS = {
 
   chatsList: 'chats:list',
   chatsCreate: 'chats:create',
+  /** Copy a session's history into a new session (see repo.forkChat). */
+  chatsFork: 'chats:fork',
   chatsRename: 'chats:rename',
   chatsRemove: 'chats:remove',
   chatsReorder: 'chats:reorder',

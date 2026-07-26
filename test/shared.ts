@@ -190,6 +190,7 @@ import {
   place,
   alignMenu,
   menuMaxHeight,
+  placeContextMenu,
   GAP,
   MARGIN,
   MAX_W,
@@ -3771,6 +3772,54 @@ async function main(): Promise<void> {
     }
   }
   check('menu: height cap is always finite and usable', badCap === 0, String(badCap))
+
+  // ---- context menus open AT THE CURSOR (sidebar right-click) --------------
+  //
+  // The invariant that matters: the menu must never end up under the pointer
+  // that summoned it, because the next click would then hit a row the user
+  // never aimed at. Near an edge it FLIPS to the other side of the point rather
+  // than sliding over it.
+  const CTX_W = 208
+  const CTX_H = 98
+  const openDown = placeContextMenu(300, 200, CTX_W, CTX_H, 1400, 900)
+  check(
+    'context menu: opens down-right of the cursor when there is room',
+    openDown.left === 300 && openDown.top === 200 && openDown.origin === 'left top'
+  )
+  const flipped = placeContextMenu(1380, 880, CTX_W, CTX_H, 1400, 900)
+  check(
+    'context menu: flips to the other side of the cursor near a corner',
+    flipped.left === 1380 - CTX_W && flipped.top === 880 - CTX_H,
+    `${flipped.left},${flipped.top}`
+  )
+  check('context menu: flip reports the matching origin', flipped.origin === 'right bottom')
+
+  let covered = 0
+  let offscreen = 0
+  for (const [vw, vh] of [
+    [760, 480],
+    [1100, 700],
+    [1920, 1080]
+  ]) {
+    for (let x = 0; x <= vw; x += 11) {
+      for (let y = 0; y <= vh; y += 7) {
+        const p = placeContextMenu(x, y, CTX_W, CTX_H, vw, vh)
+        // The cursor sits strictly outside the box on at least one axis - unless
+        // the viewport is too small to place it on either side, where staying
+        // on screen wins.
+        const under = x > p.left && x < p.left + CTX_W && y > p.top && y < p.top + CTX_H
+        const roomX = x - CTX_W >= MARGIN || x + CTX_W + MARGIN <= vw
+        const roomY = y - CTX_H >= MARGIN || y + CTX_H + MARGIN <= vh
+        if (under && roomX && roomY) covered++
+        if (p.left < MARGIN - 0.5 || p.top < MARGIN - 0.5) offscreen++
+        if (CTX_W <= vw - MARGIN * 2 && p.left + CTX_W > vw - MARGIN + 0.5) offscreen++
+        if (CTX_H <= vh - MARGIN * 2 && p.top + CTX_H > vh - MARGIN + 0.5) offscreen++
+      }
+    }
+  }
+  check('context menu: never opens underneath the cursor', covered === 0, String(covered))
+  check('context menu: never lands outside the viewport', offscreen === 0, String(offscreen))
+
   if (fails.length) {
     console.error(`\nSHARED FAILED \u2014 ${fails.length} failing: ${fails.join(', ')}`)
     process.exit(1)

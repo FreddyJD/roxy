@@ -450,7 +450,15 @@ function parseWorktreeIntent(json: string | null): WorktreeIntent | null {
   try {
     const v = JSON.parse(json) as WorktreeIntent
     if (!v || (v.mode !== 'new' && v.mode !== 'fromBranch' && v.mode !== 'attach')) return null
-    return { mode: v.mode, branch: typeof v.branch === 'string' ? v.branch : undefined }
+    // Rebuilt field by field rather than returned as-is, so a hand-edited or
+    // future-version row can't smuggle an unexpected shape onto the turn path.
+    // Every field the intent carries must therefore be listed HERE - one that
+    // isn't is silently dropped on the round trip through this column.
+    return {
+      mode: v.mode,
+      branch: typeof v.branch === 'string' ? v.branch : undefined,
+      baseRef: typeof v.baseRef === 'string' ? v.baseRef : undefined
+    }
   } catch {
     return null
   }
@@ -568,6 +576,92 @@ export function createChat(input: CreateChatInput = {}): Chat {
   if (input.workspacePath && (input.kind ?? 'main') !== 'sub') ensureProject(input.workspacePath)
   const chat = getChat(id)
   if (!chat) throw new Error('Failed to create chat')
+  return chat
+}
+
+/**
+ * Copy a session — its transcript and everything that shapes the next turn —
+ * into a brand-new session, leaving the original untouched.
+ *
+ * This is for carrying context sideways: you've spent an hour teaching a
+ * session about a codebase and now want to take that understanding somewhere
+ * else without re-explaining it, and without derailing the work already in
+ * flight. So the fork inherits the things the model reads (messages, the
+ * compaction summary and its watermark, the inference config) and inherits
+ * NOTHING that identifies the original as a running piece of work: no worktree,
+ * no branch, no dev port, no queued prompts, no subagent children. Those are
+ * resources, not context, and sharing them would make two sessions fight over
+ * one checkout.
+ *
+ * Message rows keep their ORIGINAL `created_at`, and that is what makes the
+ * copy faithful rather than merely similar. `messages` is ordered by that
+ * column, and `context_summary_at` is a timestamp watermark INTO it (see
+ * shared/context.ts): a compacted session's early turns are left out of the
+ * window on the promise that the summary covers them. Restamp the messages to
+ * now() and every one of them lands on the wrong side of that watermark - the
+ * fork would open looking complete and silently reason from nothing. Ids are
+ * fresh, of course; two chats must never share one.
+ *
+ * `tasks` is deliberately NOT copied - it's a live checklist owned by the run
+ * in flight, and a fork opening with someone else's half-ticked plan states
+ * something untrue about itself. The one-line `description` does travel: it
+ * describes the subject matter, which is exactly what the fork inherits.
+ *
+ * A `sub` session forks into a normal `main` one: its transcript is the useful
+ * part, its subordinate status is not.
+ */
+export function forkChat(sourceId: string, input: { title?: string } = {}): Chat {
+  const db = getDb()
+  const source = getChat(sourceId)
+  if (!source) throw new Error('Chat not found')
+
+  // A subagent's `workspace_path` is its runtime cwd, which for a session with a
+  // worktree is the WORKTREE - not a project folder. Registering that as a
+  // project would put a checkout dir in the sidebar, so resolve the owning
+  // session's project instead.
+  const workspacePath =
+    source.kind === 'sub'
+      ? (getChatWorkspace(rootSessionId(sourceId)) ?? source.workspacePath)
+      : source.workspacePath
+
+  const id = randomUUID()
+  const now = Date.now()
+  const title = input.title?.trim() || `${source.title} (fork)`
+  const messages = db
+    .prepare('SELECT role, content, parts, created_at FROM messages WHERE chat_id = ?')
+    .all(sourceId) as Pick<MessageRow, 'role' | 'content' | 'parts' | 'created_at'>[]
+
+  const insertMessage = db.prepare(
+    'INSERT INTO messages(id, chat_id, role, content, parts, created_at) VALUES(?, ?, ?, ?, ?, ?)'
+  )
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO chats(id, title, kind, provider_id, model, agent_id, reasoning_effort, context_limit, workspace_path, parent_id, context_summary, context_summary_at, description, sort_order, created_at, updated_at)
+       VALUES(?, ?, 'main', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      title,
+      source.providerId,
+      source.model,
+      source.agentId,
+      source.reasoningEffort,
+      source.contextLimit,
+      workspacePath,
+      source.contextSummary,
+      source.contextSummaryAt,
+      source.description,
+      now, // sort_order: the fork lands at the top of its project, like any new session
+      now,
+      now
+    )
+    for (const m of messages) {
+      insertMessage.run(randomUUID(), id, m.role, m.content, m.parts, m.created_at)
+    }
+  })()
+
+  if (workspacePath) ensureProject(workspacePath)
+  const chat = getChat(id)
+  if (!chat) throw new Error('Failed to fork chat')
   return chat
 }
 

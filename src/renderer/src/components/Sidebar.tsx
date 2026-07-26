@@ -6,11 +6,13 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent
 } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import {
   ChevronRight,
   FolderOpen,
   GitBranch,
+  GitFork,
   Hammer,
   Lightbulb,
   MonitorSmartphone,
@@ -20,6 +22,7 @@ import {
   Plus,
   Repeat,
   Settings as SettingsIcon,
+  SquarePen,
   Trash2
 } from 'lucide-react'
 import type { Chat, Loop } from '@shared/types'
@@ -29,6 +32,7 @@ import { statusKeyForSession } from '@shared/workstream'
 import { formatInterval } from '@shared/format'
 import { useRoxyStore } from '../lib/store'
 import { api } from '../lib/api'
+import { placeContextMenu } from '../lib/anchor'
 import { cn } from '../lib/cn'
 import { TONE_BG, TONE_TEXT_STATIC } from '../lib/lifecycle'
 import { HeartbeatDot, NewLoopDialog } from './LoopsSection'
@@ -92,6 +96,7 @@ export function Sidebar(): JSX.Element {
   const newSession = useRoxyStore((s) => s.newSession)
   const newSessionInProject = useRoxyStore((s) => s.newSessionInProject)
   const deleteChat = useRoxyStore((s) => s.deleteChat)
+  const forkChat = useRoxyStore((s) => s.forkChat)
   const renameChat = useRoxyStore((s) => s.renameChat)
   const sendingChats = useRoxyStore((s) => s.sendingChats)
   const loops = useRoxyStore((s) => s.loops)
@@ -107,6 +112,8 @@ export function Sidebar(): JSX.Element {
   })
   const [railed, setRailed] = useState<boolean>(() => localStorage.getItem(COLLAPSED_KEY) === '1')
   const [loopDialogFor, setLoopDialogFor] = useState<{ path: string; name: string } | null>(null)
+  // The open right-click menu: which session, and where the cursor was.
+  const [contextMenu, setContextMenu] = useState<{ chat: Chat; x: number; y: number } | null>(null)
   const [remoteOpen, setRemoteOpen] = useState(false)
   const remotePhase = useRoxyStore((s) => s.remote.phase)
   // Green only when truly live; amber while spinning up or reconnecting.
@@ -182,6 +189,29 @@ export function Sidebar(): JSX.Element {
     setDraftTitle(chat.title)
     setEditingId(chat.id)
   }
+
+  // Right-click anywhere on a session row. Renaming is excluded: the row is an
+  // <input> then, and stealing its native text menu (cut/paste/spelling) to
+  // offer "Rename" would be strictly worse.
+  const openContextMenu = (e: ReactMouseEvent, chat: Chat): void => {
+    if (editingId === chat.id) return
+    e.preventDefault()
+    // Native menus close a stale one and open the new one in a single gesture;
+    // matching that means overwriting whatever was open, not toggling.
+    setContextMenu({ chat, x: e.clientX, y: e.clientY })
+  }
+
+  // The rows a right-click offers, in escalating order of consequence.
+  const contextMenuItems = (chat: Chat): MenuItem[] => [
+    { label: 'Fork session history', icon: GitFork, onSelect: () => void forkChat(chat.id) },
+    { label: 'Rename', icon: SquarePen, onSelect: () => beginRename(chat) },
+    {
+      label: 'Delete session',
+      icon: Trash2,
+      danger: true,
+      onSelect: () => void deleteChat(chat.id)
+    }
+  ]
 
   const commitRename = (): void => {
     const id = editingId
@@ -668,10 +698,18 @@ export function Sidebar(): JSX.Element {
                                 )}
                               >
                                 <div
+                                  onContextMenu={(e) => openContextMenu(e, chat)}
                                   className={cn(
                                     'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors',
                                     dragId && 'cursor-grabbing',
-                                    chat.id === activeChatId
+                                    // Keep the right-clicked row visibly selected
+                                    // for as long as its menu is open, so a menu
+                                    // floating over a dense list still says which
+                                    // session it is about to act on. It borrows
+                                    // the selected look wholesale, vibrancy and
+                                    // all: a second, lesser highlight would just
+                                    // be a new thing to learn.
+                                    chat.id === activeChatId || contextMenu?.chat.id === chat.id
                                       ? 'vibrancy-chip bg-elevated text-text'
                                       : 'text-text-muted hover:bg-white/5 hover:text-text'
                                   )}
@@ -798,9 +836,11 @@ export function Sidebar(): JSX.Element {
                                     {subs.map((sub) => (
                                       <li key={sub.id}>
                                         <div
+                                          onContextMenu={(e) => openContextMenu(e, sub)}
                                           className={cn(
                                             'group/sub flex items-center gap-2 rounded-lg px-2 py-1 text-xs transition-colors',
-                                            sub.id === activeChatId
+                                            sub.id === activeChatId ||
+                                              contextMenu?.chat.id === sub.id
                                               ? 'vibrancy-chip bg-elevated text-text'
                                               : 'text-text-muted hover:bg-white/5 hover:text-text'
                                           )}
@@ -857,6 +897,15 @@ export function Sidebar(): JSX.Element {
         </section>
       </Scroller>
 
+      {contextMenu && (
+        <SessionContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems(contextMenu.chat)}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
       {loopDialogFor && (
         <NewLoopDialog
           workspacePath={loopDialogFor.path}
@@ -879,6 +928,122 @@ export function Sidebar(): JSX.Element {
         className="absolute inset-y-0 right-0 z-20 w-1 cursor-col-resize transition-colors hover:bg-accent/50"
       />
     </aside>
+  )
+}
+
+/** One row of the session context menu. */
+interface MenuItem {
+  label: string
+  icon: typeof Trash2
+  onSelect: () => void
+  danger?: boolean
+}
+
+/** Fixed width, so the menu can be positioned before it has rendered. */
+const CONTEXT_MENU_W = 208
+/** Row height + the surface's 4px top/bottom padding — used for the same reason. */
+const CONTEXT_ROW_H = 30
+
+/**
+ * The right-click menu on a session row.
+ *
+ * Positioned at the cursor rather than at the row: a context menu that opens
+ * somewhere other than where you clicked makes you re-find it, and with rows
+ * this dense you'd routinely be pointing at a different session than the one
+ * the menu belongs to.
+ *
+ * Portalled to `document.body` and `fixed` because the sidebar's session list
+ * is a scroll container — an absolutely-positioned child would be clipped by it
+ * near the bottom edge, which is exactly where a long list gets right-clicked.
+ *
+ * Dismissal is deliberately broad (outside mousedown, scroll, Escape, window
+ * blur): every one of those means attention has moved on, and a menu still
+ * floating over a list you're now scrolling is pointing at the wrong row.
+ */
+function SessionContextMenu({
+  x,
+  y,
+  items,
+  onClose
+}: {
+  x: number
+  y: number
+  items: MenuItem[]
+  onClose: () => void
+}): JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  const height = items.length * CONTEXT_ROW_H + 8
+  const { left, top, origin } = placeContextMenu(
+    x,
+    y,
+    CONTEXT_MENU_W,
+    height,
+    window.innerWidth,
+    window.innerHeight
+  )
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose()
+    }
+    // Dismiss on mousedown rather than click, so the menu is gone before
+    // whatever is underneath reacts - but only for a press OUTSIDE it. Closing
+    // on a press inside would unmount the button between its own mousedown and
+    // click, and the item would simply never fire.
+    const onDown = (e: MouseEvent): void => {
+      if (!ref.current?.contains(e.target as Node)) onClose()
+    }
+    // Capture phase throughout: `scroll` does not bubble, so this is the only
+    // way to hear the session list move - and a stopPropagation anywhere in the
+    // sidebar must not be able to strand an open menu.
+    //
+    // Scroll, rather than wheel, is the precise condition: the menu is pinned to
+    // viewport coordinates while the row it acts on is inside a scroll
+    // container, so the moment that container moves the menu is pointing at a
+    // different session. That covers the thumb drag and the keyboard just as
+    // well as the trackpad, and correctly ignores a wheel gesture over a list
+    // that is already at its end - nothing moved, so nothing is stale.
+    window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('scroll', onClose, true)
+    window.addEventListener('blur', onClose)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('scroll', onClose, true)
+      window.removeEventListener('blur', onClose)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  return createPortal(
+    <div
+      ref={ref}
+      style={{ left, top, width: CONTEXT_MENU_W, transformOrigin: origin }}
+      // Swallow the right-click so chording onto the menu doesn't reopen it at
+      // a new point over itself.
+      onContextMenu={(e) => e.preventDefault()}
+      className="animate-pop-in fixed z-50 overflow-hidden rounded-lg border border-border bg-elevated py-1 shadow-2xl"
+    >
+      {items.map((item) => (
+        <button
+          key={item.label}
+          onClick={() => {
+            onClose()
+            item.onSelect()
+          }}
+          className={cn(
+            'press-scale flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors',
+            item.danger
+              ? 'text-text-muted hover:bg-danger/10 hover:text-danger'
+              : 'text-text-muted hover:bg-white/5 hover:text-text'
+          )}
+        >
+          <item.icon className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{item.label}</span>
+        </button>
+      ))}
+    </div>,
+    document.body
   )
 }
 

@@ -187,7 +187,14 @@ async function createForWorkspace(
       // Name the branch after the session, so `roxy/legacy-ogre-apprentice`
       // shows up in `git branch` and on the PR instead of `roxy/6fdc60b8`.
       const branch = intent.branch?.trim() || (await git.branchNameForTitle(root, title))
-      const r = await git.createWorktree({ repoRoot: root, branch })
+      // A fork asked to start from the commit its source was sitting on. It's
+      // advisory: a ref that no longer resolves (the source worktree was
+      // deleted in between) falls through to the usual origin/<default> base
+      // rather than failing the fork's first turn.
+      const baseRef = intent.baseRef?.trim()
+        ? ((await git.resolveCommit(root, intent.baseRef.trim())) ?? undefined)
+        : undefined
+      const r = await git.createWorktree({ repoRoot: root, branch, baseRef })
       if (!r.ok || !r.worktree)
         return { ok: false, error: r.error ?? 'Could not create the worktree.' }
       return { ok: true, worktreePath: r.worktree.path, branch: r.worktree.branch ?? branch }

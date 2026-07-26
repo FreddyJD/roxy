@@ -103,6 +103,19 @@ export interface CreateChatInput {
   worktree?: WorktreeIntent
 }
 
+export interface ForkChatInput {
+  /** Defaults to `<source title> (fork)`. */
+  title?: string
+  /**
+   * Give the fork its own worktree, branched off the commit the source is
+   * sitting on right now. Only honoured when the source has a workstream (main
+   * process decides); a session running in the project folder forks in place,
+   * because putting the copy somewhere else would strand the transcript it just
+   * inherited.
+   */
+  worktree?: boolean
+}
+
 /**
  * A background process owned by a session — a dev server, a watcher, an install.
  *
@@ -529,6 +542,11 @@ export interface RoxyApi {
   chats: {
     list(): Promise<Chat[]>
     create(input?: CreateChatInput): Promise<Chat>
+    /**
+     * Copy a session's transcript + context into a NEW session, so a line of
+     * work can branch without re-explaining itself. The source is untouched.
+     */
+    fork(id: string, input?: ForkChatInput): Promise<Chat>
     rename(id: string, title: string): Promise<void>
     remove(id: string): Promise<void>
     /** Pin part of one session's inference config (model / mode / effort / context). */

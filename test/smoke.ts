@@ -405,6 +405,74 @@ async function main(): Promise<void> {
     msgs[0].parts.length === 1 && userPart.type === 'text' && userPart.text === 'hi'
   )
 
+  // ---- fork: copy a session's context into a new one ----
+  //
+  // The point of a fork is that the copy can carry on a conversation the source
+  // already had, so the transcript has to arrive in the same ORDER with the
+  // same timestamps - `context_summary_at` is a watermark into `created_at`, so
+  // restamped messages would silently fall out of the fork's context window.
+  // Its own source session, not the shared `chat`: a fork test that left a
+  // compaction summary behind on the fixture would break assertions further
+  // down for reasons no one would look for here.
+  const forkSrc = repo.createChat({ title: 'fork source', kind: 'main', workspacePath: ws })
+  repo.addMessage({ chatId: forkSrc.id, role: 'user', content: 'hi' })
+  repo.addMessage({ chatId: forkSrc.id, role: 'assistant', content: 'done', parts })
+  const srcMsgs = repo.listMessages(forkSrc.id)
+  repo.setChatSummary(forkSrc.id, 'a summary of earlier turns', srcMsgs[0].createdAt)
+  repo.enqueue(forkSrc.id, 'not forked')
+  repo.createChat({ title: 'fork src sub', kind: 'sub', parentId: forkSrc.id })
+  const forked = repo.forkChat(forkSrc.id, { title: 'forked session' })
+  const forkedMsgs = repo.listMessages(forked.id)
+  const sourceMsgs = repo.listMessages(forkSrc.id)
+  check('forkChat leaves the source transcript intact', sourceMsgs.length === srcMsgs.length)
+  check(
+    'forkChat copies the whole transcript, in order, at the original times',
+    forkedMsgs.length === sourceMsgs.length &&
+      forkedMsgs.every(
+        (m, i) =>
+          m.role === sourceMsgs[i].role &&
+          m.content === sourceMsgs[i].content &&
+          m.createdAt === sourceMsgs[i].createdAt
+      )
+  )
+  check(
+    'forkChat rewrites message ids (rows are never shared)',
+    forkedMsgs.every((m) => m.chatId === forked.id) &&
+      !forkedMsgs.some((m) => sourceMsgs.some((s) => s.id === m.id))
+  )
+  check(
+    'forkChat carries structured parts across',
+    forkedMsgs[1].parts.length === 3 && forkedMsgs[1].parts[1].type === 'tool'
+  )
+  check(
+    'forkChat carries the compaction summary + its watermark',
+    forked.contextSummary === 'a summary of earlier turns' &&
+      forked.contextSummaryAt === srcMsgs[0].createdAt
+  )
+  check(
+    'forkChat inherits the project + inference config',
+    forked.workspacePath === forkSrc.workspacePath && forked.agentId === forkSrc.agentId
+  )
+  check('forkChat is a main session with no parent', forked.kind === 'main' && !forked.parentId)
+  // Resources, as opposed to context, must NOT come along: two sessions sharing
+  // one checkout (or one queue) would fight over it.
+  check(
+    'forkChat takes no worktree, branch, port or queue',
+    !forked.worktreePath &&
+      !forked.branch &&
+      !forked.devPort &&
+      repo.listQueue(forked.id).length === 0
+  )
+  check('forkChat does not copy subagent children', repo.listSubchats(forked.id).length === 0)
+  // Deleting a fork must not touch the session it came from - the whole feature
+  // is worthless if the copies are entangled.
+  repo.removeChat(forked.id)
+  check(
+    'deleting a fork leaves the source and its messages alone',
+    !!repo.getChat(forkSrc.id) && repo.listMessages(forkSrc.id).length === sourceMsgs.length
+  )
+  repo.removeChat(forkSrc.id)
+
   // ---- queue (FIFO) ----
   const q1 = repo.enqueue(chat.id, 'q1')
   const q2 = repo.enqueue(chat.id, 'q2')
@@ -1606,6 +1674,67 @@ async function main(): Promise<void> {
         await fs.rm(path.join(gitRepo, '.roxy'), { recursive: true, force: true })
         await removeWorktreeForChat(withSetup.id, { force: true })
         repo.removeChat(withSetup.id)
+      }
+
+      // ---- a fork continues from ITS SOURCE's commit, not from main ----
+      //
+      // This is the part of forking that is easy to get silently wrong: the copy
+      // inherits a transcript about work that exists only on the source's
+      // branch, so branching it off origin/<default> - what a plain `mode:'new'`
+      // does - would hand it a history describing files it cannot see.
+      {
+        const srcPath = repo.getChat(lazy.id)!.worktreePath!
+        await fs.writeFile(path.join(srcPath, 'only-on-this-branch.txt'), 'fork me')
+        await runGit(['add', '.'], srcPath)
+        await runGit(['commit', '-m', 'work that exists only on the source branch'], srcPath)
+        const sourceHead = await git.resolveCommit(srcPath)
+        check('the source branch has a commit of its own', !!sourceHead)
+
+        const fork = repo.forkChat(lazy.id, { title: 'forked workstream' })
+        repo.setChatWorktreePending(fork.id, { mode: 'new', baseRef: sourceHead! })
+        // The intent has to survive the DB round trip WITH its baseRef: the
+        // parser rebuilds the object field by field, so one it forgets to list
+        // is dropped silently and the fork quietly starts from main instead.
+        check(
+          'a fork parks its baseRef alongside the worktree intent',
+          repo.getChat(fork.id)?.worktreePending?.baseRef === sourceHead,
+          String(repo.getChat(fork.id)?.worktreePending?.baseRef)
+        )
+
+        const forkMat = await materializePendingWorktree(fork.id)
+        check('the fork materializes a worktree of its own', forkMat.ok, forkMat.error ?? '')
+        check(
+          "...on its own branch, not the source's",
+          !!forkMat.branch && forkMat.branch !== repo.getChat(lazy.id)?.branch,
+          `${forkMat.branch} vs ${repo.getChat(lazy.id)?.branch}`
+        )
+        check(
+          '...starting from the commit the source was sitting on',
+          (await git.resolveCommit(forkMat.worktreePath!)) === sourceHead
+        )
+        check(
+          '...so work that never reached main is present in the fork',
+          existsSync(path.join(forkMat.worktreePath!, 'only-on-this-branch.txt'))
+        )
+
+        // A stale baseRef (the source branch was deleted in between) must
+        // degrade to the normal base, not fail the fork's first turn.
+        const stale = repo.createChat({
+          title: 'stale base',
+          kind: 'main',
+          workspacePath: gitRepo,
+          worktree: { mode: 'new', baseRef: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' }
+        })
+        const staleMat = await materializePendingWorktree(stale.id)
+        check(
+          'an unresolvable baseRef falls back instead of failing',
+          staleMat.ok && !!staleMat.worktreePath,
+          staleMat.error ?? ''
+        )
+        await removeWorktreeForChat(stale.id, { force: true })
+        repo.removeChat(stale.id)
+        await removeWorktreeForChat(fork.id, { force: true })
+        repo.removeChat(fork.id)
       }
 
       // A sub-session must never take a worktree of its own.
