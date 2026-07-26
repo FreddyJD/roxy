@@ -17,6 +17,7 @@ import {
 } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { cn } from '../lib/cn'
+import { HOVERABLE_THUMB, ImagePreview } from './ImagePreview'
 
 // ---- Collapsible section context --------------------------------------------
 
@@ -36,7 +37,10 @@ function useQueueSection(): SectionState {
 
 export function Queue({ className, ...props }: HTMLAttributes<HTMLDivElement>): JSX.Element {
   return (
-    <div className={cn('rounded-xl border border-border bg-surface/60 p-1.5', className)} {...props} />
+    <div
+      className={cn('rounded-xl border border-border bg-surface/60 p-1.5', className)}
+      {...props}
+    />
   )
 }
 
@@ -133,9 +137,7 @@ export function QueueSectionContent({
 // ---- List + items ------------------------------------------------------------
 
 export function QueueList({ className, ...props }: HTMLAttributes<HTMLUListElement>): JSX.Element {
-  return (
-    <ul className={cn('flex max-h-52 flex-col gap-1 overflow-y-auto', className)} {...props} />
-  )
+  return <ul className={cn('flex max-h-52 flex-col gap-1 overflow-y-auto', className)} {...props} />
 }
 
 export function QueueItem({ className, ...props }: LiHTMLAttributes<HTMLLIElement>): JSX.Element {
@@ -197,7 +199,10 @@ export function QueueItemDescription({
   )
 }
 
-export function QueueItemActions({ className, ...props }: HTMLAttributes<HTMLDivElement>): JSX.Element {
+export function QueueItemActions({
+  className,
+  ...props
+}: HTMLAttributes<HTMLDivElement>): JSX.Element {
   return (
     <div
       className={cn(
@@ -239,16 +244,19 @@ export function QueueItemImage({
   alt = '',
   ...props
 }: ImgHTMLAttributes<HTMLImageElement>): JSX.Element {
+  // A 36px thumbnail can't tell two screenshots apart -- hovering floats the full
+  // image so you can confirm what's actually attached before the turn runs.
   return (
-    <img
-      alt={alt}
-      className={cn('h-9 w-9 rounded-md border border-border object-cover', className)}
-      {...props}
-    />
+    <ImagePreview src={String(props.src ?? '')} name={alt || undefined}>
+      <img alt={alt} className={cn(HOVERABLE_THUMB, 'h-9 w-9 rounded-md', className)} {...props} />
+    </ImagePreview>
   )
 }
 
-export function QueueItemFile({ className, ...props }: HTMLAttributes<HTMLSpanElement>): JSX.Element {
+export function QueueItemFile({
+  className,
+  ...props
+}: HTMLAttributes<HTMLSpanElement>): JSX.Element {
   return (
     <span
       className={cn(

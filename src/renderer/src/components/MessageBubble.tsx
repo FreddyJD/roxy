@@ -2,6 +2,8 @@ import { User } from 'lucide-react'
 import roxy from '../assets/roxy.png'
 import type { MessagePart, MessageRole } from '@shared/types'
 import { MessageParts } from './MessageParts'
+import { HOVERABLE_THUMB, ImagePreview } from './ImagePreview'
+import { cn } from '../lib/cn'
 
 /** Flatten a turn's text parts down to plain text (for user messages). */
 function partsToText(parts: MessagePart[]): string {
@@ -44,12 +46,15 @@ export function MessageBubble({
             {imageParts.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {imageParts.map((img, i) => (
-                  <img
-                    key={i}
-                    src={img.dataUrl}
-                    alt={img.name ?? 'pasted image'}
-                    className="max-h-48 max-w-[12rem] rounded-lg border border-border object-cover"
-                  />
+                  // These are object-cover, so a tall screenshot is shown cropped
+                  // — hover floats the whole, uncropped image.
+                  <ImagePreview key={i} src={img.dataUrl} name={img.name}>
+                    <img
+                      src={img.dataUrl}
+                      alt={img.name ?? 'pasted image'}
+                      className={cn(HOVERABLE_THUMB, 'max-h-48 max-w-[12rem] rounded-lg')}
+                    />
+                  </ImagePreview>
                 ))}
               </div>
             )}
