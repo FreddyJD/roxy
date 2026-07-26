@@ -76,7 +76,7 @@ export function Composer({
   const canSend = !!value.trim() || images.length > 0
 
   return (
-    <div className="bg-bg px-4 pb-1.5 pt-3">
+    <div className="bg-bg px-4 pb-1.5 pt-2">
       <div
         onDragOver={(e) => {
           if (e.dataTransfer.types.includes('Files')) {
