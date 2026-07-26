@@ -117,15 +117,21 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange?.(!checked)}
       className={cn(
-        'relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150',
-        checked ? 'bg-accent' : 'border border-border bg-surface-2',
+        // Flex + padding centers the knob, rather than absolute offsets. The
+        // knob had no `left`, so `absolute` anchored it to its static position
+        // -- the middle of the button, via the UA's text-align: center -- and
+        // translate-x-4 then pushed it clean off the track. The 1px border also
+        // existed only while unchecked, so the track resized on every toggle;
+        // an inset ring paints the same hairline without affecting layout.
+        'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-accent/40',
+        checked ? 'bg-accent' : 'bg-surface-2 inset-ring-1 inset-ring-border',
         disabled && 'cursor-not-allowed opacity-40'
       )}
     >
       <span
         className={cn(
-          'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
-          checked ? 'translate-x-4' : 'translate-x-0.5'
+          'h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-drawer',
+          checked ? 'translate-x-4' : 'translate-x-0'
         )}
       />
     </button>
