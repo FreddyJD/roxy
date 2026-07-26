@@ -686,6 +686,24 @@ export async function removeWorktree(
   return { ok: true }
 }
 
+/**
+ * Has this branch ever been pushed?
+ *
+ * Renaming a pushed branch is a trap: git renames only the LOCAL ref, so the
+ * remote keeps the old name and the renamed branch still tracks it. The next
+ * push either recreates the old branch or updates it under a name nobody
+ * recognizes, and an open PR points at a branch that no longer exists locally.
+ * So the rename paths refuse once a branch has an upstream.
+ *
+ * Reads config rather than `rev-parse @{upstream}` so it works for any branch,
+ * not just the one currently checked out.
+ */
+export async function hasUpstreamBranch(cwd: string, branch: string): Promise<boolean> {
+  if (!cwd || !branch) return false
+  const r = await git(['config', '--get', `branch.${branch}.remote`], cwd)
+  return r.ok && !!r.stdout.trim()
+}
+
 /** The branch a workstream should merge into, as recorded at creation. */
 export async function baseBranchFor(cwd: string, branch: string): Promise<string | null> {
   const r = await git(['config', '--get', `branch.${branch}.${BASE_CONFIG_SUFFIX}`], cwd)

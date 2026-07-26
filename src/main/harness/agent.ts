@@ -629,10 +629,13 @@ const BASE_SCHEMAS = [
   fn('loop_remove', 'Delete a loop by name or id.', { loop: str('Loop name or id.') }, ['loop']),
   fn(
     'change_session_metadata',
-    "Organize THIS session: set its `title` (shown in the sidebar), a one-line `description` of what it's about, and/or a `tasks` checklist you maintain as you work. Send the FULL tasks array each time — it REPLACES the previous list. Use it to rename a vaguely-named session and to track multi-step work (mark a task in_progress when you start it, completed when done).",
+    "Organize THIS session: set its `title` (shown in the sidebar), a one-line `description` of what it's about, and/or a `tasks` checklist you maintain as you work. Send the FULL tasks array each time — it REPLACES the previous list. Use it to rename a vaguely-named session and to track multi-step work (mark a task in_progress when you start it, completed when done). If the session has a workstream, setting `title` also renames its git branch to match — but only while that branch is still the auto-generated one and has never been pushed. Pass `branch` to choose the branch name yourself.",
     {
       title: str('A short session name, ≤ 80 chars. Optional.'),
       description: str('A one-line summary of what this session is for. Optional.'),
+      branch: str(
+        'Rename this session\u2019s workstream branch to exactly this, e.g. "feat/auth-refresh". Optional — a `title` alone already renames the branch to match. Refused if the branch has been pushed.'
+      ),
       tasks: {
         type: 'array',
         description: 'The full task checklist, replacing the previous one. Optional.',

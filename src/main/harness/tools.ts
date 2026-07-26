@@ -35,14 +35,27 @@ import * as lsp from '../services/lsp'
 import * as repo from '../db/repo'
 import { isManagedToolOutputPath } from '../services/tool-output-store'
 import { renderDiagnosticsBlock } from '../../shared/lsp'
-import { isMcpTool, callMcpTool, reconnectMcpServer, disposeConnection, mcpServerSummaries } from '../services/mcp'
+import {
+  isMcpTool,
+  callMcpTool,
+  reconnectMcpServer,
+  disposeConnection,
+  mcpServerSummaries
+} from '../services/mcp'
 import {
   normalizeServerConfig,
   qualifyToolName,
   type McpServerConfig,
   type McpServerSummary
 } from '../../shared/mcp'
-import { loadSkill, listSkills, writeSkill, deleteSkill, installSkillFromSource } from '../services/skills'
+import {
+  loadSkill,
+  listSkills,
+  writeSkill,
+  deleteSkill,
+  installSkillFromSource
+} from '../services/skills'
+import { renameWorkstreamBranch, syncBranchToTitle } from '../services/worktree'
 
 export interface ToolContext {
   cwd: string
@@ -124,7 +137,11 @@ export async function runTool(
       case 'glob':
         return await runGlob(str(input.pattern), ctx.cwd)
       case 'grep':
-        return await runGrep(str(input.pattern), str(input.include ?? input.glob) || '**/*', ctx.cwd)
+        return await runGrep(
+          str(input.pattern),
+          str(input.include ?? input.glob) || '**/*',
+          ctx.cwd
+        )
       case 'webfetch':
         return await runWebFetch(str(input.url), str(input.format), input.timeout, ctx.onChunk)
       case 'websearch':
@@ -163,7 +180,7 @@ export async function runTool(
       case 'loop_disable':
         return runLoopSet(str(input.loop ?? input.name ?? input.id), false)
       case 'change_session_metadata':
-        return runSetSessionMetadata(input, ctx.sessionId)
+        return await runSetSessionMetadata(input, ctx.sessionId)
       case 'lsp':
         return await runLspTool(str(input.path ?? input.file), ctx.cwd)
       case 'skill':
@@ -357,7 +374,10 @@ function runBash(
           ? `\n[exit ${exitCode}]`
           : ''
       if (suffix) onChunk?.(suffix)
-      resolve({ ok: !timedOut && exitCode === 0, output: (acc + suffix).trimEnd() || '(no output)' })
+      resolve({
+        ok: !timedOut && exitCode === 0,
+        output: (acc + suffix).trimEnd() || '(no output)'
+      })
     })
   })
 }
@@ -441,14 +461,20 @@ function bgState(p: BgProc): string {
 function runBashList(sessionId: string): ToolResult {
   const mine = [...bgProcs.values()].filter((p) => p.sessionId === sessionId)
   if (!mine.length) return { ok: true, output: 'No background processes in this session.' }
-  return { ok: true, output: mine.map((p) => `${p.id}  [${bgState(p)}]  $ ${p.command}`).join('\n') }
+  return {
+    ok: true,
+    output: mine.map((p) => `${p.id}  [${bgState(p)}]  $ ${p.command}`).join('\n')
+  }
 }
 
 function runBashOutput(id: string, sessionId: string): ToolResult {
   if (!id) return { ok: false, output: 'bash_output: missing "id"' }
   const p = ownedBg(id, sessionId)
   if (!p)
-    return { ok: false, output: `No background process "${id}" in this session. Use bash_list to see them.` }
+    return {
+      ok: false,
+      output: `No background process "${id}" in this session. Use bash_list to see them.`
+    }
   let fresh = p.output.slice(p.readCursor)
   p.readCursor = p.output.length
   if (fresh.length > MAX_OUTPUT) fresh = '…(truncated)\n' + fresh.slice(fresh.length - MAX_OUTPUT)
@@ -646,7 +672,10 @@ async function runRead(p: string, cwd: string): Promise<ToolResult> {
     const buf = await fs.readFile(abs)
     const size = fmtBytes(buf.length)
     if (buf.length > MAX_IMAGE_BYTES) {
-      return { ok: true, output: `Read image ${p} (${mediaType}, ${size}) — too large to preview inline.` }
+      return {
+        ok: true,
+        output: `Read image ${p} (${mediaType}, ${size}) — too large to preview inline.`
+      }
     }
     return {
       ok: true,
@@ -691,7 +720,11 @@ async function runEdit(
   }
   const after = content.replace(oldString, newString)
   await fs.writeFile(abs, after, 'utf8')
-  return withDiagnostics({ ok: true, output: `Edited ${p}`, diff: toolDiff(p, content, after) }, abs, cwd)
+  return withDiagnostics(
+    { ok: true, output: `Edited ${p}`, diff: toolDiff(p, content, after) },
+    abs,
+    cwd
+  )
 }
 
 /**
@@ -799,15 +832,24 @@ async function runWebFetch(
       }
     })
     if (!res.ok) {
-      return { ok: false, output: `Failed to fetch ${url} — HTTP ${res.status} ${res.statusText}`.trim() }
+      return {
+        ok: false,
+        output: `Failed to fetch ${url} — HTTP ${res.status} ${res.statusText}`.trim()
+      }
     }
     const contentType = res.headers.get('content-type') ?? ''
     const mime = mimeFromContentType(contentType)
     if (isImageMime(mime)) {
-      return { ok: false, output: `Refusing to fetch image content (${mime}). Use the browser tools to view images.` }
+      return {
+        ok: false,
+        output: `Refusing to fetch image content (${mime}). Use the browser tools to view images.`
+      }
     }
     if (!isTextualMime(mime)) {
-      return { ok: false, output: `Unsupported content type: ${mime || 'unknown'}. webfetch only reads text/HTML pages.` }
+      return {
+        ok: false,
+        output: `Unsupported content type: ${mime || 'unknown'}. webfetch only reads text/HTML pages.`
+      }
     }
     const raw = await readCapped(res, WEBFETCH_MAX_BYTES)
     const converted = convertWebContent(raw, contentType, fmt)
@@ -817,7 +859,10 @@ async function runWebFetch(
     if (controller.signal.aborted) {
       return { ok: false, output: `Fetching ${url} timed out after ${timeoutSec}s.` }
     }
-    return { ok: false, output: `Failed to fetch ${url} — ${e instanceof Error ? e.message : String(e)}` }
+    return {
+      ok: false,
+      output: `Failed to fetch ${url} — ${e instanceof Error ? e.message : String(e)}`
+    }
   } finally {
     clearTimeout(timer)
   }
@@ -863,7 +908,9 @@ async function runWebSearch(
         ok: false,
         output:
           `Web search failed — HTTP ${res.status} ${res.statusText}`.trim() +
-          (res.status === 429 ? '\nRate limited. Add an Exa API key in Settings → Web search to raise the limit.' : '')
+          (res.status === 429
+            ? '\nRate limited. Add an Exa API key in Settings → Web search to raise the limit.'
+            : '')
       }
     }
     const body = await readCapped(res, WEBSEARCH_MAX_BYTES)
@@ -873,7 +920,10 @@ async function runWebSearch(
     if (controller.signal.aborted) {
       return { ok: false, output: `Web search timed out after ${WEBSEARCH_TIMEOUT}s.` }
     }
-    return { ok: false, output: `Web search failed — ${e instanceof Error ? e.message : String(e)}` }
+    return {
+      ok: false,
+      output: `Web search failed — ${e instanceof Error ? e.message : String(e)}`
+    }
   } finally {
     clearTimeout(timer)
   }
@@ -916,7 +966,9 @@ async function readCapped(res: Response, maxBytes: number): Promise<string> {
       }
     }
   }
-  return Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, maxBytes).toString('utf8')
+  return Buffer.concat(chunks.map((c) => Buffer.from(c)))
+    .subarray(0, maxBytes)
+    .toString('utf8')
 }
 
 /** Truncate model-facing output with a clear marker. */
@@ -968,7 +1020,8 @@ function runBrowserTabs(key?: string): ToolResult {
   const open = browser.listTabs(key)
   if (open.length === 0) return { ok: true, output: 'No browser is open. Use browser_open first.' }
   const lines = open.map(
-    (t) => `${t.active ? '*' : ' '} [${t.id}] ${t.title || '(untitled)'} — ${t.url || 'about:blank'}`
+    (t) =>
+      `${t.active ? '*' : ' '} [${t.id}] ${t.title || '(untitled)'} — ${t.url || 'about:blank'}`
   )
   return { ok: true, output: `${open.length} open tab(s) (* = active):\n${lines.join('\n')}` }
 }
@@ -1082,9 +1135,14 @@ function runLoopSet(ref: string, enabled: boolean): ToolResult {
  * throws — every failure degrades to an error ToolResult.
  */
 async function runSkillManage(input: Record<string, unknown>, cwd: string): Promise<ToolResult> {
-  const action = str(input.action ?? input.op).trim().toLowerCase()
+  const action = str(input.action ?? input.op)
+    .trim()
+    .toLowerCase()
   if (!action) {
-    return { ok: false, output: 'skill_manage: missing "action" (create, install, list, edit, or remove).' }
+    return {
+      ok: false,
+      output: 'skill_manage: missing "action" (create, install, list, edit, or remove).'
+    }
   }
   if (action === 'list' || action === 'ls') return skillManageList(cwd)
 
@@ -1093,11 +1151,17 @@ async function runSkillManage(input: Record<string, unknown>, cwd: string): Prom
   const wantsInstall =
     action === 'install' ||
     action === 'import' ||
-    ((action === 'create' || action === 'add' || action === 'new') && !!source && !pickSkillBody(input))
+    ((action === 'create' || action === 'add' || action === 'new') &&
+      !!source &&
+      !pickSkillBody(input))
   if (wantsInstall) return runSkillInstall(input, source, cwd)
 
   const name = str(input.name ?? input.skill ?? input.id).trim()
-  if (!name) return { ok: false, output: `skill_manage ${action}: needs a "name". Run action:"list" to see existing skills.` }
+  if (!name)
+    return {
+      ok: false,
+      output: `skill_manage ${action}: needs a "name". Run action:"list" to see existing skills.`
+    }
 
   const scope = str(input.scope).trim().toLowerCase() === 'global' ? 'global' : 'workspace'
   const description = input.description != null ? str(input.description) : undefined
@@ -1125,7 +1189,10 @@ async function runSkillManage(input: Record<string, unknown>, cwd: string): Prom
     case 'edit':
     case 'update': {
       if (description === undefined && (body === undefined || !body.length)) {
-        return { ok: false, output: 'skill_manage edit: provide a new "description" and/or "body" to change.' }
+        return {
+          ok: false,
+          output: 'skill_manage edit: provide a new "description" and/or "body" to change.'
+        }
       }
       const res = await writeSkill({ name, description, body, scope }, cwd, { mode: 'edit' })
       return res.ok
@@ -1139,7 +1206,9 @@ async function runSkillManage(input: Record<string, unknown>, cwd: string): Prom
       if (!res.ok) return { ok: false, output: res.error ?? 'Failed to remove skill.' }
       return {
         ok: true,
-        output: res.removed ? `Removed skill "${name}" (${res.location}).` : (res.error ?? `No skill named "${name}".`)
+        output: res.removed
+          ? `Removed skill "${name}" (${res.location}).`
+          : (res.error ?? `No skill named "${name}".`)
       }
     }
     default:
@@ -1199,7 +1268,8 @@ async function skillManageList(cwd: string): Promise<ToolResult> {
     return { ok: true, output: 'No skills found. Create one with skill_manage action:"create".' }
   }
   const lines = skills.map(
-    (s) => `- ${s.name} [${s.source}]${s.description ? ` — ${s.description}` : ''}\n    ${s.location}`
+    (s) =>
+      `- ${s.name} [${s.source}]${s.description ? ` — ${s.description}` : ''}\n    ${s.location}`
   )
   return { ok: true, output: `Skills (${skills.length}):\n${lines.join('\n')}` }
 }
@@ -1215,14 +1285,23 @@ async function skillManageList(cwd: string): Promise<ToolResult> {
  * same turn. Never throws — every failure degrades to an error ToolResult.
  */
 async function runMcpTool(input: Record<string, unknown>, cwd: string): Promise<ToolResult> {
-  const action = str(input.action ?? input.op).trim().toLowerCase()
+  const action = str(input.action ?? input.op)
+    .trim()
+    .toLowerCase()
   if (!action) {
-    return { ok: false, output: 'mcp: missing "action" (add, list, reconnect, enable, disable, or remove).' }
+    return {
+      ok: false,
+      output: 'mcp: missing "action" (add, list, reconnect, enable, disable, or remove).'
+    }
   }
   if (action === 'list' || action === 'ls' || action === 'status') return mcpListServers()
 
   const id = str(input.id ?? input.name ?? input.server).trim()
-  if (!id) return { ok: false, output: `mcp ${action}: needs an "id" (the server name). Run action:"list" to see configured servers.` }
+  if (!id)
+    return {
+      ok: false,
+      output: `mcp ${action}: needs an "id" (the server name). Run action:"list" to see configured servers.`
+    }
 
   switch (action) {
     case 'add':
@@ -1291,7 +1370,9 @@ function mcpListServers(): ToolResult {
   const lines = records.map((rec) => {
     const sum = statusById.get(rec.id)
     const transport =
-      rec.config.type === 'local' ? `local: ${rec.config.command.join(' ')}` : `remote: ${rec.config.url}`
+      rec.config.type === 'local'
+        ? `local: ${rec.config.command.join(' ')}`
+        : `remote: ${rec.config.url}`
     const status = !rec.enabled ? 'disabled' : (sum?.status ?? 'not connected')
     const tools = sum && sum.tools.length ? ` — tools: ${sum.tools.join(', ')}` : ''
     const err = sum?.status === 'error' && sum.error ? ` (${sum.error})` : ''
@@ -1302,7 +1383,8 @@ function mcpListServers(): ToolResult {
 
 async function mcpReconnectServer(id: string, cwd: string): Promise<ToolResult> {
   const rec = repo.listMcpServers().find((r) => r.id === id)
-  if (!rec) return { ok: false, output: `mcp reconnect: no server named "${id}". Run action:"list".` }
+  if (!rec)
+    return { ok: false, output: `mcp reconnect: no server named "${id}". Run action:"list".` }
   const summary = await reconnectMcpServer(rec, cwd)
   return summarizeMcpConnect('Reconnected', id, summary)
 }
@@ -1310,7 +1392,10 @@ async function mcpReconnectServer(id: string, cwd: string): Promise<ToolResult> 
 async function mcpSetServerEnabled(id: string, enabled: boolean, cwd: string): Promise<ToolResult> {
   const rec = repo.listMcpServers().find((r) => r.id === id)
   if (!rec) {
-    return { ok: false, output: `mcp ${enabled ? 'enable' : 'disable'}: no server named "${id}". Run action:"list".` }
+    return {
+      ok: false,
+      output: `mcp ${enabled ? 'enable' : 'disable'}: no server named "${id}". Run action:"list".`
+    }
   }
   repo.setMcpServerEnabled(id, enabled)
   if (!enabled) {
@@ -1339,7 +1424,10 @@ function summarizeMcpConnect(verb: string, id: string, summary: McpServerSummary
     return { ok: true, output: `${verb} MCP server "${id}" and connected it. ${tools}` }
   }
   if (summary.status === 'disabled') {
-    return { ok: true, output: `${verb} MCP server "${id}", but it is disabled. Enable it with mcp action:"enable".` }
+    return {
+      ok: true,
+      output: `${verb} MCP server "${id}", but it is disabled. Enable it with mcp action:"enable".`
+    }
   }
   return {
     ok: false,
@@ -1374,7 +1462,10 @@ function parseTasksInput(raw: unknown): SessionTask[] | undefined {
   return out
 }
 
-function runSetSessionMetadata(input: Record<string, unknown>, sessionId?: string): ToolResult {
+async function runSetSessionMetadata(
+  input: Record<string, unknown>,
+  sessionId?: string
+): Promise<ToolResult> {
   if (!sessionId) {
     return { ok: false, output: 'change_session_metadata: no active session to update.' }
   }
@@ -1405,5 +1496,22 @@ function runSetSessionMetadata(input: Record<string, unknown>, sessionId?: strin
     const done = patch.tasks.filter((t) => t.status === 'completed').length
     bits.push(`tasks ${done}/${patch.tasks.length} done`)
   }
+
+  // Retitling a session should carry its branch along: a workstream that began
+  // as `roxy/legacy-ogre-apprentice` and is now about auth should say so in
+  // `git branch` and on the PR. Only ever renames a name WE generated, and
+  // never one already pushed - see syncBranchToTitle. An explicit `branch`
+  // overrides the derivation.
+  const wanted = str(input.branch).trim()
+  if (wanted) {
+    const r = await renameWorkstreamBranch(sessionId, wanted)
+    // A rejected branch name is worth telling the model about, since it asked
+    // for that name specifically.
+    bits.push(r.ok ? `branch → ${r.branch}` : `branch unchanged (${r.error})`)
+  } else if (patch.title) {
+    const r = await syncBranchToTitle(sessionId, patch.title)
+    if (r.renamed) bits.push(`branch → ${r.branch}`)
+  }
+
   return { ok: true, output: `Updated session metadata (${bits.join(', ')}).` }
 }

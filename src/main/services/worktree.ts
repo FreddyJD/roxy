@@ -9,7 +9,13 @@
  * missing git binary, a locked index or an offline fetch degrades to "run in the
  * project folder", never to a turn that won't start.
  */
-import { branchNameError } from '../../shared/branch'
+import {
+  DEFAULT_BRANCH_PREFIX,
+  branchNameError,
+  isPlaceholderBranch,
+  normalizeBranchPrefix
+} from '../../shared/branch'
+import { slugToBranchSegment } from '../../shared/slugs'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import * as repo from '../db/repo'
@@ -272,6 +278,16 @@ export async function renameWorkstreamBranch(
   if (!from) return { ok: false, error: 'Could not determine the current branch.' }
   if (from === next) return { ok: true, branch: next }
 
+  // Once a branch is pushed, renaming it locally strands the remote under the
+  // old name (git only moves the local ref) and any open PR with it. Refuse
+  // rather than quietly desynchronize the two.
+  if (await git.hasUpstreamBranch(owner.worktreePath, from)) {
+    return {
+      ok: false,
+      error: `"${from}" has already been pushed - rename it on the remote instead.`
+    }
+  }
+
   // Run from the worktree itself: it is the path we are certain exists, and git
   // resolves the common repo from there.
   const r = await git.renameBranch(owner.worktreePath, from, next)
@@ -279,6 +295,61 @@ export async function renameWorkstreamBranch(
 
   repo.setChatWorktree(owner.id, { branch: next })
   return { ok: true, branch: next }
+}
+
+/**
+ * Rename a session's branch to match a NEW session title, when that is safe.
+ *
+ * Called when the agent retitles a session (`change_session_metadata`), so a
+ * session that starts on a random slug and becomes "Fix auth token refresh"
+ * does not keep a branch named after the slug forever.
+ *
+ * Best-effort and silent by design: this rides along with a metadata update the
+ * model asked for, so a refusal must never fail that update. Every skip is a
+ * deliberate rule rather than a fallback:
+ *
+ *   - the branch is not one WE generated -> someone named it on purpose;
+ *   - it has been pushed -> the remote, and any open PR, would be stranded;
+ *   - the new title yields nothing usable, or the name is already taken.
+ */
+export async function syncBranchToTitle(
+  chatId: string,
+  title: string
+): Promise<{ renamed: boolean; branch?: string }> {
+  try {
+    const chat = repo.getChat(chatId)
+    if (!chat?.worktreePath || !chat.branch) return { renamed: false }
+
+    // Only ever reclaim a name we generated. A branch the user (or the agent,
+    // earlier) chose deliberately is not ours to rewrite.
+    if (!isPlaceholderBranch(chat.branch, branchPrefixSetting())) return { renamed: false }
+    if (await git.hasUpstreamBranch(chat.worktreePath, chat.branch)) return { renamed: false }
+
+    // An unusable title (emoji-only, say) makes branchNameForTitle fall back to
+    // hex; swapping one generated name for another is churn, not information.
+    if (!slugToBranchSegment(title)) return { renamed: false }
+
+    const next = await git.branchNameForTitle(chat.worktreePath, title)
+    if (!next || next === chat.branch) return { renamed: false }
+
+    const r = await git.renameBranch(chat.worktreePath, chat.branch, next)
+    if (!r.ok) return { renamed: false }
+
+    repo.setChatWorktree(chat.id, { branch: next })
+    return { renamed: true, branch: next }
+  } catch {
+    // A metadata update must never fail because a branch rename did.
+    return { renamed: false }
+  }
+}
+
+/** The configured branch prefix, for deciding what counts as auto-generated. */
+function branchPrefixSetting(): string {
+  try {
+    return normalizeBranchPrefix(repo.getSettings().branchPrefix)
+  } catch {
+    return DEFAULT_BRANCH_PREFIX
+  }
 }
 
 /**
