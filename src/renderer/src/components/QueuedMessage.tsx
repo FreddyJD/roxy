@@ -3,6 +3,7 @@ import { Check, ChevronDown, ChevronUp, ImagePlus, Pencil, X } from 'lucide-reac
 import type { QueueItem as QueueItemType } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
 import { imageFilesFrom, readImageFile, type ComposerImage } from '../lib/images'
+import { ImagePreview } from './ImagePreview'
 import {
   QueueItem,
   QueueItemAction,
@@ -151,11 +152,17 @@ export function QueuedMessage({
           {draftImages.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-2.5 pt-2.5">
               {draftImages.map((img) => (
-                <div
+                <ImagePreview
                   key={img.id}
+                  src={img.dataUrl}
+                  name={img.name}
                   className="group/img relative h-12 w-12 overflow-hidden rounded-md border border-border bg-surface-2"
                 >
-                  <img src={img.dataUrl} alt={img.name} className="h-full w-full object-cover" />
+                  <img
+                    src={img.dataUrl}
+                    alt={img.name}
+                    className="h-full w-full cursor-zoom-in object-cover"
+                  />
                   <button
                     type="button"
                     onClick={() => setDraftImages((prev) => prev.filter((i) => i.id !== img.id))}
@@ -164,7 +171,7 @@ export function QueuedMessage({
                   >
                     <X className="h-2.5 w-2.5" />
                   </button>
-                </div>
+                </ImagePreview>
               ))}
             </div>
           )}

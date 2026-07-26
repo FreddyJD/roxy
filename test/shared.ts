@@ -169,6 +169,15 @@ import {
   FORGE_NAMES,
   type PullRequestView
 } from '../src/shared/forge'
+import {
+  place,
+  GAP,
+  MARGIN,
+  MAX_W,
+  MAX_H,
+  CHROME_H,
+  type Rect
+} from '../src/renderer/src/lib/anchor'
 
 let pass = 0
 const fails: string[] = []
@@ -3055,6 +3064,137 @@ async function main(): Promise<void> {
       contextBudgetFor(400_000, 1_000_000) === 400_000
   )
 
+  // ---- attachment hover-preview geometry (renderer/lib/anchor) ----------------
+  // A thumbnail's floating preview must never leave the viewport and never cover
+  // the thumbnail that opened it, at any window size or aspect ratio.
+  const thumb = (left: number, top: number, size = 36): Rect => ({
+    left,
+    top,
+    right: left + size,
+    bottom: top + size,
+    width: size,
+    height: size
+  })
+  const boxOf = (p: NonNullable<ReturnType<typeof place>>) => ({
+    left: p.left,
+    top: p.top,
+    right: p.left + p.width,
+    bottom: p.top + p.height + CHROME_H
+  })
+  const disjoint = (a: ReturnType<typeof boxOf>, t: Rect): boolean =>
+    a.right <= t.left || a.left >= t.right || a.bottom <= t.top || a.top >= t.bottom
+
+  // Sweep a thumbnail across a grid of positions, viewports, and image shapes.
+  const shapes: Array<[number, number, string]> = [
+    [1568, 720, 'wide'],
+    [600, 1400, 'tall'],
+    [900, 900, 'square'],
+    [64, 64, 'tiny'],
+    [3000, 80, 'panorama'],
+    [80, 3000, 'strip']
+  ]
+  const viewports: Array<[number, number]> = [
+    [1280, 780],
+    [1920, 1080],
+    [900, 600],
+    [700, 420],
+    [420, 300]
+  ]
+  let escapes = 0
+  let overlaps = 0
+  let oversize = 0
+  let placements = 0
+  let nulls = 0
+  for (const [vw, vh] of viewports) {
+    for (let fx = 0.02; fx < 1; fx += 0.16) {
+      for (let fy = 0.02; fy < 1; fy += 0.16) {
+        const t = thumb(Math.round(fx * (vw - 36)), Math.round(fy * (vh - 36)))
+        for (const [iw, ih] of shapes) {
+          const p = place(t, iw, ih, vw, vh)
+          if (!p) {
+            nulls++
+            continue
+          }
+          placements++
+          const b = boxOf(p)
+          if (b.left < MARGIN || b.top < MARGIN || b.right > vw - MARGIN || b.bottom > vh - MARGIN)
+            escapes++
+          if (!disjoint(b, t)) overlaps++
+          if (p.width > MAX_W || p.height > MAX_H) oversize++
+        }
+      }
+    }
+  }
+  check(`anchor: ${placements} placements produced (grid is non-trivial)`, placements > 400)
+  check('anchor: never escapes the viewport margins', escapes === 0, `${escapes} escaped`)
+  check('anchor: never covers its own trigger', overlaps === 0, `${overlaps} overlapped`)
+  check('anchor: respects the size ceilings', oversize === 0, `${oversize} oversized`)
+
+  // Aspect ratio must survive the fit, or screenshots read as distorted.
+  const ratioOk = shapes.every(([iw, ih]) => {
+    const p = place(thumb(600, 400), iw, ih, 1280, 780)
+    if (!p) return true
+    return Math.abs(p.width / p.height - iw / ih) < 0.04 * (iw / ih)
+  })
+  check('anchor: preserves aspect ratio', ratioOk)
+
+  // Above is the natural direction when there is room for it.
+  const roomy = place(thumb(600, 700), 900, 400, 1280, 900)
+  check('anchor: prefers above when it fits', roomy?.side === 'top', String(roomy?.side))
+
+  // A thumbnail pinned to the top has to flip below.
+  const atTop = place(thumb(600, 4), 900, 400, 1280, 900)
+  check('anchor: flips below near the top edge', atTop?.side === 'bottom', String(atTop?.side))
+
+  // A tall image beside a mid-height thumbnail fits in neither band -> sideways.
+  const tallMid = place(thumb(600, 380), 600, 1400, 1280, 780)
+  check(
+    'anchor: goes sideways when neither band fits',
+    tallMid !== null && (tallMid.side === 'left' || tallMid.side === 'right'),
+    String(tallMid?.side)
+  )
+
+  // Small images are enlarged to a legible size, not shown at 64px.
+  const upscaled = place(thumb(600, 700), 64, 64, 1280, 900)
+  check('anchor: upscales tiny images', (upscaled?.width ?? 0) >= 200, String(upscaled?.width))
+
+  // ...but never past the space actually available.
+  const tightUp = place(thumb(300, 150, 20), 64, 64, 360, 300)
+  check(
+    'anchor: upscaling still respects the viewport',
+    tightUp === null || boxOf(tightUp).right <= 360 - MARGIN,
+    JSON.stringify(tightUp)
+  )
+
+  // Degenerate inputs must not produce NaN coordinates or a box at all.
+  check('anchor: rejects zero-sized images', place(thumb(100, 100), 0, 0, 1280, 800) === null)
+  check('anchor: gives up in a tiny viewport', place(thumb(20, 20), 900, 900, 120, 100) === null)
+
+  // Every preview it does produce must be a real step up from the thumbnail --
+  // otherwise it covers the UI to show you what you could already see.
+  let puny = 0
+  for (const [vw, vh] of viewports) {
+    for (let fx = 0.02; fx < 1; fx += 0.16) {
+      for (let fy = 0.02; fy < 1; fy += 0.16) {
+        for (const size of [36, 48, 64, 192]) {
+          const t = thumb(Math.round(fx * (vw - size)), Math.round(fy * (vh - size)), size)
+          for (const [iw, ih] of shapes) {
+            const p = place(t, iw, ih, vw, vh)
+            if (p && Math.max(p.width, p.height) < size * 1.5) puny++
+          }
+        }
+      }
+    }
+  }
+  check('anchor: never opens a preview barely bigger than its thumbnail', puny === 0, `${puny}`)
+
+  // The gap is real: the box shouldn't touch the thumbnail.
+  const gapped = place(thumb(600, 700), 900, 400, 1280, 900)
+  check(
+    'anchor: leaves a gap above the trigger',
+    gapped !== null && Math.round(700 - boxOf(gapped).bottom) === GAP,
+    gapped ? String(700 - boxOf(gapped).bottom) : 'null'
+  )
   if (fails.length) {
     console.error(`\nSHARED FAILED \u2014 ${fails.length} failing: ${fails.join(', ')}`)
     process.exit(1)

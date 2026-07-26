@@ -3,6 +3,7 @@ import { ArrowUp, Plus, Square, X } from 'lucide-react'
 import { ModelPicker } from './ModelPicker'
 import { ContextMeter, ContextPicker, ThinkingPicker, AgentPicker } from './InferenceControls'
 import { imageFilesFrom, readImageFile, type ComposerImage } from '../lib/images'
+import { ImagePreview } from './ImagePreview'
 
 export function Composer({
   onSend,
@@ -96,11 +97,17 @@ export function Composer({
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2 px-3 pt-3">
             {images.map((img) => (
-              <div
+              <ImagePreview
                 key={img.id}
+                src={img.dataUrl}
+                name={img.name}
                 className="group relative h-16 w-16 overflow-hidden rounded-lg border border-border bg-surface"
               >
-                <img src={img.dataUrl} alt={img.name} className="h-full w-full object-cover" />
+                <img
+                  src={img.dataUrl}
+                  alt={img.name}
+                  className="h-full w-full cursor-zoom-in object-cover"
+                />
                 <button
                   type="button"
                   onClick={() => removeImage(img.id)}
@@ -109,7 +116,7 @@ export function Composer({
                 >
                   <X className="h-2.5 w-2.5" />
                 </button>
-              </div>
+              </ImagePreview>
             ))}
           </div>
         )}
