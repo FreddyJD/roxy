@@ -1,4 +1,5 @@
 import { renderAnsi } from '../lib/ansi'
+import { Scroller } from './Scroller'
 
 /**
  * Shell output as a colored terminal block — prompt line, ANSI body, status
@@ -47,7 +48,8 @@ export function TerminalOutput({
       : '#9a9aa3'
   const trimmed = body.replace(/[\r\n]+$/, '')
   return (
-    <pre
+    <Scroller
+      as="pre"
       className={
         className ??
         'max-h-72 overflow-auto border-t border-border bg-[#0b0b0d] px-3 py-2 font-mono text-xs leading-relaxed text-[#d4d4d4]'
@@ -61,6 +63,6 @@ export function TerminalOutput({
           {footer}
         </div>
       )}
-    </pre>
+    </Scroller>
   )
 }

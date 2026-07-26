@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react'
 import type { Chat } from '@shared/types'
 import { cn } from '../lib/cn'
+import { Scroller } from './Scroller'
 
 /**
  * A slim strip under the chat header showing the session's agent-set
@@ -24,7 +25,7 @@ export function SessionInfo({ chat }: { chat: Chat }): JSX.Element | null {
               {done}/{tasks.length}
             </span>
           </div>
-          <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+          <Scroller as="ul" className="flex max-h-40 flex-col gap-1 overflow-y-auto">
             {tasks.map((t, i) => (
               <li key={i} className="flex items-center gap-2 text-xs">
                 <span
@@ -57,7 +58,7 @@ export function SessionInfo({ chat }: { chat: Chat }): JSX.Element | null {
                 </span>
               </li>
             ))}
-          </ul>
+          </Scroller>
         </div>
       )}
     </div>
