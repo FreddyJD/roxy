@@ -152,8 +152,15 @@ export function ServicesSegment({
         )}
         {/* Collapsed, this is the ONLY thing most people read, so it states the
             outcome rather than the process state: a setup script that succeeded
-            must not look like one that died. */}
-        <span className={cn('truncate', failed > 0 && 'text-danger')}>
+            must not look like one that died.
+
+            A failure here is deliberately NOT red. These are the agent's own
+            background processes: a probe that exits 1, a build the model ran to
+            see what breaks. None of them are emergencies the user must act on.
+            Red is a claim on attention, and spending it on routine debugging
+            noise teaches people to ignore it everywhere else in the app. Grey
+            states the fact and leaves it there. */}
+        <span className={cn('truncate', failed > 0 && 'text-text-muted')}>
           {servicesSummary(services)}
         </span>
       </button>
@@ -235,7 +242,7 @@ function ServiceRow({
         <span
           className={cn(
             'h-1.5 w-1.5 shrink-0 rounded-full',
-            isRunning ? 'bg-success' : failed ? 'bg-danger' : 'bg-text-subtle/50'
+            isRunning ? 'bg-success' : failed ? 'bg-text-muted' : 'bg-text-subtle/50'
           )}
           title={service.status}
         />
@@ -247,7 +254,7 @@ function ServiceRow({
           <span className="shrink-0 tabular-nums text-text-subtle">:{service.port}</span>
         )}
         <span
-          className={cn('shrink-0 tabular-nums', failed ? 'text-danger' : 'text-text-subtle')}
+          className={cn('shrink-0 tabular-nums', failed ? 'text-text-muted' : 'text-text-subtle')}
           title={service.state}
         >
           {serviceStatusLabel(service)}

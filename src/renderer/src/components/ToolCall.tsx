@@ -224,7 +224,11 @@ export function ToolCall({
           )}
           {state === 'running' && <Loader2 className="h-3.5 w-3.5 animate-spin text-text-subtle" />}
           {state === 'done' && <Check className="h-3.5 w-3.5 text-success" />}
-          {state === 'error' && <TriangleAlert className="h-3.5 w-3.5 text-danger" />}
+          {/* Grey, not red: a failed tool is part of how the agent works — grep
+              finds nothing, a build surfaces the error it was run to surface.
+              The icon shape already sets it apart; red would make routine
+              debugging read like an incident. */}
+          {state === 'error' && <TriangleAlert className="h-3.5 w-3.5 text-text-muted" />}
         </span>
       </button>
       {/* Collapsed + running: a live one-liner of what the delegate is doing now. */}
