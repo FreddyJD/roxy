@@ -94,6 +94,25 @@ export interface CreateChatInput {
 }
 
 /**
+ * A background process owned by a session — a dev server, a watcher, an install.
+ *
+ * Subagent-started processes are owned by the ROOT session, so they appear in
+ * their parent's panel; the parent is who can stop them.
+ */
+export interface ServiceView {
+  id: string
+  command: string
+  cwd: string
+  status: 'running' | 'exited' | 'killed' | 'error'
+  exitCode: number | null
+  startedAt: number
+  /** Humanised status, e.g. `running 4m` / `exited (exit 1)`. */
+  state: string
+  /** The session's dev port, when it owns one. */
+  port: number | null
+}
+
+/**
  * Git state for the workstream strip. Everything is optional-by-degradation:
  * a folder with no repo (or no git binary) reports `isRepo: false` and the UI
  * renders nothing at all.
@@ -510,6 +529,18 @@ export interface RoxyApi {
     onState(callback: (state: BrowserState) => void): () => void
     /** Subscribe to the open tab list; returns an unsubscribe fn. */
     onTabs(callback: (tabs: BrowserTab[]) => void): () => void
+  }
+  services: {
+    /** Background processes owned by a session (includes its subagents'). */
+    list(sessionId: string): Promise<ServiceView[]>
+    /** Full buffered output for the log view (does NOT move the agent's cursor). */
+    output(sessionId: string, id: string): Promise<string>
+    /** Stop a service (kills the whole process tree on Windows). */
+    stop(sessionId: string, id: string): Promise<{ ok: boolean; error?: string }>
+    /** Stop and re-run the same command in the same cwd. */
+    restart(sessionId: string, id: string): Promise<{ ok: boolean; id?: string; error?: string }>
+    /** Open this session's OWN browser window at a service's localhost URL. */
+    open(sessionId: string, port: number): Promise<void>
   }
   git: {
     /** Whether a usable `git` binary exists (probed once, cached). */

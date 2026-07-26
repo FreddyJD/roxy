@@ -107,6 +107,14 @@ export const CHANNELS = {
   /** main -> browser toolbar: open tab list */
   browserTabs: 'browser:tabs',
 
+  /** renderer -> main: a session's background processes (the Services panel) */
+  servicesList: 'services:list',
+  /** renderer -> main: full buffered output of one service, for the log view */
+  servicesOutput: 'services:output',
+  servicesStop: 'services:stop',
+  servicesRestart: 'services:restart',
+  servicesOpen: 'services:open',
+
   gitAvailable: 'git:available',
   gitStatus: 'git:status',
   gitBranches: 'git:branches',

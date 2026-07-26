@@ -163,6 +163,13 @@ const roxy: RoxyApi = {
       return () => ipcRenderer.removeListener(CHANNELS.browserTabs, handler)
     }
   },
+  services: {
+    list: (sessionId) => ipcRenderer.invoke(CHANNELS.servicesList, sessionId),
+    output: (sessionId, id) => ipcRenderer.invoke(CHANNELS.servicesOutput, sessionId, id),
+    stop: (sessionId, id) => ipcRenderer.invoke(CHANNELS.servicesStop, sessionId, id),
+    restart: (sessionId, id) => ipcRenderer.invoke(CHANNELS.servicesRestart, sessionId, id),
+    open: (sessionId, port) => ipcRenderer.invoke(CHANNELS.servicesOpen, sessionId, port)
+  },
   git: {
     available: () => ipcRenderer.invoke(CHANNELS.gitAvailable),
     status: (cwd) => ipcRenderer.invoke(CHANNELS.gitStatus, cwd),

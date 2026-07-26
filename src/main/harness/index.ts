@@ -10,6 +10,11 @@
 export {
   runTool,
   startBackground,
+  listServices,
+  serviceOutput,
+  stopService,
+  restartService,
+  type ServiceView,
   killAllBackground,
   killSessionBackground,
   _resetBackgroundProcs,

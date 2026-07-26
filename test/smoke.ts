@@ -14,7 +14,14 @@ import { app } from 'electron'
 
 import * as repo from '../src/main/db/repo'
 import { closeDb } from '../src/main/db/database'
-import { runTool, killSessionBackground } from '../src/main/harness'
+import {
+  runTool,
+  killSessionBackground,
+  listServices,
+  serviceOutput,
+  stopService,
+  restartService
+} from '../src/main/harness'
 import { sessionCwd } from '../src/main/services/workspace'
 import * as git from '../src/main/services/git'
 import {
@@ -752,6 +759,69 @@ async function main(): Promise<void> {
       repo.removeChat(wtChat.id)
       repo.removeChat(lazy.id)
     }
+  }
+
+  // ---- services (the panel's view of a session's background processes) ----
+  {
+    const svcA = repo.createChat({ title: 'svc A', kind: 'main', workspacePath: ws })
+    const svcB = repo.createChat({ title: 'svc B', kind: 'main', workspacePath: ws })
+    const svcSub = repo.createChat({ title: 'svc sub', kind: 'sub', parentId: svcA.id })
+
+    check('listServices is empty for a fresh session', listServices(svcA.id).length === 0)
+
+    const started = await runTool('bash', { command: bgCmd, background: true }, {
+      cwd: ws,
+      sessionId: svcA.id
+    })
+    const svcId = started.output.match(/bg_\d+/)?.[0] ?? ''
+    check('a background process appears in listServices', listServices(svcA.id).length === 1)
+
+    const [svc] = listServices(svcA.id)
+    check('service carries its command', svc.command === bgCmd)
+    check('service carries its cwd', svc.cwd === ws)
+    check('service is running', svc.status === 'running')
+    // bgState is reused rather than reimplemented in the UI.
+    check('service state is the bash_list label', /^running \d+s$/.test(svc.state), svc.state)
+
+    // Isolation: the panel is per session, exactly like bash_list.
+    check("session B does not see session A's service", listServices(svcB.id).length === 0)
+    check('an empty session id lists nothing', listServices('').length === 0)
+
+    // A subagent's process is owned by the ROOT session, so it shows up in the
+    // parent's panel — the parent is who can stop it.
+    await runTool('bash', { command: bgCmd, background: true }, { cwd: ws, sessionId: svcSub.id })
+    check("a subagent's service appears in the PARENT's panel", listServices(svcA.id).length === 2)
+    check('...and not under the sub itself', listServices(svcSub.id).length === 0)
+
+    // Log view reads the whole buffer WITHOUT moving the agent's read cursor.
+    const logs = serviceOutput(svcId, svcA.id)
+    check('serviceOutput returns the buffered output', logs.includes(bgCmd), logs.slice(0, 80))
+    check('serviceOutput is stable when read twice', serviceOutput(svcId, svcA.id) === logs)
+    const agentRead = await runTool('bash_output', { id: svcId }, { cwd: ws, sessionId: svcA.id })
+    check("the UI's read did not consume the agent's new output",
+      agentRead.ok && agentRead.output.includes('roxy-bg-ok'), agentRead.output)
+    check('serviceOutput refuses another session', serviceOutput(svcId, svcB.id) === '')
+
+    // Restart replaces the row rather than accumulating a dead one per restart.
+    const restarted = await restartService(svcId, svcA.id)
+    check('restartService succeeds', restarted.ok && !!restarted.id, restarted.error ?? '')
+    check('...with a NEW process id', restarted.id !== svcId)
+    check('...and does not leave the old row behind', listServices(svcA.id).length === 2)
+    check('the restarted service runs the same command',
+      listServices(svcA.id).some((s) => s.id === restarted.id && s.command === bgCmd))
+    check('restartService refuses another session', (await restartService(restarted.id!, svcB.id)).ok === false)
+
+    // Stop is idempotent.
+    const stopped = stopService(restarted.id!, svcA.id)
+    check('stopService succeeds', stopped.ok)
+    check('...and the service is no longer running',
+      listServices(svcA.id).find((s) => s.id === restarted.id)?.status !== 'running')
+    check('stopService twice is fine', stopService(restarted.id!, svcA.id).ok)
+    check('stopService refuses an unknown id', stopService('bg_nope', svcA.id).ok === false)
+
+    killSessionBackground(svcA.id)
+    repo.removeChat(svcA.id)
+    repo.removeChat(svcB.id)
   }
 
   // ---- dev ports (parallel sessions must not fight over :3000) ----

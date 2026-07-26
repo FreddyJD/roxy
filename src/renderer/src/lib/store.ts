@@ -25,7 +25,7 @@ import { isOverflow, pruneToolMessages, KEEP_RECENT_TOKENS } from '@shared/conte
 import { uniqueSlug } from '@shared/slugs'
 import { api } from './api'
 import type { ComposerImage } from './images'
-import type { GitStatusView, WorktreeView } from '@shared/api'
+import type { GitStatusView, ServiceView, WorktreeView } from '@shared/api'
 
 interface RoxyStore {
   ready: boolean
@@ -57,6 +57,8 @@ interface RoxyStore {
   runningTasks: Record<string, TaskUpdate[]>
   /** Remote Workspace sharing status — mirrors the main process's RemoteState. */
   remote: RemoteState
+  /** Background processes for the active session (the Services panel). */
+  services: ServiceView[]
   /** Is a `git` binary available at all? null until probed once. */
   gitAvailable: boolean | null
   /**
@@ -108,6 +110,8 @@ interface RoxyStore {
   /** Sync the current sharing status from main (e.g. after a window reload). */
   refreshRemote: () => Promise<void>
   compactConversation: (chatId?: string) => Promise<void>
+  /** Reload the active session's background processes. */
+  refreshServices: (sessionId: string) => Promise<void>
   /**
    * Refresh git status for a session's cwd. Cheap and idempotent — the strip
    * calls it on a timer and on window focus. Polling, not fs.watch: with N
@@ -181,6 +185,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   compactingChats: {},
   runningTasks: {},
   remote: { phase: 'idle', guests: 0, rev: 0 },
+  services: [],
   gitAvailable: null,
   gitStatus: {},
   worktrees: {},
@@ -350,6 +355,20 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
 
   stopRemote: async () => {
     set({ remote: await api.remote.stop() })
+  },
+
+  refreshServices: async (sessionId) => {
+    if (!sessionId) {
+      set({ services: [] })
+      return
+    }
+    try {
+      const services = await api.services.list(sessionId)
+      // Guard against a stale response landing after the user switched away.
+      if (get().activeChatId === sessionId) set({ services })
+    } catch {
+      // Best-effort — keep the last known list.
+    }
   },
 
   refreshGitStatus: async (chatId) => {

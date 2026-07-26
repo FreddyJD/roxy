@@ -376,7 +376,7 @@ export function startBackground(
   cwd: string,
   sessionId: string,
   extraEnv?: NodeJS.ProcessEnv
-): ToolResult {
+): ToolResult & { processId?: string } {
   const id = `bg_${++bgCounter}`
   const { cmd, args } = shellInvocation(command)
   const child = spawn(cmd, args, {
@@ -417,6 +417,7 @@ export function startBackground(
   bgProcs.set(id, proc)
   return {
     ok: true,
+    processId: id,
     output:
       `Started background process ${id}: $ ${command}\n` +
       `It runs in the background in this session. ` +
@@ -464,6 +465,96 @@ function runBashKill(id: string, sessionId: string): ToolResult {
     killProc(p.child)
   }
   return { ok: true, output: `Killed background process ${id} ($ ${p.command}).` }
+}
+
+/**
+ * A background process as the UI sees it. Deliberately a plain snapshot — the
+ * live `child` handle must never cross the IPC boundary.
+ */
+export interface ServiceView {
+  id: string
+  command: string
+  cwd: string
+  status: BgProc['status']
+  exitCode: number | null
+  startedAt: number
+  /** The same label `bash_list` shows, e.g. `running 4m` / `exited (exit 1)`. */
+  state: string
+  /** The dev port this session owns, when it has one (for the "open" action). */
+  port: number | null
+}
+
+/**
+ * Every background process a session owns, oldest first.
+ *
+ * Subagent-started processes are registered under the ROOT session, so they show
+ * up in their parent's panel — intended, since the parent is who can stop them.
+ */
+export function listServices(sessionId: string): ServiceView[] {
+  if (!sessionId) return []
+  const port = devPortFor(sessionId)
+  return [...bgProcs.values()]
+    .filter((p) => p.sessionId === sessionId)
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .map((p) => ({
+      id: p.id,
+      command: p.command,
+      cwd: p.cwd,
+      status: p.status,
+      exitCode: p.exitCode,
+      startedAt: p.startedAt,
+      state: bgState(p),
+      port
+    }))
+}
+
+/**
+ * The FULL buffered output of a process, for the log view.
+ *
+ * Unlike `bash_output` (which advances a read cursor so the model only sees new
+ * lines), the UI wants the whole scrollback every time — and must not disturb
+ * the model's cursor by reading it.
+ */
+export function serviceOutput(id: string, sessionId: string): string {
+  const p = ownedBg(id, sessionId)
+  return p ? p.output : ''
+}
+
+/** Stop a service. Idempotent — stopping an already-exited one is a no-op. */
+export function stopService(id: string, sessionId: string): { ok: boolean; error?: string } {
+  const p = ownedBg(id, sessionId)
+  if (!p) return { ok: false, error: 'That process is not in this session.' }
+  if (p.status === 'running') {
+    p.status = 'killed'
+    killProc(p.child)
+  }
+  return { ok: true }
+}
+
+/**
+ * Restart a service: stop it, then re-run the same command in the same cwd.
+ *
+ * The old entry is dropped so the panel doesn't accumulate a dead row per
+ * restart. A brief pause lets the OS release the port — otherwise the fresh
+ * process races the old one's socket and dies with EADDRINUSE, which looks
+ * exactly like the port collision this whole feature exists to prevent.
+ */
+export async function restartService(
+  id: string,
+  sessionId: string
+): Promise<{ ok: boolean; id?: string; error?: string }> {
+  const p = ownedBg(id, sessionId)
+  if (!p) return { ok: false, error: 'That process is not in this session.' }
+  const { command, cwd } = p
+  if (p.status === 'running') {
+    p.status = 'killed'
+    killProc(p.child)
+    await new Promise((r) => setTimeout(r, 300))
+  }
+  bgProcs.delete(id)
+  const started = startBackground(command, cwd, sessionId)
+  if (!started.ok) return { ok: false, error: started.output }
+  return { ok: true, id: started.processId }
 }
 
 /** Kill a child process directly, swallowing the "already gone" race. */

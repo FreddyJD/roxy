@@ -7,7 +7,15 @@ import * as copilot from '../services/copilot'
 import * as browser from '../services/browser'
 import { listModels } from '../services/models'
 import { compactChat } from '../services/compaction'
-import { runTool, projectInstructions, killSessionBackground } from '../harness'
+import {
+  runTool,
+  projectInstructions,
+  killSessionBackground,
+  listServices,
+  serviceOutput,
+  stopService,
+  restartService
+} from '../harness'
 import { sessionCwd } from '../services/workspace'
 import * as git from '../services/git'
 import { pruneWorktrees, removeWorktreeForChat } from '../services/worktree'
@@ -415,6 +423,30 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.browserMoveTab, (e, id: string, toIndex: number) =>
     browser.moveTab(id, toIndex, keyOf(e))
   )
+
+  // ---- services (a session's background processes) ----
+  // Every handler resolves the ROOT session first: a subagent's dev server is
+  // registered under its parent, and the parent's panel is where it belongs.
+  ipcMain.handle(CHANNELS.servicesList, (_e, sessionId: string) =>
+    listServices(repo.rootSessionId(sessionId))
+  )
+  ipcMain.handle(CHANNELS.servicesOutput, (_e, sessionId: string, id: string) =>
+    serviceOutput(id, repo.rootSessionId(sessionId))
+  )
+  ipcMain.handle(CHANNELS.servicesStop, (_e, sessionId: string, id: string) =>
+    stopService(id, repo.rootSessionId(sessionId))
+  )
+  ipcMain.handle(CHANNELS.servicesRestart, (_e, sessionId: string, id: string) =>
+    restartService(id, repo.rootSessionId(sessionId))
+  )
+  ipcMain.handle(CHANNELS.servicesOpen, async (_e, sessionId: string, port: number) => {
+    // The browser is already isolated per session (keyed by chat id), so each
+    // workstream previews its own dev server in its own window.
+    const key = repo.rootSessionId(sessionId)
+    const title = repo.getChat(key)?.title
+    if (title) browser.setLabel(key, title)
+    await browser.navigate(`http://localhost:${port}`, key)
+  })
 
   // ---- git (worktree-backed sessions) ----
   // Every handler degrades instead of throwing: a folder that isn't a repo, or a

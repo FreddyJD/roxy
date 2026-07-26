@@ -8,6 +8,7 @@ import { Composer } from './Composer'
 import { LoopDetailsPane } from './LoopDetailsPane'
 import { SessionInfo } from './SessionInfo'
 import { WorkstreamStrip } from './WorkstreamStrip'
+import { ServicesPanel } from './ServicesPanel'
 import {
   Queue,
   QueueItem,
@@ -293,6 +294,8 @@ export function ChatView(): JSX.Element {
           </div>
         </div>
       )}
+
+      <ServicesPanel />
 
       <WorkstreamStrip />
 
