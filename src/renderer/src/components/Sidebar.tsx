@@ -648,7 +648,13 @@ export function Sidebar(): JSX.Element {
                                     <button
                                       onClick={() => selectChat(chat.id)}
                                       onDoubleClick={() => beginRename(chat)}
-                                      title={chat.branch ? `${chat.title} — ${chat.branch}` : chat.title}
+                                      title={
+                                        chat.branch
+                                          ? dirtyById.has(chat.id)
+                                            ? `${chat.title} - ${chat.branch} (uncommitted changes)`
+                                            : `${chat.title} - ${chat.branch}`
+                                          : chat.title
+                                      }
                                       className="min-w-0 flex-1 text-left"
                                     >
                                       <span className="block truncate">{chat.title}</span>
@@ -658,11 +664,12 @@ export function Sidebar(): JSX.Element {
                                         <span className="flex items-center gap-1 text-[10px] text-text-subtle">
                                           <GitBranch className="h-2.5 w-2.5 shrink-0 opacity-70" />
                                           <span className="truncate">{chat.branch}</span>
+                                          {/* Uncommitted work. The label lives on the row
+                                              tooltip above, not here: a 4px dot is too small
+                                              to hover deliberately, so its own `title` would
+                                              never be seen. */}
                                           {dirtyById.has(chat.id) && (
-                                            <span
-                                              className="h-1 w-1 shrink-0 rounded-full bg-warning"
-                                              title="Uncommitted changes"
-                                            />
+                                            <span className="h-1 w-1 shrink-0 rounded-full bg-warning" />
                                           )}
                                         </span>
                                       )}

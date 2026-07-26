@@ -188,6 +188,13 @@ const roxy: RoxyApi = {
     removeWorktree: (path, force) => ipcRenderer.invoke(CHANNELS.gitRemoveWorktree, path, force),
     pruneWorktrees: (cwd, dryRun) => ipcRenderer.invoke(CHANNELS.gitPruneWorktrees, cwd, dryRun)
   },
+  forge: {
+    status: (cwd, force) => ipcRenderer.invoke(CHANNELS.forgeStatus, cwd, force),
+    push: (cwd) => ipcRenderer.invoke(CHANNELS.forgePush, cwd),
+    createUrl: (cwd) => ipcRenderer.invoke(CHANNELS.forgeCreateUrl, cwd),
+    listHosts: () => ipcRenderer.invoke(CHANNELS.forgeListHosts),
+    setHostKind: (host, kind) => ipcRenderer.invoke(CHANNELS.forgeSetHostKind, host, kind)
+  },
   remote: {
     start: (input) => ipcRenderer.invoke(CHANNELS.remoteStart, input),
     stop: () => ipcRenderer.invoke(CHANNELS.remoteStop),
