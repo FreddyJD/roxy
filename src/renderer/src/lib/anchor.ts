@@ -82,6 +82,18 @@ export type MenuSide = 'top' | 'bottom'
  * bar, not a 30px sliver that can't show a single row.
  */
 export const MIN_MENU_H = 120
+/**
+ * ...and never grows past this, even when there is room. The cap used to be the
+ * viewport edge alone, which sounds right and is not: these menus hang off a
+ * trigger at the BOTTOM of the window, so "all the room above" is nearly the
+ * whole screen. A provider with forty models then rendered forty rows as one
+ * 900px column -- taller than the conversation behind it, and a list you scan
+ * by moving your eyes across the whole display rather than reading a menu.
+ *
+ * ~13 rows at a glance, scroll for the rest. Long lists are what the search
+ * field above them is for.
+ */
+export const MAX_MENU_H = 360
 
 /**
  * The menu's left edge, expressed RELATIVE TO ITS TRIGGER — i.e. exactly what an
@@ -105,20 +117,25 @@ export function alignMenu(
 }
 
 /**
- * How tall the menu may be before it has to scroll, given the room between the
- * trigger and the viewport edge it opens toward. `gap` is the space the menu
- * already reserves between itself and the trigger.
+ * How tall the menu may be before it has to scroll: the room between the
+ * trigger and the viewport edge it opens toward, bounded by `max`. `gap` is the
+ * space the menu already reserves between itself and the trigger.
+ *
+ * Both bounds apply and MIN wins the tie: hard against an edge there can be
+ * less room than MIN_MENU_H, and we return MIN anyway, because overflowing a
+ * little beats a menu too short to show a single row.
  */
 export function menuMaxHeight(
   triggerTop: number,
   triggerBottom: number,
   viewportHeight: number,
   side: MenuSide = 'top',
-  gap = 6
+  gap = 6,
+  max = MAX_MENU_H
 ): number {
   const room =
     side === 'top' ? triggerTop - gap - MARGIN : viewportHeight - triggerBottom - gap - MARGIN
-  return Math.max(MIN_MENU_H, Math.floor(room))
+  return Math.max(MIN_MENU_H, Math.min(max, Math.floor(room)))
 }
 
 /**

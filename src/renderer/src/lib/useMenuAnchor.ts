@@ -18,7 +18,7 @@
  * The geometry itself lives in lib/anchor.ts, pure and tested.
  */
 import { useCallback, useEffect, useState, type CSSProperties, type RefObject } from 'react'
-import { alignMenu, menuMaxHeight, type MenuAlign, type MenuSide } from './anchor'
+import { alignMenu, MAX_MENU_H, menuMaxHeight, type MenuAlign, type MenuSide } from './anchor'
 
 interface Options {
   /** Which trigger edge to line up with when there's room. */
@@ -27,6 +27,12 @@ interface Options {
   side?: MenuSide
   /** Space reserved between menu and trigger — must match the menu's own padding. */
   gap?: number
+  /**
+   * Ceiling on the menu height, overriding the shared MAX_MENU_H. Raise it for
+   * a menu whose content genuinely earns more vertical space. There is no way
+   * to opt out of a ceiling entirely, which is the point.
+   */
+  maxHeight?: number
 }
 
 /**
@@ -38,12 +44,15 @@ export function useMenuAnchor(
   ref: RefObject<HTMLElement>,
   open: boolean,
   width: number,
-  { align = 'start', side = 'top', gap = 6 }: Options = {}
+  { align = 'start', side = 'top', gap = 6, maxHeight = MAX_MENU_H }: Options = {}
 ): CSSProperties {
   // Start with the un-nudged position so the FIRST paint is already anchored:
   // measuring in an effect means one frame exists before we know better, and a
   // menu that visibly jumps sideways on open is worse than one slightly off.
-  const [style, setStyle] = useState<CSSProperties>({ width })
+  // The height ceiling is in here for the same reason -- it does not depend on
+  // the measurement, and leaving it out let a long list paint at full height for
+  // one frame and then snap shorter.
+  const [style, setStyle] = useState<CSSProperties>({ width, maxHeight })
 
   const measure = useCallback((): void => {
     const el = ref.current
@@ -52,9 +61,9 @@ export function useMenuAnchor(
     setStyle({
       width,
       left: alignMenu(r.left, r.width, width, window.innerWidth, align),
-      maxHeight: menuMaxHeight(r.top, r.bottom, window.innerHeight, side, gap)
+      maxHeight: menuMaxHeight(r.top, r.bottom, window.innerHeight, side, gap, maxHeight)
     })
-  }, [ref, width, align, side, gap])
+  }, [ref, width, align, side, gap, maxHeight])
 
   useEffect(() => {
     if (!open) return

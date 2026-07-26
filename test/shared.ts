@@ -197,6 +197,7 @@ import {
   MAX_H,
   CHROME_H,
   MIN_MENU_H,
+  MAX_MENU_H,
   type Rect
 } from '../src/renderer/src/lib/anchor'
 
@@ -3772,6 +3773,38 @@ async function main(): Promise<void> {
     }
   }
   check('menu: height cap is always finite and usable', badCap === 0, String(badCap))
+
+  // The ceiling is the half of this that regressed: these menus hang off a
+  // trigger at the bottom of the window, so "room above" is nearly the whole
+  // screen and an unbounded cap let a long model list render as one ~900px
+  // column. Room still wins when room is the smaller number.
+  check(
+    'menu: height cap never exceeds the ceiling',
+    menuMaxHeight(1400, 1424, 1440, 'top') === MAX_MENU_H,
+    String(menuMaxHeight(1400, 1424, 1440, 'top'))
+  )
+  check(
+    'menu: a cramped trigger is bounded by room, not the ceiling',
+    menuMaxHeight(300, 324, 1440, 'top') === 300 - 6 - MARGIN
+  )
+  check(
+    'menu: an explicit ceiling overrides the default',
+    menuMaxHeight(1400, 1424, 1440, 'top', 6, 500) === 500
+  )
+  // MIN outranks MAX, so a nonsense ceiling still yields a usable menu.
+  check(
+    'menu: the floor outranks the ceiling',
+    menuMaxHeight(1400, 1424, 1440, 'top', 6, 10) === MIN_MENU_H
+  )
+  let overTall = 0
+  for (const vh of [480, 600, 780, 1080, 1440]) {
+    for (let y = 0; y < vh - 24; y += 13) {
+      for (const side of ['top', 'bottom'] as const) {
+        if (menuMaxHeight(y, y + 24, vh, side) > MAX_MENU_H) overTall++
+      }
+    }
+  }
+  check('menu: height cap is bounded on every viewport', overTall === 0, String(overTall))
 
   // ---- context menus open AT THE CURSOR (sidebar right-click) --------------
   //

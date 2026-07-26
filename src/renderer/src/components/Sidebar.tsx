@@ -1071,7 +1071,7 @@ function useCustomizeCounts(): { skills: number; mcp: number } {
 }
 
 /**
- * The "Customize" section pinned to the bottom of the sidebar — quick access to
+ * The utility section pinned to the bottom of the sidebar — quick access to
  * Remote Workspace (share to phone), plus the Skills and MCP Servers pages
  * (à la VS Code's Customizations panel), with a live count/indicator on each.
  */
@@ -1097,10 +1097,7 @@ function CustomizeNav({
   ]
   return (
     <div className="border-t border-border px-3 py-2">
-      <span className="px-1 text-[10px] font-semibold uppercase tracking-wide text-text-subtle">
-        Customize
-      </span>
-      <div className="mt-1 flex flex-col gap-0.5">
+      <div className="flex flex-col gap-0.5">
         {items.map((it) => (
           <button
             key={it.label}
