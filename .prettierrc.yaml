@@ -2,3 +2,14 @@ singleQuote: true
 semi: false
 printWidth: 100
 trailingComma: none
+# The repo's blobs contain CRLF and there is no .gitattributes, so a Windows
+# checkout has CRLF while macOS/Linux have LF. With prettier's default
+# (endOfLine: "lf") `--check` then fails on ~65 files for every Windows
+# contributor, on a clean checkout, with no real formatting problem -- noise
+# that trains people to ignore the linter.
+#
+# "auto" infers each file's existing ending, so --check reports only genuine
+# style issues on either platform. The real fix is a .gitattributes with
+# eol=lf, but that renormalizes ~140 tracked files in one commit and would bury
+# every diff around it; worth doing deliberately, on its own, not here.
+endOfLine: auto

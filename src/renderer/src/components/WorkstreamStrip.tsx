@@ -173,7 +173,9 @@ function WorkstreamSegment({
       >
         <SquareStack className="h-3.5 w-3.5 shrink-0 opacity-70" />
         <span className="max-w-[12rem] truncate">{label}</span>
-        <ChevronDown className={cn('h-3 w-3 shrink-0 opacity-60 transition', open && 'rotate-180')} />
+        <ChevronDown
+          className={cn('h-3 w-3 shrink-0 opacity-60 transition', open && 'rotate-180')}
+        />
       </button>
     </div>
   )

@@ -1,12 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  ChevronRight,
-  ExternalLink,
-  Play,
-  RotateCw,
-  ScrollText,
-  Square
-} from 'lucide-react'
+import { ChevronRight, ExternalLink, Play, RotateCw, ScrollText, Square } from 'lucide-react'
 import type { ServiceView } from '@shared/api'
 import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'

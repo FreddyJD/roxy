@@ -72,7 +72,7 @@ export function workstreamStripView(input: {
   return {
     ownerId: owner.id,
     statusKey: owner.worktreePath ?? owner.workspacePath,
-    label: owner.worktreePath ? (owner.title || 'workstream') : 'default workstream',
+    label: owner.worktreePath ? owner.title || 'workstream' : 'default workstream',
     branch: owner.branch ?? status.branch,
     dirty: status.dirty,
     readOnly,

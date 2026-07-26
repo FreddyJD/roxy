@@ -144,7 +144,12 @@ function execGit(args: string[], cwd: string, timeoutMs = GIT_TIMEOUT_MS): Promi
         }
       })
     } catch (e) {
-      resolve({ ok: false, stdout: '', stderr: e instanceof Error ? e.message : String(e), code: null })
+      resolve({
+        ok: false,
+        stdout: '',
+        stderr: e instanceof Error ? e.message : String(e),
+        code: null
+      })
       return
     }
 
@@ -174,9 +179,7 @@ function execGit(args: string[], cwd: string, timeoutMs = GIT_TIMEOUT_MS): Promi
       if (stderr.length < MAX_GIT_OUTPUT) stderr += d.toString()
     })
     child.on('error', (e) => finish({ ok: false, stdout, stderr: e.message, code: null }))
-    child.on('close', (code) =>
-      finish({ ok: code === 0, stdout, stderr, code: code ?? null })
-    )
+    child.on('close', (code) => finish({ ok: code === 0, stdout, stderr, code: code ?? null }))
   })
 }
 
@@ -547,10 +550,11 @@ export async function attachWorktree(input: {
 
   const target = await uniquePath(input.path ?? worktreePathFor(root, branch))
   const localRef = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], root)
-  const args = localRef.ok && localRef.stdout.trim()
-    ? ['worktree', 'add', target, branch]
-    : // origin-only: create a local branch tracking the remote one
-      ['worktree', 'add', '-b', branch, target, `origin/${branch}`]
+  const args =
+    localRef.ok && localRef.stdout.trim()
+      ? ['worktree', 'add', target, branch]
+      : // origin-only: create a local branch tracking the remote one
+        ['worktree', 'add', '-b', branch, target, `origin/${branch}`]
 
   const add = await git(args, root)
   if (!add.ok) {

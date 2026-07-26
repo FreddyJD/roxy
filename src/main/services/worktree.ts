@@ -165,7 +165,8 @@ async function createForWorkspace(
     if (intent.mode === 'new') {
       const branch = intent.branch?.trim() || git.temporaryBranchName()
       const r = await git.createWorktree({ repoRoot: root, branch })
-      if (!r.ok || !r.worktree) return { ok: false, error: r.error ?? 'Could not create the worktree.' }
+      if (!r.ok || !r.worktree)
+        return { ok: false, error: r.error ?? 'Could not create the worktree.' }
       return { ok: true, worktreePath: r.worktree.path, branch: r.worktree.branch ?? branch }
     }
 
@@ -175,7 +176,8 @@ async function createForWorkspace(
     const branch = intent.branch?.trim()
     if (!branch) return { ok: false, error: 'No branch was given for the worktree.' }
     const r = await git.attachWorktree({ repoRoot: root, branch })
-    if (!r.ok || !r.worktree) return { ok: false, error: r.error ?? 'Could not check out the branch.' }
+    if (!r.ok || !r.worktree)
+      return { ok: false, error: r.error ?? 'Could not check out the branch.' }
     return { ok: true, worktreePath: r.worktree.path, branch: r.worktree.branch ?? branch }
   } catch (e) {
     // git.ts doesn't throw, but a caller bug here must still not break a turn.
