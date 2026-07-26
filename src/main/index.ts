@@ -28,12 +28,47 @@ function createWindow(): BrowserWindow {
     minHeight: 480,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#0a0a0a',
+    // On macOS an AppKit vibrancy view sits behind the web contents; it can
+    // only show through if the window itself paints nothing. Every other
+    // platform keeps the solid near-black, which also avoids a flash of white
+    // between window creation and first paint.
+    backgroundColor: isMac ? '#00000000' : '#0a0a0a',
     title: 'Roxy',
     // Native window controls, themed to match the app (no light OS title bar).
     titleBarStyle: 'hidden',
     ...(isMac
-      ? { trafficLightPosition: { x: 16, y: 17 } }
+      ? {
+          trafficLightPosition: { x: 16, y: 17 },
+          /*
+           * Translucent ("glass") sidebar — macOS only, deliberately.
+           *
+           * `sidebar` is the same NSVisualEffectView material Finder and Mail
+           * use for their source lists, so this reads as genuinely native
+           * rather than as a CSS imitation of one. Vibrancy is a *whole-window*
+           * effect, so the sidebar-only look comes from leaving only the
+           * sidebar translucent while every content pane paints opaque on top
+           * of it (see `.vibrancy-pane` / `.vibrancy-solid` in main.css).
+           *
+           * We deliberately do NOT set `transparent: true`. It's the usual
+           * advice online, but on macOS it disables the native rounded corners
+           * and window shadow, and it isn't needed for vibrancy to composite.
+           *
+           * Windows is intentionally excluded: `backgroundMaterial: 'acrylic'`
+           * degrades to a flat light-grey slab whenever the user has Settings →
+           * Personalization → Colors → "Transparency effects" off (which we
+           * can't detect from Electron), is unavailable before Win11 22H2, and
+           * paints black when maximized on Electron < 36. Verified by
+           * measurement on Win11 23H2 + Electron 33 and 38.
+           */
+          vibrancy: 'sidebar',
+          /*
+           * The default (`followWindow`) swaps to AppKit's lighter "inactive"
+           * material whenever the app loses focus. Nothing else in Roxy changes
+           * appearance on blur, so a sidebar that alone jumps lighter reads as a
+           * rendering glitch rather than as a focus cue. Pin the active state.
+           */
+          visualEffectState: 'active'
+        }
       : { titleBarOverlay: { color: '#0a0a0a', symbolColor: '#9a9aa3', height: 48 } }),
     ...(isMac ? {} : { icon }),
     webPreferences: {
