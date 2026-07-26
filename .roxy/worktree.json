@@ -18,7 +18,20 @@
     "rebuild mutates every other session's dependencies -- destroying exactly the",
     "isolation worktrees exist to provide. 30 seconds is worth not debugging that.",
     "",
+    "npm ci alone is NOT enough: it fetches better-sqlite3's prebuilt binary",
+    "for the ABI of whichever plain node ran it (127 for node 22), while the app",
+    "loads it under Electron (130). The install then reports exit 0 and the",
+    "worktree is broken anyway -- 'npm run smoke:app' dies with ERR_DLOPEN_FAILED",
+    "/ NODE_MODULE_VERSION on a checkout that looks perfectly healthy. So setup",
+    "runs the worktree:setup script, which chains electron-builder's",
+    "install-app-deps to rebuild native modules against Electron's ABI (~8s,",
+    "idempotent).",
+    "",
+    "Invoked via 'npm run' rather than inlined here because the setup command is",
+    "executed by PowerShell 5.1 on Windows, which has no '&&' operator; npm runs",
+    "its scripts through cmd.exe/sh, where the chain works on every platform.",
+    "",
     "Available: ROXY_PROJECT_ROOT, ROXY_WORKTREE_PATH, ROXY_PORT."
   ],
-  "setup": "npm ci --prefer-offline --no-audit --no-fund"
+  "setup": "npm run worktree:setup"
 }

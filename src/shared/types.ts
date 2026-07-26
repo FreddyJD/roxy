@@ -352,6 +352,26 @@ export interface AppSettings {
   contextLimit: number | null
   /** Optional Exa API key for `websearch` (empty = use the keyless public endpoint). */
   webSearchApiKey: string | null
+  /**
+   * Give every new session in a git repo its own workstream (an isolated
+   * worktree on its own branch) instead of running it in the project folder.
+   *
+   * On by default: the shared checkout is also the folder the user's editor is
+   * open in, so two sessions editing it at once corrupt each other's work, and
+   * the agent's edits fight whatever the user is typing. Isolation is the
+   * behaviour people expect from parallel sessions; the old default only looked
+   * safe because most people ran one session at a time.
+   *
+   * Off falls back to the project folder. Non-repos ignore this entirely --
+   * there is nothing to branch from.
+   */
+  autoWorkstream: boolean
+  /**
+   * Prefix for the branch a new workstream generates, e.g. `roxy` ->
+   * `roxy/a1b2c3d4`. Empty means no prefix at all (`a1b2c3d4`), which some
+   * people prefer; it is a real choice, not a reason to reimpose the default.
+   */
+  branchPrefix: string
 }
 
 export interface AppVersions {

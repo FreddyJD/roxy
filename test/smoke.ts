@@ -26,10 +26,13 @@ import { sessionCwd } from '../src/main/services/workspace'
 import Database from 'better-sqlite3'
 import { MIGRATIONS, repairSchema } from '../src/main/db/migrations'
 import * as git from '../src/main/services/git'
+import { branchNameError, isPlaceholderBranch } from '../src/shared/branch'
 import {
   materializePendingWorktree,
   pruneWorktrees,
   removeWorktreeForChat,
+  renameWorkstreamBranch,
+  syncBranchToTitle,
   loadWorktreeConfig
 } from '../src/main/services/worktree'
 import { allocateDevPort, ensureDevPort } from '../src/main/services/ports'
@@ -140,6 +143,14 @@ async function main(): Promise<void> {
     repo.getSettings().activeProviderId === 'openai' &&
       repo.getSettings().activeModel === 'gpt-test'
   )
+  // Auto-workstream defaults ON and is stored only when disabled, so existing
+  // installs are opted in without a migration.
+  check('auto-workstream defaults on', repo.getSettings().autoWorkstream === true)
+  repo.setAutoWorkstream(false)
+  check('setAutoWorkstream(false) persists', repo.getSettings().autoWorkstream === false)
+  repo.setAutoWorkstream(true)
+  check('setAutoWorkstream(true) restores the default', repo.getSettings().autoWorkstream === true)
+
   check('reasoning effort default high', repo.getSettings().reasoningEffort === 'high')
   repo.setReasoningEffort('low')
   check('setReasoningEffort persists', repo.getSettings().reasoningEffort === 'low')
@@ -1228,6 +1239,259 @@ async function main(): Promise<void> {
       )
       check('...and NOT in the main checkout', !existsSync(path.join(gitRepo, 'from-agent.txt')))
 
+      // ---- renaming a workstream's branch ----
+      // The generated name (roxy/6fdc60b8) says nothing about the work and is
+      // what lands on the PR, so renaming has to work from the UI -- WHILE the
+      // branch is checked out in a live worktree, without disturbing it.
+      {
+        const before = repo.getChat(wtChat.id)?.branch
+        check('the session starts on its generated branch', before === tmpBranch, before ?? '')
+
+        // Uncommitted work must survive: this is the whole risk of the feature.
+        await fs.writeFile(path.join(wtPath, 'in-progress.txt'), 'do not lose me\n')
+
+        const renamed = await renameWorkstreamBranch(wtChat.id, 'feat/nice-name')
+        check('renameWorkstreamBranch succeeds on a live worktree', renamed.ok, renamed.error ?? '')
+        check('...and reports the new name', renamed.branch === 'feat/nice-name')
+        check(
+          '...git agrees the worktree is on it',
+          (await git.currentBranch(wtPath)) === 'feat/nice-name'
+        )
+        check('...the DB pointer follows', repo.getChat(wtChat.id)?.branch === 'feat/nice-name')
+        check('...the worktree directory is untouched', existsSync(wtPath))
+        check('...and uncommitted work survives', existsSync(path.join(wtPath, 'in-progress.txt')))
+        // The PR base is stored under the branch's config section, which git
+        // moves with the rename -- losing it would break `gh pr create --base`.
+        check(
+          '...the recorded PR base moves with the branch',
+          (await git.baseBranchFor(gitRepo, 'feat/nice-name')) === 'main'
+        )
+
+        check(
+          'renaming to the SAME name is a no-op, not an error',
+          (await renameWorkstreamBranch(wtChat.id, 'feat/nice-name')).ok
+        )
+        const clash = await renameWorkstreamBranch(wtChat.id, 'main')
+        check('renaming onto an existing branch is refused', !clash.ok)
+        check(
+          '...with a readable reason',
+          /already exists/i.test(clash.error ?? ''),
+          clash.error ?? ''
+        )
+        check(
+          '...and the branch is unchanged',
+          (await git.currentBranch(wtPath)) === 'feat/nice-name'
+        )
+
+        const bad = await renameWorkstreamBranch(wtChat.id, 'not a valid name')
+        check('an invalid branch name is refused before git runs', !bad.ok)
+        check(
+          '...without touching the branch',
+          (await git.currentBranch(wtPath)) === 'feat/nice-name'
+        )
+        check('an empty rename is refused', !(await renameWorkstreamBranch(wtChat.id, '   ')).ok)
+
+        // A session with no workstream has no branch to rename.
+        const plainChat = repo.createChat({ title: 'no wt', kind: 'main', workspacePath: gitRepo })
+        check(
+          'a session without a workstream cannot rename',
+          !(await renameWorkstreamBranch(plainChat.id, 'x')).ok
+        )
+        repo.removeChat(plainChat.id)
+        check('an unknown session is refused', !(await renameWorkstreamBranch('nope', 'x')).ok)
+
+        // Put it back so the removal checks below still line up.
+        await fs.rm(path.join(wtPath, 'in-progress.txt'))
+        const back = await renameWorkstreamBranch(wtChat.id, tmpBranch)
+        check('renamed back for the remaining checks', back.ok, back.error ?? '')
+      }
+
+      // ---- branch names come from the session title ----
+      // A session called "Legacy Ogre Apprentice" should land on
+      // roxy/legacy-ogre-apprentice, not roxy/6fdc60b8.
+      {
+        const named = await git.branchNameForTitle(root!, 'Legacy Ogre Apprentice')
+        check(
+          'branchNameForTitle uses the session title',
+          named === 'roxy/legacy-ogre-apprentice',
+          named
+        )
+
+        // A branch OUTLIVES its worktree, so a repeat title is a real
+        // collision -- and `worktree add -b` on an existing branch is fatal.
+        await runGit(['branch', 'roxy/legacy-ogre-apprentice'])
+        const second = await git.branchNameForTitle(root!, 'Legacy Ogre Apprentice')
+        check(
+          '...and steps aside when the branch already exists',
+          second === 'roxy/legacy-ogre-apprentice-2',
+          second
+        )
+        await runGit(['branch', 'roxy/legacy-ogre-apprentice-2'])
+        const third = await git.branchNameForTitle(root!, 'Legacy Ogre Apprentice')
+        check('...counting up as needed', third === 'roxy/legacy-ogre-apprentice-3', third)
+        await runGit(['branch', '-D', 'roxy/legacy-ogre-apprentice'])
+        await runGit(['branch', '-D', 'roxy/legacy-ogre-apprentice-2'])
+
+        // An unusable title falls back to hex rather than inventing a name.
+        const emoji = await git.branchNameForTitle(root!, '🎉🎉🎉')
+        check(
+          'an unusable title falls back to a hex name',
+          /^roxy\/[0-9a-f]{8}$/.test(emoji),
+          emoji
+        )
+
+        // Whatever it produces must be a legal branch AND recognized as ours,
+        // or the rename guard would refuse to touch it later.
+        check('a generated name is a valid branch', branchNameError(named) === null)
+        check('...and is recognized as generated', isPlaceholderBranch(named, 'roxy'))
+
+        // End to end: a real session materializes onto a named branch.
+        const titled = repo.createChat({
+          title: 'Crimson Goblin Slayer',
+          kind: 'main',
+          workspacePath: gitRepo,
+          worktree: { mode: 'new' }
+        })
+        const tm = await materializePendingWorktree(titled.id)
+        check(
+          'a new workstream lands on a title-shaped branch',
+          tm.ok && tm.branch === 'roxy/crimson-goblin-slayer',
+          tm.branch ?? tm.error ?? ''
+        )
+        check(
+          '...and git agrees',
+          (await git.currentBranch(tm.worktreePath!)) === 'roxy/crimson-goblin-slayer'
+        )
+        await removeWorktreeForChat(titled.id, { force: true })
+        repo.removeChat(titled.id)
+      }
+
+      // ---- the agent renames the branch when it retitles the session ----
+      // A session starts on a random slug and is retitled once the agent knows
+      // what the work is; the branch should follow, since that name is what
+      // lands on the PR.
+      {
+        const auto = repo.createChat({
+          title: 'Azure Orsted Mage',
+          kind: 'main',
+          workspacePath: gitRepo,
+          worktree: { mode: 'new' }
+        })
+        const m = await materializePendingWorktree(auto.id)
+        check(
+          'auto-rename: starts on a slug branch',
+          m.branch === 'roxy/azure-orsted-mage',
+          m.branch ?? m.error ?? ''
+        )
+
+        const synced = await syncBranchToTitle(auto.id, 'Fix auth token refresh')
+        check(
+          'auto-rename: follows the new title',
+          synced.renamed && synced.branch === 'roxy/fix-auth-token-refresh',
+          synced.branch ?? ''
+        )
+        check(
+          '...and git agrees',
+          (await git.currentBranch(m.worktreePath!)) === 'roxy/fix-auth-token-refresh'
+        )
+        check(
+          '...and the DB pointer follows',
+          repo.getChat(auto.id)?.branch === 'roxy/fix-auth-token-refresh'
+        )
+
+        // Now the branch is a name that came from a real title -- but it is
+        // still OUR shape, so a later retitle may still move it.
+        const again = await syncBranchToTitle(auto.id, 'Rework the auth flow')
+        check(
+          'auto-rename: a generated name can still be re-derived',
+          again.renamed === false || again.branch === 'roxy/rework-the-auth-flow',
+          String(again.branch)
+        )
+
+        // A branch the USER named is off limits, whatever the title becomes.
+        const manual = await renameWorkstreamBranch(auto.id, 'my/own-name')
+        check('auto-rename: a manual rename works', manual.ok, manual.error ?? '')
+        const skipped = await syncBranchToTitle(auto.id, 'Something Else Entirely')
+        check('auto-rename: NEVER touches a human-named branch', skipped.renamed === false)
+        check(
+          '...leaving it exactly as the user set it',
+          repo.getChat(auto.id)?.branch === 'my/own-name'
+        )
+
+        // An unusable title must not swap a good name for a hex fallback.
+        await renameWorkstreamBranch(auto.id, 'roxy/still-generated-name')
+        const emoji = await syncBranchToTitle(auto.id, '🎉🎉🎉')
+        check('auto-rename: an unusable title changes nothing', emoji.renamed === false)
+        check(
+          '...keeping the previous branch',
+          repo.getChat(auto.id)?.branch === 'roxy/still-generated-name'
+        )
+
+        // Renaming to a name that already exists must fail rather than clobber.
+        await runGit(['branch', 'roxy/taken-name-here'])
+        const clash = await renameWorkstreamBranch(auto.id, 'roxy/taken-name-here')
+        check('auto-rename: refuses to clobber an existing branch', !clash.ok)
+
+        // A session with no workstream is simply skipped, not an error.
+        const bare = repo.createChat({ title: 'no wt', kind: 'main', workspacePath: gitRepo })
+        check(
+          'auto-rename: a session without a workstream is skipped',
+          (await syncBranchToTitle(bare.id, 'Whatever')).renamed === false
+        )
+        repo.removeChat(bare.id)
+        check(
+          'auto-rename: an unknown session is skipped',
+          (await syncBranchToTitle('nope', 'Whatever')).renamed === false
+        )
+
+        // A PUSHED branch must never be renamed. git moves only the LOCAL ref,
+        // so the remote keeps the old name and any open PR points at a branch
+        // that no longer exists here. This is the one rule where getting it
+        // wrong is externally visible, so it is tested against a real remote.
+        {
+          const bare = path.join(tmp, 'origin.git')
+          await runGit(['init', '--bare', '-q', bare], tmp)
+          const pushed = repo.createChat({
+            title: 'Pushed Goblin Slayer',
+            kind: 'main',
+            workspacePath: gitRepo,
+            worktree: { mode: 'new' }
+          })
+          const pm = await materializePendingWorktree(pushed.id)
+          const wt = pm.worktreePath!
+          await runGit(['remote', 'add', 'origin', bare], wt)
+          await runGit(['push', '-q', '-u', 'origin', pm.branch!], wt)
+
+          check('a pushed branch reports an upstream', await git.hasUpstreamBranch(wt, pm.branch!))
+
+          const blocked = await renameWorkstreamBranch(pushed.id, 'roxy/renamed-after-push')
+          check('renaming a PUSHED branch is refused', !blocked.ok)
+          check(
+            '...with a reason naming the push',
+            /pushed/i.test(blocked.error ?? ''),
+            blocked.error ?? ''
+          )
+          check(
+            '...and the branch is untouched',
+            (await git.currentBranch(wt)) === pm.branch,
+            pm.branch ?? ''
+          )
+
+          const autoSkip = await syncBranchToTitle(pushed.id, 'A Completely New Title')
+          check('auto-rename also skips a pushed branch', autoSkip.renamed === false)
+          check(
+            '...leaving the pushed name in place',
+            repo.getChat(pushed.id)?.branch === pm.branch
+          )
+
+          await removeWorktreeForChat(pushed.id, { force: true })
+          repo.removeChat(pushed.id)
+        }
+
+        await removeWorktreeForChat(auto.id, { force: true })
+        repo.removeChat(auto.id)
+      }
+
       // ---- lazy materialization ----
       const lazy = repo.createChat({
         title: 'lazy worktree',
@@ -1376,6 +1640,50 @@ async function main(): Promise<void> {
       )
       check('...and it still exists', existsSync(wtPath))
       repo.removeChat(shared.id)
+
+      // Deleting a session must NEVER discard uncommitted code. This used to
+      // pass force:true, which mattered little when worktrees were opt-in and
+      // rare -- now that every session gets one by default, a stray click on
+      // the trash icon would silently `rm -rf` unpushed work with no
+      // confirmation and nothing in the reflog to recover from.
+      await fs.writeFile(path.join(wtPath, 'uncommitted.txt'), 'precious\n')
+      const dirtyRemove = await removeWorktreeForChat(wtChat.id)
+      check('a DIRTY worktree is not deleted on session delete', dirtyRemove.removed === false)
+      check('...and it says why', !!dirtyRemove.error, dirtyRemove.error ?? '')
+      check(
+        '...and the uncommitted file survives',
+        existsSync(path.join(wtPath, 'uncommitted.txt'))
+      )
+      await fs.rm(path.join(wtPath, 'uncommitted.txt'))
+
+      // Clean it properly -> the default (non-forced) path removes it happily,
+      // so the protection above is about dirt, not a blanket refusal. The
+      // sandbox check earlier in this block left `from-agent.txt` behind, which
+      // is exactly the kind of untracked file git refuses to discard.
+      await fs.rm(path.join(wtPath, 'from-agent.txt'))
+      const cleanRemove = await removeWorktreeForChat(wtChat.id)
+      check(
+        'a CLEAN worktree is removed without force',
+        cleanRemove.ok && cleanRemove.removed,
+        cleanRemove.error ?? ''
+      )
+      check('...and its directory is gone', !existsSync(wtPath))
+
+      // Re-attach it so the shared/force-removal checks below still have a
+      // worktree to act on. The BRANCH outlives `git worktree remove`, so this
+      // is an attach, not a create (`-b` would fail on an existing branch).
+      const recreated = await git.attachWorktree({
+        repoRoot: root!,
+        branch: tmpBranch,
+        path: wtPath
+      })
+      check(
+        're-attached the worktree for the remaining checks',
+        recreated.ok,
+        recreated.error ?? ''
+      )
+      check('...at the same path', recreated.worktree?.path === wtPath, recreated.worktree?.path)
+      repo.setChatWorktree(wtChat.id, { worktreePath: wtPath, branch: tmpBranch })
 
       const removed = await removeWorktreeForChat(wtChat.id, { force: true })
       check(

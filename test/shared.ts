@@ -14,7 +14,7 @@ import {
 } from '../src/shared/agents'
 import { SEED_PROVIDERS, resolveSeed, isConnectableNow } from '../src/shared/providers'
 import { pickDefaultModel } from '../src/shared/models'
-import { randomSlug, uniqueSlug } from '../src/shared/slugs'
+import { randomSlug, uniqueSlug, slugToBranchSegment, isGeneratedSlug } from '../src/shared/slugs'
 import { formatInterval } from '../src/shared/format'
 import {
   selectPromptName,
@@ -56,6 +56,14 @@ import {
 } from '../src/shared/web'
 import { resolveWorktreeCwd } from '../src/shared/workspace'
 import {
+  DEFAULT_BRANCH_PREFIX,
+  branchNameError,
+  branchPrefixError,
+  isPlaceholderBranch,
+  normalizeBranchPrefix,
+  placeholderBranchName
+} from '../src/shared/branch'
+import {
   contextBudgetFor,
   effectiveContextMax,
   parseReasoningEffort,
@@ -65,8 +73,15 @@ import {
 import {
   workstreamStripView,
   statusKeyForSession,
+  shouldAutoWorkstream,
   type StripSession
 } from '../src/shared/workstream'
+import {
+  isServiceFailure,
+  serviceStatusLabel,
+  servicesSummary,
+  type ServiceOutcome
+} from '../src/shared/services'
 import { posix as posixPath, win32 as win32Path } from 'node:path'
 import type { Message, MessagePart } from '../src/shared/types'
 import type { ChatMessage } from '../src/shared/api'
@@ -2299,6 +2314,70 @@ async function main(): Promise<void> {
     check('strip: ...read-only (no dropdown)', subView?.readOnly === true)
     check('strip: an orphaned sub renders nothing', view(sub, repoStatus, true, [sub]) === null)
 
+    // ---- pending workstreams ----
+    // Worktrees are materialized lazily, on the first turn. Between "new
+    // workstream" and that turn the session has no worktreePath -- which the
+    // strip used to render as "default workstream", i.e. it named the shared
+    // checkout that every other session and the user's editor sit in. That is
+    // wrong in the worst direction: it reads as "your next turn edits main".
+    const pendingNew = view(mk({ title: 'azure orsted mage', worktreePending: { mode: 'new' } }))
+    check('strip: a pending workstream is flagged pending', pendingNew?.pending === true)
+    check(
+      'strip: ...and is NOT called the default workstream',
+      pendingNew?.label !== 'default workstream'
+    )
+    check('strip: ...it keeps the session title', pendingNew?.label === 'azure orsted mage')
+    check('strip: ...and is not yet in a worktree', pendingNew?.inWorktree === false)
+    // A 'new' workstream's branch is generated at materialization, so there is
+    // no name to show -- and showing the CURRENT branch would name the very
+    // branch the workstream exists to stay off.
+    check('strip: a pending "new" workstream has no branch yet', pendingNew?.branch === null)
+    check(
+      'strip: ...and does not inherit the default branch dirtiness',
+      pendingNew?.dirty === false
+    )
+
+    // fromBranch/attach DO know their branch up front, so show it.
+    const pendingFrom = view(
+      mk({ title: 'hotfix', worktreePending: { mode: 'fromBranch', branch: 'release/2.1' } })
+    )
+    check(
+      'strip: a pending fromBranch shows its target branch',
+      pendingFrom?.branch === 'release/2.1'
+    )
+    check('strip: ...still flagged pending', pendingFrom?.pending === true)
+    check(
+      'strip: an attach intent shows its branch too',
+      view(mk({ worktreePending: { mode: 'attach', branch: 'feat/x' } }))?.branch === 'feat/x'
+    )
+    check(
+      'strip: a blank intent branch falls back to no branch',
+      view(mk({ worktreePending: { mode: 'fromBranch', branch: '   ' } }))?.branch === null
+    )
+    check(
+      'strip: an untitled pending workstream still reads as new',
+      view(mk({ title: '', worktreePending: { mode: 'new' } }))?.label === 'new workstream'
+    )
+
+    // The genuinely-default session must keep behaving exactly as before.
+    check('strip: a session with no intent is the default workstream', plain?.pending === false)
+    check('strip: ...and keeps its label', plain?.label === 'default workstream')
+    // Once the worktree EXISTS the intent is cleared, but a stale one must not
+    // win over reality -- worktreePath is the source of truth.
+    const settled = view(
+      mk({ worktreePath: '/wt/auth', branch: 'roxy/auth', worktreePending: { mode: 'new' } })
+    )
+    check('strip: a real worktree beats a stale pending intent', settled?.pending === false)
+    check('strip: ...and shows its real branch', settled?.branch === 'roxy/auth')
+
+    // A sub-session inherits its parent's pending state, since it will run in
+    // that tree once it exists.
+    const pendingParent = mk({ id: 'p2', title: 'wip', worktreePending: { mode: 'new' } })
+    const subOfPending = mk({ id: 'sub2', kind: 'sub', parentId: 'p2', workspacePath: null })
+    const subPendingView = view(subOfPending, repoStatus, true, [pendingParent, subOfPending])
+    check('strip: a sub of a pending workstream reports pending', subPendingView?.pending === true)
+    check('strip: ...with the parent label', subPendingView?.label === 'wip')
+
     const dirty = view(mk(), { isRepo: true, branch: 'main', dirty: true, changed: 3 })
     check('strip: surfaces the dirty flag', dirty?.dirty === true)
 
@@ -2310,6 +2389,282 @@ async function main(): Promise<void> {
       statusKeyForSession(mk({ worktreePath: '/wt/auth' })) === '/wt/auth'
     )
     check('poll key: a sub-session never polls', statusKeyForSession(sub) === null)
+  }
+
+  // ---- session slug -> branch segment ----
+  // The branch is named after the session ("Legacy Ogre Apprentice" ->
+  // roxy/legacy-ogre-apprentice), so this conversion sits between free text
+  // and something git will accept.
+  {
+    check(
+      'slug->branch: lowercases and hyphenates',
+      slugToBranchSegment('Legacy Ogre Apprentice') === 'legacy-ogre-apprentice'
+    )
+    check(
+      'slug->branch: collapses runs of separators',
+      slugToBranchSegment('Fix   the   thing') === 'fix-the-thing'
+    )
+    check(
+      'slug->branch: drops apostrophes rather than splitting on them',
+      slugToBranchSegment("Roxy's Plan") === 'roxys-plan'
+    )
+    check(
+      'slug->branch: strips punctuation',
+      slugToBranchSegment('Fix: the #1 bug!') === 'fix-the-1-bug'
+    )
+    check(
+      'slug->branch: trims leading/trailing separators',
+      slugToBranchSegment('  --hello--  ') === 'hello'
+    )
+    // git rejects a segment that starts or ends with a dot.
+    check('slug->branch: no leading or trailing dot', slugToBranchSegment('...dots...') === 'dots')
+    // A title the agent wrote can be long; branch names should stay readable.
+    check('slug->branch: caps the length', slugToBranchSegment('a'.repeat(200)).length <= 60)
+    check(
+      'slug->branch: never ends in a dash after truncation',
+      !slugToBranchSegment('word '.repeat(40)).endsWith('-')
+    )
+    // Nothing usable survives -> empty, and the caller falls back to hex.
+    check('slug->branch: empty for an unusable title', slugToBranchSegment('日本語 🎉') === '')
+    check('slug->branch: empty for empty input', slugToBranchSegment('') === '')
+    check('slug->branch: empty for null', slugToBranchSegment(null) === '')
+
+    // isGeneratedSlug decides whether a branch is ours to rename, so a false
+    // positive on a human name is data loss.
+    check('generated slug: recognizes its own output', isGeneratedSlug(randomSlug()))
+    check(
+      'generated slug: recognizes the hyphenated form',
+      isGeneratedSlug('legacy-ogre-apprentice')
+    )
+    check(
+      'generated slug: recognizes a numeric collision suffix',
+      isGeneratedSlug('legacy-ogre-apprentice-2')
+    )
+    check(
+      'generated slug: rejects a human name reusing one of our words',
+      !isGeneratedSlug('fix-ogre-crash')
+    )
+    check('generated slug: rejects two words', !isGeneratedSlug('legacy-ogre'))
+    check('generated slug: rejects four real words', !isGeneratedSlug('a-b-c-d'))
+    check('generated slug: rejects empty', !isGeneratedSlug(''))
+    check('generated slug: rejects null', !isGeneratedSlug(null))
+    // Round-trip: every generated title must survive the branch conversion
+    // and still be recognized, or renames would silently stop working.
+    check(
+      'generated slug: round-trips through slugToBranchSegment',
+      Array.from({ length: 200 }, () => randomSlug()).every((s) =>
+        isGeneratedSlug(slugToBranchSegment(s))
+      )
+    )
+
+    // The branch-level check has to agree, including with a custom prefix.
+    check(
+      'placeholder: a slug branch counts as generated',
+      isPlaceholderBranch('roxy/legacy-ogre-apprentice', 'roxy')
+    )
+    check(
+      'placeholder: ...with a collision suffix too',
+      isPlaceholderBranch('roxy/legacy-ogre-apprentice-2', 'roxy')
+    )
+    check(
+      'placeholder: ...and under a custom prefix',
+      isPlaceholderBranch('wip/legacy-ogre-apprentice', 'wip')
+    )
+    check(
+      'placeholder: a human name is still not generated',
+      !isPlaceholderBranch('roxy/fix-auth', 'roxy')
+    )
+    check('placeholder: hex still counts', isPlaceholderBranch('roxy/6fdc60b8', 'roxy'))
+    // A nested segment is not something we generate.
+    check(
+      'placeholder: rejects an extra path segment',
+      !isPlaceholderBranch('roxy/feat/legacy-ogre-apprentice', 'roxy')
+    )
+    check('placeholder: rejects the bare prefix', !isPlaceholderBranch('roxy/', 'roxy'))
+
+    // The generated branch must itself be a legal branch name.
+    check(
+      'slug->branch: output always passes branch validation',
+      Array.from({ length: 200 }, () => randomSlug()).every(
+        (s) => branchNameError('roxy/' + slugToBranchSegment(s)) === null
+      )
+    )
+  }
+
+  // ---- branch naming (prefix + rename validation) ----
+  // These rules gate a git call, so they must agree with what git actually
+  // accepts: too loose and the user gets a raw `fatal:`, too strict and a
+  // legal name is refused for no reason.
+  {
+    check('prefix: default is roxy', DEFAULT_BRANCH_PREFIX === 'roxy')
+    check('prefix: normalize trims whitespace', normalizeBranchPrefix('  wip  ') === 'wip')
+    check('prefix: normalize strips slashes', normalizeBranchPrefix('/feat/') === 'feat')
+    check('prefix: normalize keeps inner slashes', normalizeBranchPrefix('me/wip') === 'me/wip')
+    check('prefix: empty is allowed (means no prefix)', branchPrefixError('') === null)
+    check('prefix: whitespace-only is empty, not invalid', normalizeBranchPrefix('   ') === '')
+    check('prefix: a plain word is valid', branchPrefixError('wip') === null)
+    check('prefix: rejects spaces', branchPrefixError('my prefix') !== null)
+    check('prefix: rejects a double slash', branchPrefixError('a//b') !== null)
+    check('prefix: rejects ..', branchPrefixError('a..b') !== null)
+    check('prefix: rejects a leading dot', branchPrefixError('.hidden') !== null)
+    check('prefix: rejects a segment starting with -', branchPrefixError('a/-b') !== null)
+    check('prefix: rejects .lock', branchPrefixError('a.lock') !== null)
+
+    check(
+      'placeholder: prefix + hex',
+      placeholderBranchName('roxy', 'a1b2c3d4') === 'roxy/a1b2c3d4'
+    )
+    check(
+      'placeholder: no prefix means a bare name',
+      placeholderBranchName('', 'a1b2c3d4') === 'a1b2c3d4'
+    )
+    check(
+      'placeholder: a slashy prefix is normalized',
+      placeholderBranchName('/me/', 'a1b2c3d4') === 'me/a1b2c3d4'
+    )
+
+    // isPlaceholderBranch guards a RENAME, so a false positive is data loss:
+    // a name the user chose must never look auto-generated.
+    check('placeholder: recognizes its own output', isPlaceholderBranch('roxy/a1b2c3d4', 'roxy'))
+    check(
+      'placeholder: rejects a human name under the same prefix',
+      !isPlaceholderBranch('roxy/fix-auth', 'roxy')
+    )
+    check('placeholder: rejects the wrong prefix', !isPlaceholderBranch('roxy/a1b2c3d4', 'wip'))
+    check('placeholder: matches a custom prefix', isPlaceholderBranch('wip/deadbeef', 'wip'))
+    check('placeholder: bare hex with an empty prefix', isPlaceholderBranch('a1b2c3d4', ''))
+    check('placeholder: rejects wrong-length hex', !isPlaceholderBranch('roxy/a1b2c3', 'roxy'))
+    check('placeholder: rejects uppercase hex', !isPlaceholderBranch('roxy/A1B2C3D4', 'roxy'))
+    check('placeholder: rejects null', !isPlaceholderBranch(null, 'roxy'))
+    // A prefix containing regex metacharacters must not corrupt the pattern.
+    check(
+      'placeholder: a dotted prefix is escaped, not treated as a wildcard',
+      isPlaceholderBranch('a.b/a1b2c3d4', 'a.b') && !isPlaceholderBranch('axb/a1b2c3d4', 'a.b')
+    )
+
+    check('branch name: a normal name is fine', branchNameError('feat/login') === null)
+    check('branch name: empty is rejected', branchNameError('') !== null)
+    check('branch name: whitespace-only is rejected', branchNameError('   ') !== null)
+    check('branch name: rejects spaces', branchNameError('my branch') !== null)
+    check(
+      'branch name: rejects ~ ^ : ? * [ and backslash',
+      ['a~b', 'a^b', 'a:b', 'a?b', 'a*b', 'a[b', 'a\\\\b'].every((n) => branchNameError(n) !== null)
+    )
+    check('branch name: rejects a leading dash', branchNameError('-x') !== null)
+    check('branch name: rejects a trailing slash', branchNameError('feat/') !== null)
+    check('branch name: rejects a leading slash', branchNameError('/feat') !== null)
+    check('branch name: rejects ..', branchNameError('a..b') !== null)
+    check('branch name: rejects a trailing dot', branchNameError('feat.') !== null)
+    check('branch name: rejects .lock', branchNameError('feat.lock') !== null)
+    check('branch name: rejects a dot-leading segment', branchNameError('feat/.x') !== null)
+    check('branch name: rejects @{', branchNameError('a@{b') !== null)
+    check('branch name: rejects a bare @', branchNameError('@') !== null)
+    check(
+      'branch name: allows dots, dashes and underscores',
+      branchNameError('feat/my-thing_v2.1') === null
+    )
+  }
+
+  // ---- auto-workstream (the default for new sessions) ----
+  // A new session gets its own worktree by default, because the project folder
+  // is the checkout the user's editor is open in. But both guards below are
+  // correctness, not caution: git must exist, and the folder must be a repo, or
+  // `git worktree add` fails on the turn path.
+  {
+    const on = { autoWorkstream: true, gitAvailable: true, isRepo: true }
+    check('auto-workstream: on by default in a git repo', shouldAutoWorkstream(on) === true)
+    check(
+      'auto-workstream: the setting can turn it off',
+      shouldAutoWorkstream({ ...on, autoWorkstream: false }) === false
+    )
+    check(
+      'auto-workstream: never in a non-repo (nothing to branch from)',
+      shouldAutoWorkstream({ ...on, isRepo: false }) === false
+    )
+    check(
+      'auto-workstream: never without a git binary',
+      shouldAutoWorkstream({ ...on, gitAvailable: false }) === false
+    )
+    // gitAvailable === null means "not probed yet", NOT "no". Treating unknown
+    // as yes would try to create a worktree on a machine without git.
+    check(
+      'auto-workstream: an unprobed git is not treated as available',
+      shouldAutoWorkstream({ ...on, gitAvailable: null }) === false
+    )
+    check(
+      'auto-workstream: an unknown repo state is not assumed to be a repo',
+      shouldAutoWorkstream({ ...on, isRepo: undefined }) === false
+    )
+  }
+
+  // ---- services panel labels (process facts -> human outcomes) ----
+  // Both bugs guarded here shipped once: a worktree's `npm ci` that SUCCEEDED
+  // reported "1 stopped", and stopping a service on purpose reported a failure
+  // because taskkill /f necessarily exits non-zero.
+  {
+    const svc = (over: Partial<ServiceOutcome> = {}): ServiceOutcome => ({
+      status: 'exited',
+      exitCode: 0,
+      state: 'exited (exit 0)',
+      ...over
+    })
+
+    check('services: a clean exit is done, not "exited"', serviceStatusLabel(svc()) === 'done')
+    check('services: ...and is not a failure', isServiceFailure(svc()) === false)
+    check(
+      'services: a non-zero exit is a failure, with the code',
+      serviceStatusLabel(svc({ exitCode: 1, state: 'exited (exit 1)' })) === 'failed (exit 1)'
+    )
+    check('services: ...and is flagged as one', isServiceFailure(svc({ exitCode: 1 })))
+    check(
+      'services: a spawn error is a failure',
+      serviceStatusLabel(svc({ status: 'error', exitCode: null })) === 'failed' &&
+        isServiceFailure(svc({ status: 'error', exitCode: null }))
+    )
+    check(
+      'services: an exit with no code at all still reads as failed',
+      serviceStatusLabel(svc({ exitCode: null, state: 'exited' })) === 'failed'
+    )
+
+    // A deliberate stop is never an error, whatever code the kill produced.
+    const killed = svc({ status: 'killed', exitCode: 1, state: 'killed (exit 1)' })
+    check('services: a stopped service reads as stopped', serviceStatusLabel(killed) === 'stopped')
+    check('services: ...and is NOT painted as a failure', isServiceFailure(killed) === false)
+    check(
+      'services: ...even when Windows taskkill reports its own code',
+      isServiceFailure(svc({ status: 'killed', exitCode: 137 })) === false
+    )
+
+    // Running keeps bash_list's label — the elapsed time is the useful part.
+    const running = svc({ status: 'running', exitCode: null, state: 'running 12s' })
+    check(
+      'services: a running service keeps its elapsed label',
+      serviceStatusLabel(running) === 'running 12s'
+    )
+    check('services: ...and is not a failure', isServiceFailure(running) === false)
+
+    // The collapsed summary is the only line most people read.
+    check(
+      'services: summary reports a clean install as done',
+      servicesSummary([svc()]) === '1 done'
+    )
+    check(
+      'services: summary leads with what is live',
+      servicesSummary([running, svc()]) === '1 running'
+    )
+    check(
+      'services: ...and always surfaces failures',
+      servicesSummary([running, svc({ exitCode: 1 })]) === '1 running · 1 failed'
+    )
+    check(
+      'services: a stopped service counts as settled, not failed',
+      servicesSummary([killed]) === '1 done'
+    )
+    check(
+      'services: mixed outcomes read failures first among settled',
+      servicesSummary([svc(), svc({ exitCode: 2 })]) === '1 failed · 1 done'
+    )
+    check('services: an empty list never renders a bare count', servicesSummary([]) === '0 done')
   }
 
   // ---- <env> dev port (parallel sessions must not fight over :3000) ----

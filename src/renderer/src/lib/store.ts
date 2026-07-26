@@ -34,6 +34,7 @@ import {
   type SessionConfigPatch
 } from '@shared/session-config'
 import { uniqueSlug } from '@shared/slugs'
+import { shouldAutoWorkstream } from '@shared/workstream'
 import { api } from './api'
 import type { ComposerImage } from './images'
 import type { GitStatusView, ServiceView, WorktreeView } from '@shared/api'
@@ -128,10 +129,18 @@ interface RoxyStore {
   setReasoningEffort: (level: ReasoningEffort) => Promise<void>
   setContextLimit: (limit: number | null) => Promise<void>
   setWebSearchApiKey: (key: string | null) => Promise<void>
+  setAutoWorkstream: (enabled: boolean) => Promise<void>
+  setBranchPrefix: (prefix: string) => Promise<void>
   selectChat: (id: string) => Promise<void>
   clearActive: () => void
   newSession: () => Promise<void>
   newSessionInProject: (workspacePath: string) => Promise<void>
+  /**
+   * Whether a new session in this folder should get its own workstream.
+   * Resolves the setting against a live git probe (async: most folders are not
+   * repos, and only git can say).
+   */
+  autoWorkstreamFor: (workspacePath: string | null) => Promise<boolean>
   createLoop: (input: CreateLoopInput) => Promise<void>
   setLoopEnabled: (id: string, enabled: boolean) => Promise<void>
   removeLoop: (id: string) => Promise<void>
@@ -798,6 +807,16 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     await get().setSessionConfig({ contextLimit: limit })
   },
 
+  setAutoWorkstream: async (enabled) => {
+    const settings = await api.settings.setAutoWorkstream(enabled)
+    set({ settings })
+  },
+
+  setBranchPrefix: async (prefix) => {
+    const settings = await api.settings.setBranchPrefix(prefix)
+    set({ settings })
+  },
+
   setWebSearchApiKey: async (key) => {
     const settings = await api.settings.setWebSearchApiKey(key)
     set({ settings })
@@ -866,9 +885,53 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const taken = get()
       .chats.filter((c) => c.kind === 'main' && c.workspacePath === workspacePath)
       .map((c) => c.title)
-    const chat = await api.chats.create({ title: uniqueSlug(taken), workspacePath })
+
+    // In a git repo, a new session gets its own workstream by default: the
+    // project folder is the checkout the user's editor is open in, so a second
+    // session editing it concurrently corrupts both. Only the INTENT is stored
+    // — the worktree is built lazily on the first turn, so this stays free for
+    // a session that is opened and abandoned.
+    const worktree = (await get().autoWorkstreamFor(workspacePath))
+      ? ({ mode: 'new' } as const)
+      : undefined
+
+    const chat = await api.chats.create({ title: uniqueSlug(taken), workspacePath, worktree })
     await get().refreshChats()
     await get().selectChat(chat.id)
+  },
+
+  autoWorkstreamFor: async (workspacePath) => {
+    if (!workspacePath) return false
+    if (!(get().settings?.autoWorkstream ?? true)) return false
+
+    // Probe git once per app run, exactly as refreshGitStatus does. Without
+    // this the first session after launch would silently skip its workstream,
+    // because gitAvailable is still null at that point.
+    if (get().gitAvailable === null) {
+      try {
+        set({ gitAvailable: await api.git.available() })
+      } catch {
+        set({ gitAvailable: false })
+      }
+    }
+
+    // Most folders are not repos, and asking git is the only way to know. This
+    // runs once per new session, not per render.
+    let status = get().gitStatus[workspacePath]
+    if (!status && get().gitAvailable) {
+      try {
+        status = await api.git.status(workspacePath)
+        set((s) => ({ gitStatus: { ...s.gitStatus, [workspacePath]: status! } }))
+      } catch {
+        return false
+      }
+    }
+
+    return shouldAutoWorkstream({
+      autoWorkstream: true,
+      gitAvailable: get().gitAvailable,
+      isRepo: status?.isRepo
+    })
   },
 
   deleteChat: async (id) => {

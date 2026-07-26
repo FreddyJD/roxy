@@ -140,6 +140,16 @@ const ROLES = [
   'Overflow'
 ] as const
 
+/**
+ * Every word the generator can produce, lowercased.
+ *
+ * Used to recognize a name as auto-generated after the fact — see
+ * `isGeneratedSlug`. A Set because the check runs per branch, per render.
+ */
+const ALL_WORDS: ReadonlySet<string> = new Set(
+  [...ADJECTIVES, ...NOUNS, ...ROLES].map((w) => w.toLowerCase())
+)
+
 function pick<T>(list: readonly T[]): T {
   return list[Math.floor(Math.random() * list.length)]
 }
@@ -167,4 +177,49 @@ export function uniqueSlug(taken: Iterable<string> = []): string {
     if (!used.has(slug.toLowerCase())) return slug
   }
   return `${randomSlug()} ${Math.floor(Math.random() * 900 + 100)}`
+}
+
+/**
+ * Turn a session title into one path segment of a branch name:
+ * "Legacy Ogre Apprentice" -> "legacy-ogre-apprentice".
+ *
+ * Lossy on purpose. A session title is free text — the agent renames sessions
+ * from the user's first message, so it can contain anything — while a branch
+ * name is constrained by `git check-ref-format`. Rather than validate and
+ * reject, this strips the name down to the safe subset and lets the caller fall
+ * back when nothing usable survives (e.g. a CJK or emoji-only title).
+ */
+export function slugToBranchSegment(title: string | null | undefined): string {
+  return (title ?? '')
+    .toLowerCase()
+    .replace(/['’]/g, '') // don't turn "roxy's" into "roxy-s"
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '') // no leading/trailing - or . (git rejects both)
+    .slice(0, 60)
+    .replace(/-+$/, '') // the slice may have left a trailing dash
+}
+
+/**
+ * Does this text look like something `randomSlug` produced?
+ *
+ * This is how an auto-generated branch stays distinguishable from one a person
+ * named, now that generated names are words rather than obvious hex. Accepts
+ * either spelling ("Legacy Ogre Apprentice" or "legacy-ogre-apprentice"), and
+ * requires EVERY word to come from the pools — so "fix-ogre-crash" is correctly
+ * treated as a human name even though "ogre" is one of ours.
+ *
+ * A trailing numeric suffix is allowed, because collision resolution appends
+ * one ("legacy-ogre-apprentice-2").
+ */
+export function isGeneratedSlug(text: string | null | undefined): boolean {
+  if (!text) return false
+  const parts = text
+    .trim()
+    .toLowerCase()
+    .split(/[\s-]+/)
+    .filter(Boolean)
+  if (parts.length === 4 && /^\d+$/.test(parts[3])) parts.pop()
+  if (parts.length !== 3) return false
+  return parts.every((w) => ALL_WORDS.has(w))
 }

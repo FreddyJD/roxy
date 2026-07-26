@@ -9,6 +9,13 @@
  * missing git binary, a locked index or an offline fetch degrades to "run in the
  * project folder", never to a turn that won't start.
  */
+import {
+  DEFAULT_BRANCH_PREFIX,
+  branchNameError,
+  isPlaceholderBranch,
+  normalizeBranchPrefix
+} from '../../shared/branch'
+import { slugToBranchSegment } from '../../shared/slugs'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import * as repo from '../db/repo'
@@ -122,7 +129,7 @@ export async function materializePendingWorktree(chatId: string): Promise<Materi
     return { ok: false }
   }
 
-  const result = await createForWorkspace(workspace, intent)
+  const result = await createForWorkspace(workspace, intent, chat.title)
   // Clear the intent either way: fulfilled, or failed and falling back.
   repo.setChatWorktreePending(chatId, null)
   if (!result.ok || !result.worktreePath) return result
@@ -151,7 +158,8 @@ export async function materializePendingWorktree(chatId: string): Promise<Materi
 /** Resolve the repo, pick a branch, and create/attach the worktree. */
 async function createForWorkspace(
   workspace: string,
-  intent: WorktreeIntent
+  intent: WorktreeIntent,
+  title: string
 ): Promise<MaterializeResult> {
   if (!(await git.isGitAvailable())) {
     return { ok: false, error: 'Git isn’t installed, so this session runs in the project folder.' }
@@ -163,7 +171,9 @@ async function createForWorkspace(
 
   try {
     if (intent.mode === 'new') {
-      const branch = intent.branch?.trim() || git.temporaryBranchName()
+      // Name the branch after the session, so `roxy/legacy-ogre-apprentice`
+      // shows up in `git branch` and on the PR instead of `roxy/6fdc60b8`.
+      const branch = intent.branch?.trim() || (await git.branchNameForTitle(root, title))
       const r = await git.createWorktree({ repoRoot: root, branch })
       if (!r.ok || !r.worktree)
         return { ok: false, error: r.error ?? 'Could not create the worktree.' }
@@ -240,6 +250,109 @@ export async function pruneWorktrees(
 }
 
 /**
+ * Rename the branch a session's workstream sits on.
+ *
+ * Renaming is safe while the branch is checked out: git rewrites the worktree's
+ * HEAD in place, so the directory, its node_modules and any uncommitted work
+ * are untouched. The DB pointer is updated to match; the worktree PATH is
+ * deliberately left alone, because moving a live directory would invalidate
+ * every running dev server and open file handle in it for a cosmetic gain.
+ */
+export async function renameWorkstreamBranch(
+  chatId: string,
+  to: string
+): Promise<{ ok: boolean; branch?: string; error?: string }> {
+  const chat = repo.getChat(chatId)
+  if (!chat) return { ok: false, error: 'Session not found.' }
+
+  // A sub-session shares its parent's tree; renaming from there would move the
+  // parent's branch out from under it.
+  const owner = chat.kind === 'sub' && chat.parentId ? repo.getChat(chat.parentId) : chat
+  if (!owner?.worktreePath) return { ok: false, error: 'This session has no workstream.' }
+
+  const next = to.trim()
+  const problem = branchNameError(next)
+  if (problem) return { ok: false, error: problem }
+
+  const from = owner.branch ?? (await git.currentBranch(owner.worktreePath))
+  if (!from) return { ok: false, error: 'Could not determine the current branch.' }
+  if (from === next) return { ok: true, branch: next }
+
+  // Once a branch is pushed, renaming it locally strands the remote under the
+  // old name (git only moves the local ref) and any open PR with it. Refuse
+  // rather than quietly desynchronize the two.
+  if (await git.hasUpstreamBranch(owner.worktreePath, from)) {
+    return {
+      ok: false,
+      error: `"${from}" has already been pushed - rename it on the remote instead.`
+    }
+  }
+
+  // Run from the worktree itself: it is the path we are certain exists, and git
+  // resolves the common repo from there.
+  const r = await git.renameBranch(owner.worktreePath, from, next)
+  if (!r.ok) return { ok: false, error: r.error }
+
+  repo.setChatWorktree(owner.id, { branch: next })
+  return { ok: true, branch: next }
+}
+
+/**
+ * Rename a session's branch to match a NEW session title, when that is safe.
+ *
+ * Called when the agent retitles a session (`change_session_metadata`), so a
+ * session that starts on a random slug and becomes "Fix auth token refresh"
+ * does not keep a branch named after the slug forever.
+ *
+ * Best-effort and silent by design: this rides along with a metadata update the
+ * model asked for, so a refusal must never fail that update. Every skip is a
+ * deliberate rule rather than a fallback:
+ *
+ *   - the branch is not one WE generated -> someone named it on purpose;
+ *   - it has been pushed -> the remote, and any open PR, would be stranded;
+ *   - the new title yields nothing usable, or the name is already taken.
+ */
+export async function syncBranchToTitle(
+  chatId: string,
+  title: string
+): Promise<{ renamed: boolean; branch?: string }> {
+  try {
+    const chat = repo.getChat(chatId)
+    if (!chat?.worktreePath || !chat.branch) return { renamed: false }
+
+    // Only ever reclaim a name we generated. A branch the user (or the agent,
+    // earlier) chose deliberately is not ours to rewrite.
+    if (!isPlaceholderBranch(chat.branch, branchPrefixSetting())) return { renamed: false }
+    if (await git.hasUpstreamBranch(chat.worktreePath, chat.branch)) return { renamed: false }
+
+    // An unusable title (emoji-only, say) makes branchNameForTitle fall back to
+    // hex; swapping one generated name for another is churn, not information.
+    if (!slugToBranchSegment(title)) return { renamed: false }
+
+    const next = await git.branchNameForTitle(chat.worktreePath, title)
+    if (!next || next === chat.branch) return { renamed: false }
+
+    const r = await git.renameBranch(chat.worktreePath, chat.branch, next)
+    if (!r.ok) return { renamed: false }
+
+    repo.setChatWorktree(chat.id, { branch: next })
+    return { renamed: true, branch: next }
+  } catch {
+    // A metadata update must never fail because a branch rename did.
+    return { renamed: false }
+  }
+}
+
+/** The configured branch prefix, for deciding what counts as auto-generated. */
+function branchPrefixSetting(): string {
+  try {
+    return normalizeBranchPrefix(repo.getSettings().branchPrefix)
+  } catch {
+    return DEFAULT_BRANCH_PREFIX
+  }
+}
+
+/**
  * Remove a session's worktree, if it owns one no other session shares.
  *
  * ORDERING IS LOAD-BEARING on Windows: a dev server still running in the
@@ -252,6 +365,13 @@ export async function pruneWorktrees(
  * Never blocks session deletion: a shared worktree, a still-running background
  * subagent, or a git refusal are all reported and left alone rather than
  * raising. Whatever survives is swept up later by `pruneWorktrees`.
+ *
+ * UNCOMMITTED WORK IS NEVER DISCARDED. `force` defaults to false so git's own
+ * refusal to delete a dirty tree is respected: the directory stays, the session
+ * goes, and `pruneWorktrees` lists it later. This matters far more now that
+ * sessions get a workstream by DEFAULT -- deleting a session used to throw away
+ * a chat log, and would otherwise now throw away the code too, with no
+ * confirmation and no reflog entry to recover from.
  */
 export async function removeWorktreeForChat(
   chatId: string,
@@ -282,8 +402,15 @@ export async function removeWorktreeForChat(
   // kill has to have actually happened, not merely been requested.
   await stopSessionProcesses(chatId)
 
-  const r = await git.removeWorktree(target, { force: opts.force ?? true })
-  return { ok: r.ok, removed: r.ok, error: r.error }
+  const r = await git.removeWorktree(target, { force: opts.force ?? false })
+  if (!r.ok) {
+    return {
+      ok: false,
+      removed: false,
+      error: r.error ?? 'The workstream has uncommitted changes, so its folder was left in place.'
+    }
+  }
+  return { ok: true, removed: true }
 }
 
 /**

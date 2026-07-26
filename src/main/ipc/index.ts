@@ -40,7 +40,7 @@ import { sessionCwd } from '../services/workspace'
 import * as git from '../services/git'
 import * as forge from '../services/forge'
 import type { ForgeKind } from '../../shared/forge'
-import { pruneWorktrees, removeWorktreeForChat } from '../services/worktree'
+import { pruneWorktrees, removeWorktreeForChat, renameWorkstreamBranch } from '../services/worktree'
 import { checkForUpdates, quitAndInstall, getUpdateState } from '../services/updater'
 import {
   cancelBackgroundJob,
@@ -123,6 +123,12 @@ export function registerIpc(): void {
   )
   ipcMain.handle(CHANNELS.settingsSetContextLimit, (_e, limit: number | null) =>
     repo.setContextLimit(limit)
+  )
+  ipcMain.handle(CHANNELS.settingsSetAutoWorkstream, (_e, enabled: boolean) =>
+    repo.setAutoWorkstream(enabled)
+  )
+  ipcMain.handle(CHANNELS.settingsSetBranchPrefix, (_e, prefix: string) =>
+    repo.setBranchPrefix(prefix)
   )
   ipcMain.handle(CHANNELS.settingsSetWebSearchApiKey, (_e, key: string | null) =>
     repo.setWebSearchApiKey(key)
@@ -611,6 +617,9 @@ export function registerIpc(): void {
     return git.removeWorktree(worktreePath, { force: force ?? false })
   })
 
+  ipcMain.handle(CHANNELS.gitRenameBranch, (_e, sessionId: string, to: string) =>
+    renameWorkstreamBranch(sessionId, to)
+  )
   ipcMain.handle(CHANNELS.gitPruneWorktrees, (_e, cwd: string, dryRun?: boolean) =>
     pruneWorktrees(cwd, { dryRun: dryRun ?? true, force: true })
   )

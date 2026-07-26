@@ -6,6 +6,8 @@ export const CHANNELS = {
   settingsSetReasoningEffort: 'settings:setReasoningEffort',
   settingsSetContextLimit: 'settings:setContextLimit',
   settingsSetWebSearchApiKey: 'settings:setWebSearchApiKey',
+  settingsSetAutoWorkstream: 'settings:setAutoWorkstream',
+  settingsSetBranchPrefix: 'settings:setBranchPrefix',
   settingsCompleteOnboarding: 'settings:completeOnboarding',
   settingsReset: 'settings:reset',
 
@@ -140,6 +142,7 @@ export const CHANNELS = {
   gitCreateWorktree: 'git:create-worktree',
   gitRemoveWorktree: 'git:remove-worktree',
   gitPruneWorktrees: 'git:prune-worktrees',
+  gitRenameBranch: 'git:rename-branch',
 
   /** Forge = the git host (GitHub/Azure DevOps/GitLab/Bitbucket) behind `origin`. */
   forgeStatus: 'forge:status',
