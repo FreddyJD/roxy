@@ -437,6 +437,7 @@ export interface RoxyApi {
     setReasoningEffort(level: ReasoningEffort): Promise<AppSettings>
     setContextLimit(limit: number | null): Promise<AppSettings>
     setWebSearchApiKey(key: string | null): Promise<AppSettings>
+    setAutoWorkstream(enabled: boolean): Promise<AppSettings>
     completeOnboarding(): Promise<AppSettings>
     reset(): Promise<void>
   }

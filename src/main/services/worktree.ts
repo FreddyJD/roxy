@@ -252,6 +252,13 @@ export async function pruneWorktrees(
  * Never blocks session deletion: a shared worktree, a still-running background
  * subagent, or a git refusal are all reported and left alone rather than
  * raising. Whatever survives is swept up later by `pruneWorktrees`.
+ *
+ * UNCOMMITTED WORK IS NEVER DISCARDED. `force` defaults to false so git's own
+ * refusal to delete a dirty tree is respected: the directory stays, the session
+ * goes, and `pruneWorktrees` lists it later. This matters far more now that
+ * sessions get a workstream by DEFAULT -- deleting a session used to throw away
+ * a chat log, and would otherwise now throw away the code too, with no
+ * confirmation and no reflog entry to recover from.
  */
 export async function removeWorktreeForChat(
   chatId: string,
@@ -282,8 +289,15 @@ export async function removeWorktreeForChat(
   // kill has to have actually happened, not merely been requested.
   await stopSessionProcesses(chatId)
 
-  const r = await git.removeWorktree(target, { force: opts.force ?? true })
-  return { ok: r.ok, removed: r.ok, error: r.error }
+  const r = await git.removeWorktree(target, { force: opts.force ?? false })
+  if (!r.ok) {
+    return {
+      ok: false,
+      removed: false,
+      error: r.error ?? 'The workstream has uncommitted changes, so its folder was left in place.'
+    }
+  }
+  return { ok: true, removed: true }
 }
 
 /**

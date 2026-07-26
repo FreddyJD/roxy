@@ -112,6 +112,9 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.settingsSetContextLimit, (_e, limit: number | null) =>
     repo.setContextLimit(limit)
   )
+  ipcMain.handle(CHANNELS.settingsSetAutoWorkstream, (_e, enabled: boolean) =>
+    repo.setAutoWorkstream(enabled)
+  )
   ipcMain.handle(CHANNELS.settingsSetWebSearchApiKey, (_e, key: string | null) =>
     repo.setWebSearchApiKey(key)
   )

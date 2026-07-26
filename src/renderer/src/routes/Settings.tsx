@@ -5,7 +5,7 @@ import type { AppVersions, ConnectedProvider } from '@shared/types'
 import type { UpdateInfo } from '@shared/api'
 import { AUTH_LABELS } from '@shared/providers'
 import { api } from '../lib/api'
-import { Button } from '../components/ui'
+import { Button, Switch } from '../components/ui'
 import { PageShell } from '../components/PageShell'
 import { McpServers } from '../components/McpServers'
 import { ConfigBackup } from '../components/ConfigBackup'
@@ -19,6 +19,7 @@ export default function Settings(): JSX.Element {
   const settings = useRoxyStore((s) => s.settings)
   const refreshProviders = useRoxyStore((s) => s.refreshProviders)
   const setWebSearchApiKey = useRoxyStore((s) => s.setWebSearchApiKey)
+  const setAutoWorkstream = useRoxyStore((s) => s.setAutoWorkstream)
   const bootstrap = useRoxyStore((s) => s.bootstrap)
   const clearActive = useRoxyStore((s) => s.clearActive)
   const [versions, setVersions] = useState<AppVersions | null>(null)
@@ -104,6 +105,29 @@ export default function Settings(): JSX.Element {
           >
             <Plus className="h-4 w-4" /> Add provider
           </button>
+        </div>
+      </section>
+
+      <section className="mb-8">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          Workstreams
+        </h2>
+        <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-text">
+              New sessions get their own workstream
+            </div>
+            <p className="mt-0.5 text-xs text-text-muted">
+              Each session works in its own git worktree on its own branch, so parallel sessions
+              can&apos;t overwrite each other or fight with your editor. The folder is created on
+              the session&apos;s first message, and only in git repositories. Turn this off to run
+              new sessions directly in the project folder.
+            </p>
+          </div>
+          <Switch
+            checked={settings?.autoWorkstream ?? true}
+            onChange={(v) => void setAutoWorkstream(v)}
+          />
         </div>
       </section>
 

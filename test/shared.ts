@@ -58,6 +58,7 @@ import { resolveWorktreeCwd } from '../src/shared/workspace'
 import {
   workstreamStripView,
   statusKeyForSession,
+  shouldAutoWorkstream,
   type StripSession
 } from '../src/shared/workstream'
 import {
@@ -2287,6 +2288,38 @@ async function main(): Promise<void> {
       statusKeyForSession(mk({ worktreePath: '/wt/auth' })) === '/wt/auth'
     )
     check('poll key: a sub-session never polls', statusKeyForSession(sub) === null)
+  }
+
+  // ---- auto-workstream (the default for new sessions) ----
+  // A new session gets its own worktree by default, because the project folder
+  // is the checkout the user's editor is open in. But both guards below are
+  // correctness, not caution: git must exist, and the folder must be a repo, or
+  // `git worktree add` fails on the turn path.
+  {
+    const on = { autoWorkstream: true, gitAvailable: true, isRepo: true }
+    check('auto-workstream: on by default in a git repo', shouldAutoWorkstream(on) === true)
+    check(
+      'auto-workstream: the setting can turn it off',
+      shouldAutoWorkstream({ ...on, autoWorkstream: false }) === false
+    )
+    check(
+      'auto-workstream: never in a non-repo (nothing to branch from)',
+      shouldAutoWorkstream({ ...on, isRepo: false }) === false
+    )
+    check(
+      'auto-workstream: never without a git binary',
+      shouldAutoWorkstream({ ...on, gitAvailable: false }) === false
+    )
+    // gitAvailable === null means "not probed yet", NOT "no". Treating unknown
+    // as yes would try to create a worktree on a machine without git.
+    check(
+      'auto-workstream: an unprobed git is not treated as available',
+      shouldAutoWorkstream({ ...on, gitAvailable: null }) === false
+    )
+    check(
+      'auto-workstream: an unknown repo state is not assumed to be a repo',
+      shouldAutoWorkstream({ ...on, isRepo: undefined }) === false
+    )
   }
 
   // ---- services panel labels (process facts -> human outcomes) ----

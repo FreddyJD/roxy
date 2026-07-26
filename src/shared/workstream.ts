@@ -130,6 +130,30 @@ function pendingBranch(intent: WorktreeIntent | null | undefined): string | null
 }
 
 /**
+ * Should a NEW session in this project get its own workstream?
+ *
+ * Pure so the rule is testable, and central so every entry point (sidebar,
+ * folder picker, project menu) answers it identically -- the old behaviour was
+ * "whatever each call site happened to pass", which is how the default ended up
+ * inconsistent with the dropdown right below it.
+ *
+ * Both guards are correctness, not caution:
+ *   - a non-repo has nothing to branch from, and `git worktree add` would fail
+ *     on the turn path;
+ *   - without a git binary the same is true, and `gitAvailable === null` means
+ *     "not probed yet", which must not be read as "no".
+ */
+export function shouldAutoWorkstream(input: {
+  autoWorkstream: boolean
+  gitAvailable: boolean | null
+  isRepo: boolean | undefined
+}): boolean {
+  if (!input.autoWorkstream) return false
+  if (input.gitAvailable !== true) return false
+  return input.isRepo === true
+}
+
+/**
  * Which status entry a session polls, or null when it shouldn't poll at all.
  *
  * Keyed by WORKTREE path so N sessions sharing one worktree share a single

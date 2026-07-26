@@ -5,6 +5,7 @@ export const CHANNELS = {
   settingsSetReasoningEffort: 'settings:setReasoningEffort',
   settingsSetContextLimit: 'settings:setContextLimit',
   settingsSetWebSearchApiKey: 'settings:setWebSearchApiKey',
+  settingsSetAutoWorkstream: 'settings:setAutoWorkstream',
   settingsCompleteOnboarding: 'settings:completeOnboarding',
   settingsReset: 'settings:reset',
 
