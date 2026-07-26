@@ -6,13 +6,15 @@ import { workstreamStripView, statusKeyForSession } from '@shared/workstream'
 import { cn } from '../lib/cn'
 
 /**
- * The workstream strip — one quiet row above the composer answering "where does
+ * The workstream strip — one quiet row under the composer answering "where does
  * this session's work land?".
  *
  *   ⌥ auth work  │  ⎇ roxy/auth  │  ○ local
  *
  * Deliberately a separate row from the composer's footer: that row is about HOW
  * the model runs (agent, model, context), this one is about WHERE the work goes.
+ * It sits BELOW the composer because it's provenance, not input — the composer
+ * stays the last thing between the caret and the send button.
  *
  * It renders NOTHING outside a git repo. Most folders aren't repos, and a
  * permanently greyed-out row would just be a nag.
@@ -66,42 +68,46 @@ export function WorkstreamStrip(): JSX.Element | null {
   const changed = (statusKey ? gitStatus[statusKey]?.changed : 0) ?? 0
 
   return (
-    <div className="flex shrink-0 items-center gap-1 px-4 pb-1.5 text-xs">
-      <WorkstreamSegment chat={owner} readOnly={readOnly} label={view.label} />
+    // Same px-4 gutter + centered max-w-3xl column as the composer, so the strip
+    // reads as the composer's footer rather than a stray row pinned to the left.
+    <div className="shrink-0 px-4 pb-2.5 text-xs">
+      <div className="mx-auto flex max-w-3xl items-center gap-1 px-1">
+        <WorkstreamSegment chat={owner} readOnly={readOnly} label={view.label} />
 
-      <Divider />
+        <Divider />
 
-      {/* Segment 2 — output, not a control. Switching a branch in place is a
-          different (and riskier) action than opening a workstream; the
-          workstream menu above is the branch picker. */}
-      <span
-        className="flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-text-muted"
-        title={branch ? `On branch ${branch}` : undefined}
-      >
-        <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
-        <span className="truncate">{branch ?? 'detached'}</span>
-        {dirty && (
-          <span
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"
-            title={`${changed} uncommitted change${changed === 1 ? '' : 's'}`}
-          />
-        )}
-      </span>
+        {/* Segment 2 — output, not a control. Switching a branch in place is a
+            different (and riskier) action than opening a workstream; the
+            workstream menu above is the branch picker. */}
+        <span
+          className="flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-text-muted"
+          title={branch ? `On branch ${branch}` : undefined}
+        >
+          <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
+          <span className="truncate">{branch ?? 'detached'}</span>
+          {dirty && (
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"
+              title={`${changed} uncommitted change${changed === 1 ? '' : 's'}`}
+            />
+          )}
+        </span>
 
-      <Divider />
+        <Divider />
 
-      {/* Segment 3 — TODO: this becomes the branch lifecycle, and each state is
-          reachable with plain git except the last two:
-            ○ local  →  ↑N to push  →  pushed  →  PR #N  →  merged
-          Clicking it should open a panel with the remote, ahead/behind, and
-          commit/push actions. Left static here so the layout is final. */}
-      <span
-        className="flex items-center gap-1.5 px-1.5 py-1 text-text-subtle"
-        title="Not pushed yet"
-      >
-        <span className="h-1.5 w-1.5 rounded-full border border-text-subtle/70" />
-        local
-      </span>
+        {/* Segment 3 — TODO: this becomes the branch lifecycle, and each state is
+            reachable with plain git except the last two:
+              ○ local  →  ↑N to push  →  pushed  →  PR #N  →  merged
+            Clicking it should open a panel with the remote, ahead/behind, and
+            commit/push actions. Left static here so the layout is final. */}
+        <span
+          className="flex items-center gap-1.5 px-1.5 py-1 text-text-subtle"
+          title="Not pushed yet"
+        >
+          <span className="h-1.5 w-1.5 rounded-full border border-text-subtle/70" />
+          local
+        </span>
+      </div>
     </div>
   )
 }
