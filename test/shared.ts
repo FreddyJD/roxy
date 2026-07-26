@@ -180,6 +180,8 @@ import {
   forgeKindForHost,
   detectHost,
   branchLifecycle,
+  isPullRequestPhase,
+  type LifecyclePhase,
   relativeAge,
   FORGE_NAMES,
   type PullRequestView
@@ -3198,6 +3200,44 @@ async function main(): Promise<void> {
       })
       return v.phase === 'closed'
     })()
+  )
+
+  // ---- forge: which phases the sidebar badges -----------------------------
+  // The sidebar renders one badge per row, so it only shows phases that mean a
+  // PR actually exists. The pre-PR states are true of nearly every row nearly
+  // all the time and would bury the row that says `merged`.
+  check(
+    'sidebar: PR phases are badged',
+    (['draft', 'open', 'merged', 'closed'] as LifecyclePhase[]).every(isPullRequestPhase)
+  )
+  check(
+    'sidebar: pre-PR phases are not badged',
+    (['unpublished', 'ahead', 'behind', 'synced'] as LifecyclePhase[]).every(
+      (p) => !isPullRequestPhase(p)
+    )
+  )
+  // The two functions have to agree: every phase branchLifecycle can produce
+  // WITH a pr must badge, and every phase it produces WITHOUT one must not.
+  // Asserting that here is what stops the sidebar and the strip from drifting.
+  check(
+    'sidebar: badged phases are exactly the ones with a PR',
+    (['open', 'draft', 'merged', 'closed'] as const).every((state) =>
+      isPullRequestPhase(
+        branchLifecycle({
+          sync: { ...noSync, hasUpstream: true },
+          pr: mkPr({ state }),
+          forgeKnown: true
+        }).phase
+      )
+    ) &&
+      [
+        { ...noSync },
+        { ...noSync, hasUpstream: true, ahead: 2 },
+        { ...noSync, hasUpstream: true, behind: 3 },
+        { ...noSync, hasUpstream: true }
+      ].every(
+        (sync) => !isPullRequestPhase(branchLifecycle({ sync, pr: null, forgeKnown: true }).phase)
+      )
   )
 
   // ---- forge: unknown hosts + user override -------------------------------

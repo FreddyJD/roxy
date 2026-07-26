@@ -10,6 +10,10 @@ import { branchNameError } from '@shared/branch'
 import { ServicesSegment, useServices } from './ServicesSegment'
 import { useMenuAnchor } from '../lib/useMenuAnchor'
 import { cn } from '../lib/cn'
+// The tone -> class mapping is shared with the sidebar's row badge. Two copies
+// would drift, and a `merged` PR that is green in one place and grey in the
+// other teaches the user that the colour means nothing.
+import { TONE_BG, TONE_TEXT } from '../lib/lifecycle'
 
 /**
  * The workstream strip — one quiet row under the composer answering "where does
@@ -285,27 +289,6 @@ function UnknownHostChip({ host }: { host: string }): JSX.Element {
 }
 
 const FORGE_KINDS: ForgeKind[] = ['github', 'azure-devops', 'gitlab', 'bitbucket']
-/**
- * Colour is the fastest channel the chip has, so it carries the one thing worth
- * interrupting for: whether something needs the user. Merged is the only green
- * - "done" is the state worth celebrating, and if everything were coloured
- * nothing would stand out.
- */
-const TONE_TEXT: Record<LifecycleTone, string> = {
-  neutral: 'text-text-subtle hover:text-text-muted',
-  info: 'text-text-muted hover:text-text',
-  success: 'text-success',
-  warning: 'text-warning',
-  danger: 'text-danger'
-}
-
-const TONE_BG: Record<LifecycleTone, string> = {
-  neutral: 'bg-text-subtle/70',
-  info: 'bg-text-muted',
-  success: 'bg-success',
-  warning: 'bg-warning',
-  danger: 'bg-danger'
-}
 
 /**
  * Hollow while the work is local, filled once it exists on the server. It's the

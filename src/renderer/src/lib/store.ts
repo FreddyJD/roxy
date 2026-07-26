@@ -34,7 +34,7 @@ import {
   type SessionConfigPatch
 } from '@shared/session-config'
 import { uniqueSlug } from '@shared/slugs'
-import { shouldAutoWorkstream } from '@shared/workstream'
+import { shouldAutoWorkstream, statusKeyForSession } from '@shared/workstream'
 import { api } from './api'
 import type { ComposerImage } from './images'
 import type { GitStatusView, ServiceView, WorktreeView } from '@shared/api'
@@ -178,6 +178,17 @@ interface RoxyStore {
    * worktrees watchers multiply, and fs.watch is unreliable on Windows.
    */
   refreshGitStatus: (chatId: string) => Promise<void>
+  /**
+   * Refresh git + PR status for EVERY session, so the sidebar can show where
+   * each workstream stands without the user opening it.
+   *
+   * Deduped by cwd, because that is the unit of work: ten sessions in one
+   * worktree are one git spawn, not ten. The forge side is deduped again in
+   * the main process (60s TTL, shared in-flight promise), so a sweep over a
+   * dozen sessions costs a dozen local `git status` calls and, at most, one
+   * network request per distinct branch per minute.
+   */
+  refreshAllGitStatus: () => Promise<void>
   /** Push this session's branch to origin, then refresh its status. */
   pushBranch: (chatId: string) => Promise<{ ok: boolean; error?: string }>
   /** Load the worktrees + branches for a project (menu open). */
@@ -226,6 +237,18 @@ const remoteTurns = new Map<string, PartsFold>()
  * whole transcript so far instead of resuming from whatever arrives next.
  */
 const subagentTurns = new Map<string, PartsFold>()
+
+/**
+ * The in-flight sidebar sweep, shared by every caller until it settles.
+ *
+ * The sweep walks worktrees one at a time, so it can easily still be running
+ * when the next trigger arrives - the 30s timer, a window focus, and an
+ * alt-tab burst all call it. Without this, focusing the window three times in
+ * a second starts three overlapping walks over the same repos, each spawning
+ * its own git processes and racing the others' `set()` calls. Sharing the
+ * promise makes every extra trigger free.
+ */
+let gitSweep: Promise<void> | null = null
 
 /**
  * Record a config change as the new GLOBAL default - the template every new
@@ -701,6 +724,56 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       }))
     } catch {
       // Best-effort: a transient git failure leaves the last known state.
+    }
+  },
+
+  refreshAllGitStatus: async () => {
+    // Coalesce: a re-entrant call rides the walk already in progress instead of
+    // starting a second one over the same repos.
+    if (gitSweep) return gitSweep
+    gitSweep = (async () => {
+      // Probe once, exactly as refreshGitStatus does - on a cold start this runs
+      // before anything has touched git, and `null` must not be read as `false`.
+      if (get().gitAvailable === null) {
+        try {
+          set({ gitAvailable: await api.git.available() })
+        } catch {
+          set({ gitAvailable: false })
+        }
+      }
+      if (!get().gitAvailable) return
+
+      // One entry per distinct cwd. `statusKeyForSession` returns null for
+      // sub-sessions (they inherit their parent's workstream) and for sessions
+      // with no folder at all, and Set collapses the rest.
+      const keys = new Set<string>()
+      for (const c of get().chats) {
+        const key = statusKeyForSession(c)
+        if (key) keys.add(key)
+      }
+      if (!keys.size) return
+
+      // Sequential, not Promise.all: git serializes per repo in the main process
+      // anyway, and firing N spawns at once on a machine with a dozen sessions is
+      // a visible stall on the very interaction (opening the app) this is meant
+      // to be invisible during.
+      for (const key of keys) {
+        try {
+          const [status, forge] = await Promise.all([api.git.status(key), api.forge.status(key)])
+          set((s) => ({
+            gitStatus: { ...s.gitStatus, [key]: status },
+            forgeStatus: forge ? { ...s.forgeStatus, [key]: forge } : s.forgeStatus
+          }))
+        } catch {
+          // Best-effort per session: a deleted worktree must not stop the sweep
+          // and leave every row below it blank.
+        }
+      }
+    })()
+    try {
+      await gitSweep
+    } finally {
+      gitSweep = null
     }
   },
 
