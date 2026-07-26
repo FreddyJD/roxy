@@ -30,6 +30,7 @@ import { uniqueSlug } from '@shared/slugs'
 import { api } from './api'
 import type { ComposerImage } from './images'
 import type { GitStatusView, ServiceView, WorktreeView } from '@shared/api'
+import type { ForgeStatusView } from '@shared/forge'
 
 interface RoxyStore {
   ready: boolean
@@ -70,6 +71,12 @@ interface RoxyStore {
    * so N sessions sharing a worktree share one poll instead of N.
    */
   gitStatus: Record<string, GitStatusView>
+  /**
+   * Remote/PR state, keyed by the same worktree path as `gitStatus` so the two
+   * always agree. Populated by the same poll - a separate one would double the
+   * git spawns for a strictly worse result.
+   */
+  forgeStatus: Record<string, ForgeStatusView>
   /** Live worktrees per project folder, for the workstream menu. */
   worktrees: Record<string, WorktreeView[]>
   /** Branches per project folder, loaded lazily when the menu opens. */
@@ -128,6 +135,8 @@ interface RoxyStore {
    * worktrees watchers multiply, and fs.watch is unreliable on Windows.
    */
   refreshGitStatus: (chatId: string) => Promise<void>
+  /** Push this session's branch to origin, then refresh its status. */
+  pushBranch: (chatId: string) => Promise<{ ok: boolean; error?: string }>
   /** Load the worktrees + branches for a project (menu open). */
   refreshWorktrees: (workspacePath: string) => Promise<void>
   /**
@@ -252,6 +261,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   services: [],
   gitAvailable: null,
   gitStatus: {},
+  forgeStatus: {},
   worktrees: {},
   gitBranches: {},
   usageStats: null,
@@ -461,11 +471,28 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     }
     if (!get().gitAvailable) return
     try {
-      const status = await api.git.status(key)
-      set((s) => ({ gitStatus: { ...s.gitStatus, [key]: status } }))
+      // One round trip for both. `forge.status` is cheap by construction: it
+      // returns local git state immediately and refreshes pull-request data in
+      // the background, so putting it on the 5s poll costs no network traffic.
+      const [status, forge] = await Promise.all([api.git.status(key), api.forge.status(key)])
+      set((s) => ({
+        gitStatus: { ...s.gitStatus, [key]: status },
+        forgeStatus: forge ? { ...s.forgeStatus, [key]: forge } : s.forgeStatus
+      }))
     } catch {
       // Best-effort: a transient git failure leaves the last known state.
     }
+  },
+
+  pushBranch: async (chatId) => {
+    const chat = get().chats.find((c) => c.id === chatId)
+    const key = chat?.worktreePath ?? chat?.workspacePath
+    if (!key) return { ok: false, error: 'No workspace for this session.' }
+    const r = await api.forge.push(key)
+    // Refresh immediately so the chip moves off "local" the moment the push
+    // lands, rather than on the next tick.
+    if (r.ok) await get().refreshGitStatus(chatId)
+    return r
   },
 
   refreshWorktrees: async (workspacePath) => {

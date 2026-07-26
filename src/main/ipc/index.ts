@@ -37,6 +37,8 @@ import {
 } from '../harness'
 import { sessionCwd } from '../services/workspace'
 import * as git from '../services/git'
+import * as forge from '../services/forge'
+import type { ForgeKind } from '../../shared/forge'
 import { pruneWorktrees, removeWorktreeForChat } from '../services/worktree'
 import { checkForUpdates, quitAndInstall, getUpdateState } from '../services/updater'
 import {
@@ -583,6 +585,36 @@ export function registerIpc(): void {
     pruneWorktrees(cwd, { dryRun: dryRun ?? true, force: true })
   )
 
+  // ---- forge (the git host behind `origin`: PR state for the branch) ----
+  // Same degrade-never-throw contract as the git handlers above: no remote, an
+  // unknown host, no credential and a dead network all return a usable object.
+  ipcMain.handle(CHANNELS.forgeStatus, async (_e, cwd: string, force?: boolean) => {
+    if (!cwd || !(await git.isGitAvailable())) return null
+    return forge.forgeStatus(cwd, { force: force ?? false })
+  })
+
+  ipcMain.handle(CHANNELS.forgePush, async (_e, cwd: string) => {
+    if (!cwd || !(await git.isGitAvailable()))
+      return { ok: false, error: 'Git isn\u2019t installed.' }
+    const branch = await git.currentBranch(cwd)
+    if (!branch) return { ok: false, error: 'Not on a branch (detached HEAD).' }
+    const st = await git.status(cwd)
+    const r = await git.pushBranch(cwd, branch, { setUpstream: !st?.hasUpstream })
+    // The remote just changed, so every cached PR answer is suspect - drop it
+    // rather than let the chip show pre-push state for up to a minute.
+    if (r.ok) forge.invalidate()
+    return r
+  })
+
+  ipcMain.handle(CHANNELS.forgeCreateUrl, async (_e, cwd: string) => {
+    if (!cwd || !(await git.isGitAvailable())) return null
+    return forge.createPullUrl(cwd)
+  })
+  ipcMain.handle(CHANNELS.forgeListHosts, () => forge.listHosts())
+
+  ipcMain.handle(CHANNELS.forgeSetHostKind, (_e, host: string, kind: ForgeKind | null) => {
+    forge.setHostKind(host, kind)
+  })
   // ---- remote (Remote Workspace: share a session to a phone via roxy.gg) ----
   ipcMain.handle(CHANNELS.remoteStart, (_e, input: RemoteStartInput) => remote.start(input))
   ipcMain.handle(CHANNELS.remoteStop, () => remote.stop())

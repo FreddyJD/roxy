@@ -24,6 +24,7 @@ import type {
   WorktreeIntent
 } from './types'
 import type { McpServerConfig } from './mcp'
+import type { ForgeStatusView, ForgeHostView, ForgeKind } from './forge'
 
 /** A configured MCP server merged with its live connection status (for Settings). */
 export interface McpServerView {
@@ -608,6 +609,30 @@ export interface RoxyApi {
     restart(sessionId: string, id: string): Promise<{ ok: boolean; id?: string; error?: string }>
     /** Open this session's OWN browser window at a service's localhost URL. */
     open(sessionId: string, port: number): Promise<void>
+  }
+  /**
+   * The git HOST behind `origin` - GitHub, Azure DevOps, GitLab or Bitbucket.
+   * Named "forge" because `remote` already means the roxy.gg phone relay here.
+   */
+  forge: {
+    /**
+     * Branch state, local + remote, in one call. Returns instantly with git
+     * state; pull-request data is served from cache and refreshed in the
+     * background, so a 5s poll never waits on the network. `force` waits.
+     */
+    status(cwd: string, force?: boolean): Promise<ForgeStatusView>
+    /** Push the current branch to origin, setting upstream when it has none. */
+    push(cwd: string): Promise<{ ok: boolean; error?: string }>
+    /** The host's "create a pull request" URL, pre-filled for this branch. */
+    createUrl(cwd: string): Promise<string | null>
+    /**
+     * Git hosts this user's projects use, with live connection state read from
+     * git's credential helper. Not a list of "accounts Roxy owns" - Roxy owns
+     * none; this is a view of what git already has.
+     */
+    listHosts(): Promise<ForgeHostView[]>
+    /** Record which software an unrecognised host runs (null clears it). */
+    setHostKind(host: string, kind: ForgeKind | null): Promise<void>
   }
   git: {
     /** Whether a usable `git` binary exists (probed once, cached). */

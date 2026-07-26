@@ -129,6 +129,12 @@ export const CHANNELS = {
   gitRemoveWorktree: 'git:remove-worktree',
   gitPruneWorktrees: 'git:prune-worktrees',
 
+  /** Forge = the git host (GitHub/Azure DevOps/GitLab/Bitbucket) behind `origin`. */
+  forgeStatus: 'forge:status',
+  forgePush: 'forge:push',
+  forgeCreateUrl: 'forge:create-url',
+  forgeListHosts: 'forge:list-hosts',
+  forgeSetHostKind: 'forge:set-host-kind',
   remoteStart: 'remote:start',
   remoteStop: 'remote:stop',
   remoteStatus: 'remote:status',

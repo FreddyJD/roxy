@@ -114,6 +114,47 @@ function setSetting(key: string, value: string | null): void {
   ).run(key, value)
 }
 
+// ---- Forge host overrides ----------------------------------------------
+// Which software an UNRECOGNISED git host runs (`git.mycorp.com` -> gitlab).
+// Only consulted when auto-detection fails, so a stale or mistaken answer can
+// never mis-route a well-known host.
+//
+// Stored as one JSON blob in `settings` rather than its own table: it's a
+// handful of string pairs, it has no relations, and it therefore needs no
+// migration - which matters because migrations here are append-only forever.
+// A dedicated table would be the right call the moment this grows per-host
+// settings beyond `kind`.
+
+const FORGE_HOSTS_KEY = 'forge_host_kinds'
+
+export function getForgeHostKinds(): Record<string, string> {
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(FORGE_HOSTS_KEY) as
+    | { value: string }
+    | undefined
+  if (!row?.value) return {}
+  try {
+    const parsed: unknown = JSON.parse(row.value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k.toLowerCase()] = v
+    }
+    return out
+  } catch {
+    // Corrupt JSON degrades to "nothing is overridden", which just means the
+    // user is asked again - never a crash on startup.
+    return {}
+  }
+}
+
+/** Record (or clear, with null) which software a host runs. */
+export function setForgeHostKind(host: string, kind: string | null): void {
+  const map = getForgeHostKinds()
+  const key = host.toLowerCase()
+  if (kind === null) delete map[key]
+  else map[key] = kind
+  setSetting(FORGE_HOSTS_KEY, Object.keys(map).length ? JSON.stringify(map) : null)
+}
 export function setActiveProvider(providerId: string, model: string | null): AppSettings {
   setSetting('active_provider_id', providerId)
   setSetting('active_model', model)
