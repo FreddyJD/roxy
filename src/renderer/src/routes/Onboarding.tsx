@@ -31,7 +31,7 @@ export default function Onboarding(): JSX.Element {
   // a draggable strip so the window still moves.
   if (step === 'welcome') {
     return (
-      <div className="vibrancy-solid relative h-full w-full">
+      <div className="relative h-full w-full">
         <div className="titlebar absolute inset-x-0 top-0 z-10 h-14" />
         <WelcomeStep onContinue={() => setStep('provider')} />
       </div>
