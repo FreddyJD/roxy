@@ -101,6 +101,23 @@ export function useOverlayScroll(
       },
       merge(BASE, optionsRef.current)
     )
+    // Re-initializing on an element that a previous instance was destroyed on
+    // leaves the new scrollbars stuck hidden: they keep
+    // `os-scrollbar-auto-hide-hidden` and never fade in, however much you
+    // scroll. Programmatic scrolling never clears it either — which is exactly
+    // the chat transcript's case, since it scrolls itself to the bottom on
+    // every new message — so the bar stays invisible for the life of the pane.
+    //
+    // This is not a rare path. React StrictMode runs every effect
+    // mount -> cleanup -> mount in development, so the SECOND instance is the
+    // one that survives and it is always the broken one. Any genuine remount
+    // (route change, ref identity change) reproduces it in production too.
+    //
+    // A forced update makes the library recompute its auto-hide state against
+    // the element it just adopted. Verified against overlayscrollbars 2.16.0
+    // in Electron: without it the handle sits at opacity 0 through repeated
+    // scrolls; with it, opacity 1 — identical to a clean first mount.
+    instance.update(true)
     return () => instance.destroy()
   }, [ref])
 }
