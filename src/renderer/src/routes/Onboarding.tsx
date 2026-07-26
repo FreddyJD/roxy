@@ -5,13 +5,17 @@ import { useRoxyStore } from '../lib/store'
 import { api } from '../lib/api'
 import { Button } from '../components/ui'
 import roxy from '../assets/roxy.png'
+import { WelcomeStep } from './onboarding/WelcomeStep'
 import { ProviderStep } from './onboarding/ProviderStep'
 import { Scroller } from '../components/Scroller'
+
+type Step = 'welcome' | 'provider'
 
 export default function Onboarding(): JSX.Element {
   const navigate = useNavigate()
   const providers = useRoxyStore((s) => s.providers)
   const bootstrap = useRoxyStore((s) => s.bootstrap)
+  const [step, setStep] = useState<Step>('welcome')
   const [finishing, setFinishing] = useState(false)
 
   const canFinish = providers.length > 0
@@ -21,6 +25,17 @@ export default function Onboarding(): JSX.Element {
     await api.settings.completeOnboarding()
     await bootstrap()
     navigate('/')
+  }
+
+  // The welcome screen is full-bleed artwork: no header chrome or footer, just
+  // a draggable strip so the window still moves.
+  if (step === 'welcome') {
+    return (
+      <div className="vibrancy-solid relative h-full w-full">
+        <div className="titlebar absolute inset-x-0 top-0 z-10 h-14" />
+        <WelcomeStep onContinue={() => setStep('provider')} />
+      </div>
+    )
   }
 
   return (
