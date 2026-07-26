@@ -3300,7 +3300,7 @@ async function main(): Promise<void> {
   )
   check(
     'sidebar: pre-PR phases are not badged',
-    (['unpublished', 'ahead', 'behind', 'synced'] as LifecyclePhase[]).every(
+    (['unpublished', 'ahead', 'behind', 'diverged', 'synced'] as LifecyclePhase[]).every(
       (p) => !isPullRequestPhase(p)
     )
   )

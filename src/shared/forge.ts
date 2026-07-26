@@ -609,6 +609,7 @@ export function isPullRequestPhase(phase: LifecyclePhase): boolean {
     case 'unpublished':
     case 'ahead':
     case 'behind':
+    case 'diverged':
     case 'synced':
       return false
   }
