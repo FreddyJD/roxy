@@ -181,6 +181,19 @@ export type MessagePart =
       image?: string
       /** Before/after file contents for write/edit, shown as a diff on expand. */
       diff?: ToolDiff
+      /**
+       * A `task` card's subagent transcript — the delegate's own reasoning, prose,
+       * and tool calls, streamed live and nested INSIDE this card rather than
+       * leaking out as flat sibling cards in the parent turn.
+       *
+       * Recursive by type but only ever one level deep in practice
+       * (MAX_SUBAGENT_DEPTH = 1 in the harness).
+       *
+       * DISPLAY-ONLY: `reconstructAssistant` deliberately never replays children as
+       * the parent's own `tool_calls` — the parent model never made those calls;
+       * all it ever saw was the subagent's final report.
+       */
+      children?: MessagePart[]
     }
 
 export interface Message {

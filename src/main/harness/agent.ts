@@ -11,7 +11,8 @@
  * Wires without tool support yet (azure/bedrock) fall back to a plain answer.
  */
 import type { ChatMessage, LlmEvent } from '../../shared/api'
-import type { MessagePart, ReasoningEffort, TokenUsage } from '../../shared/types'
+import type { ReasoningEffort, TokenUsage } from '../../shared/types'
+import { PartsFold, partsToContent } from '../../shared/parts'
 import {
   getAgent,
   isReadOnlyAgent,
@@ -1411,49 +1412,39 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
     runSignal: AbortSignal,
     forwardToParent: boolean
   ): Promise<{ report: string; state: 'completed' | 'error' }> => {
-    const parts: MessagePart[] = []
-    const toolAt = new Map<string, number>()
-    const addText = (delta: string): void => {
-      const last = parts[parts.length - 1]
-      if (last && last.type === 'text') last.text += delta
-      else parts.push({ type: 'text', text: delta })
-    }
+    // One fold builds the subagent's transcript; the same events are forwarded to
+    // the parent, so what persists on the sub session and what you watch live in
+    // the `task` card are the same thing by construction.
+    const fold = new PartsFold()
     const persistSub = (): void => {
       if (!subChatId) return
       try {
-        const prose: string[] = []
-        for (const p of parts) if (p.type === 'text' || p.type === 'reasoning') prose.push(p.text)
         repo.addMessage({
           chatId: subChatId,
           role: 'assistant',
-          content: prose.join('\n').trim(),
-          parts
+          content: partsToContent(fold.parts),
+          parts: fold.parts
         })
       } catch {
         // best-effort — never break the parent turn over sub-session persistence
       }
     }
-    // The subagent's own tool calls surface as nested cards (prefixed call ids) in
-    // the parent AND are recorded into its own session's parts.
+    /**
+     * Every step the subagent takes — its prose, its thinking, and its tool calls
+     * — folded into its own transcript AND forwarded to the parent turn wrapped as
+     * a `tool-child` addressed to this `task` card, so the launching session shows
+     * the delegate working live instead of a spinner and a wall of text at the end.
+     *
+     * A background run skips forwarding: its launching turn is typically over, and
+     * it reports through its own session plus the completion card instead.
+     */
     const emitNested = (event: LlmEvent): void => {
-      if (event.type === 'tool-start') {
-        toolAt.set(event.callId, parts.length)
-        parts.push({ type: 'tool', tool: event.tool, state: 'running', title: event.title })
-        if (forwardToParent) emit({ ...event, callId: `${callId}.${event.callId}` })
-      } else if (event.type === 'tool-delta') {
-        const p = parts[toolAt.get(event.callId) ?? -1]
-        if (p?.type === 'tool') p.output = (p.output ?? '') + event.chunk
-        if (forwardToParent) emit({ ...event, callId: `${callId}.${event.callId}` })
-      } else if (event.type === 'tool-end') {
-        const p = parts[toolAt.get(event.callId) ?? -1]
-        if (p?.type === 'tool') {
-          p.state = event.ok ? 'done' : 'error'
-          p.output = event.output
-          p.image = event.image
-          p.diff = event.diff
-        }
-        if (forwardToParent) emit({ ...event, callId: `${callId}.${event.callId}` })
-      }
+      // Depth is capped at 1, so a subagent never emits `tool-child` itself; the
+      // guard is here so a future depth bump degrades to flattening rather than
+      // silently mis-addressing a grandchild's events to the wrong card.
+      if (event.type === 'tool-child') return
+      fold.apply(event)
+      if (forwardToParent) emit({ type: 'tool-child', callId, event })
     }
 
     try {
@@ -1473,8 +1464,8 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
         browserKey,
         signal: runSignal,
         emitTool: emitNested,
-        onText: addText,
-        onReasoning: () => {},
+        onText: (delta) => emitNested({ type: 'text', delta }),
+        onReasoning: (delta) => emitNested({ type: 'reasoning', delta }),
         tools: [
           ...schemasFor(agent.tools, false),
           ...(isReadOnlyAgent(agent) ? [] : (mcpTools ?? [])),
