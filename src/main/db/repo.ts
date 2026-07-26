@@ -383,6 +383,17 @@ export function setChatWorktreePending(chatId: string, intent: WorktreeIntent | 
     .run(intent ? JSON.stringify(intent) : null, chatId)
 }
 
+/**
+ * Dev ports already claimed by a session. Includes sessions whose server isn't
+ * running right now — the port stays reserved so a restart gets the same URL.
+ */
+export function listDevPorts(): number[] {
+  const rows = getDb()
+    .prepare('SELECT DISTINCT dev_port FROM chats WHERE dev_port IS NOT NULL')
+    .all() as { dev_port: number }[]
+  return rows.map((r) => r.dev_port)
+}
+
 /** Every session currently pointing at a worktree (for prune bookkeeping). */
 export function listWorktreePaths(): string[] {
   const rows = getDb()

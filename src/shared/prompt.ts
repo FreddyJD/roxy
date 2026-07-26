@@ -45,6 +45,15 @@ export interface EnvironmentInfo {
   worktree?: string
   /** Whether `cwd` sits inside a git repository. */
   isGitRepo?: boolean
+  /**
+   * The dev-server port this session owns, when it has one.
+   *
+   * PORT is exported into every command Roxy spawns, but plenty of projects
+   * hardcode a port in vite.config.ts / next.config.js and ignore it — so the
+   * model is told the number outright and can pass `--port` itself. Without
+   * this, parallel sessions silently fight over :3000.
+   */
+  devPort?: number
   /** `process.platform` (e.g. "darwin", "win32", "linux"). */
   platform?: string
   /** The active model id (e.g. "claude-sonnet-4"). */
@@ -78,6 +87,10 @@ export function buildEnvironment(env: EnvironmentInfo): string {
   if (env.cwd) inner.push(`  Working directory: ${env.cwd}`)
   if (env.worktree && env.worktree !== env.cwd) inner.push(`  Workspace root folder: ${env.worktree}`)
   if (env.isGitRepo !== undefined) inner.push(`  Is directory a git repo: ${env.isGitRepo ? 'yes' : 'no'}`)
+  if (env.devPort)
+    inner.push(
+      `  Dev server port: ${env.devPort} (use this port for dev servers; other sessions own other ports)`
+    )
   if (env.platform) inner.push(`  Platform: ${env.platform}`)
   if (env.date) inner.push(`  Today's date: ${env.date}`)
   if (inner.length > 0) {

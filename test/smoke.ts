@@ -17,7 +17,13 @@ import { closeDb } from '../src/main/db/database'
 import { runTool, killSessionBackground } from '../src/main/harness'
 import { sessionCwd } from '../src/main/services/workspace'
 import * as git from '../src/main/services/git'
-import { materializePendingWorktree, pruneWorktrees, removeWorktreeForChat } from '../src/main/services/worktree'
+import {
+  materializePendingWorktree,
+  pruneWorktrees,
+  removeWorktreeForChat,
+  loadWorktreeConfig
+} from '../src/main/services/worktree'
+import { allocateDevPort, ensureDevPort } from '../src/main/services/ports'
 import { spawn } from 'node:child_process'
 import * as browser from '../src/main/services/browser'
 import {
@@ -653,6 +659,53 @@ async function main(): Promise<void> {
       check('...and no extra worktree was created',
         (await git.listWorktrees(root!)).length === wtCountBefore)
 
+      // Materializing a worktree also reserves a dev port for the session.
+      check('a materialized worktree gets a dev port',
+        typeof repo.getChat(lazy.id)?.devPort === 'number', String(repo.getChat(lazy.id)?.devPort))
+
+      // The setup script runs in the NEW worktree, through the background path,
+      // so it is owned by the session and visible in bash_list.
+      {
+        await fs.mkdir(path.join(gitRepo, '.roxy'), { recursive: true })
+        const marker = 'roxy-setup-ran.txt'
+        const setupCmd =
+          process.platform === 'win32'
+            ? `Set-Content -Path ${marker} -Value "$env:ROXY_PROJECT_ROOT|$env:ROXY_WORKTREE_PATH|$env:ROXY_PORT"`
+            : `printf '%s' "$ROXY_PROJECT_ROOT|$ROXY_WORKTREE_PATH|$ROXY_PORT" > ${marker}`
+        await fs.writeFile(
+          path.join(gitRepo, '.roxy', 'worktree.json'),
+          JSON.stringify({ setup: setupCmd })
+        )
+        const withSetup = repo.createChat({
+          title: 'setup script',
+          kind: 'main',
+          workspacePath: gitRepo,
+          worktree: { mode: 'new' }
+        })
+        const sm = await materializePendingWorktree(withSetup.id)
+        check('worktree with a setup script materializes', sm.ok, sm.error ?? '')
+        // Fire-and-forget by design (installs take minutes) — poll for the marker.
+        let setupOut = ''
+        for (let i = 0; i < 60 && !setupOut; i++) {
+          await new Promise((r) => setTimeout(r, 100))
+          try {
+            setupOut = await fs.readFile(path.join(sm.worktreePath!, marker), 'utf8')
+          } catch {
+            /* not yet */
+          }
+        }
+        check('the setup script ran INSIDE the new worktree', setupOut !== '', setupOut)
+        const [gotRoot, gotWt, gotPort] = setupOut.trim().split('|')
+        check('ROXY_PROJECT_ROOT points at the project', gotRoot === gitRepo, gotRoot)
+        check('ROXY_WORKTREE_PATH points at the worktree', gotWt === sm.worktreePath, gotWt)
+        check('ROXY_PORT is the session port', gotPort === String(repo.getChat(withSetup.id)?.devPort), gotPort)
+        check('the setup script did NOT run in the main checkout',
+          !existsSync(path.join(gitRepo, marker)))
+        await fs.rm(path.join(gitRepo, '.roxy'), { recursive: true, force: true })
+        await removeWorktreeForChat(withSetup.id, { force: true })
+        repo.removeChat(withSetup.id)
+      }
+
       // A sub-session must never take a worktree of its own.
       const subWt = repo.createChat({
         title: 'sub w/ intent',
@@ -699,6 +752,74 @@ async function main(): Promise<void> {
       repo.removeChat(wtChat.id)
       repo.removeChat(lazy.id)
     }
+  }
+
+  // ---- dev ports (parallel sessions must not fight over :3000) ----
+  {
+    const pA = repo.createChat({ title: 'port A', kind: 'main', workspacePath: ws })
+    const pB = repo.createChat({ title: 'port B', kind: 'main', workspacePath: ws })
+
+    check('a new session starts with no port', repo.getChat(pA.id)?.devPort === null)
+    const portA = await ensureDevPort(pA.id)
+    check('ensureDevPort allocates a port', typeof portA === 'number' && portA! >= 3100, String(portA))
+    check('...and persists it', repo.getChat(pA.id)?.devPort === portA)
+
+    // Stability is the whole point: a bookmarked localhost:<port>, an open tab
+    // and a running server all assume it never moves.
+    check('ensureDevPort is idempotent', (await ensureDevPort(pA.id)) === portA)
+    check('...even called repeatedly', (await ensureDevPort(pA.id)) === portA)
+
+    const portB = await ensureDevPort(pB.id)
+    check('a second session gets a DIFFERENT port', portB !== portA, `${portA} vs ${portB}`)
+    check('listDevPorts reports both', repo.listDevPorts().includes(portA!) && repo.listDevPorts().includes(portB!))
+
+    // An already-claimed port is skipped even when nothing is listening on it.
+    const fresh = await allocateDevPort()
+    check('allocateDevPort skips ports claimed by other sessions',
+      fresh !== portA && fresh !== portB, String(fresh))
+
+    // The port reaches spawned commands as PORT + ROXY_PORT.
+    const echoCmd =
+      process.platform === 'win32' ? 'Write-Output "P=$env:PORT R=$env:ROXY_PORT"' : 'echo "P=$PORT R=$ROXY_PORT"'
+    const envRes = await runTool('bash', { command: echoCmd }, { cwd: ws, sessionId: pA.id })
+    check('PORT is exported to spawned commands',
+      envRes.ok && envRes.output.includes(`P=${portA}`), envRes.output)
+    check('ROXY_PORT is exported too',
+      envRes.ok && envRes.output.includes(`R=${portA}`), envRes.output)
+
+    // A session with no port must NOT get a blank PORT clobbering an inherited one.
+    const noPort = repo.createChat({ title: 'no port', kind: 'main', workspacePath: ws })
+    const noPortRes = await runTool('bash', { command: echoCmd }, { cwd: ws, sessionId: noPort.id })
+    check('a session without a port does not set PORT',
+      noPortRes.ok && !/P=\d/.test(noPortRes.output), noPortRes.output)
+
+    // Subagents share the parent's port (they share its tree and its servers).
+    const subPort = repo.createChat({ title: 'sub port', kind: 'sub', parentId: pA.id })
+    check('a sub-session has no port of its own', repo.getChat(subPort.id)?.devPort === null)
+
+    repo.removeChat(pA.id)
+    repo.removeChat(pB.id)
+    repo.removeChat(noPort.id)
+  }
+
+  // ---- worktree setup config ----
+  {
+    check('no .roxy/worktree.json -> empty config', loadWorktreeConfig(ws).setup === undefined)
+
+    const cfgDir = path.join(tmp, 'cfgproj')
+    await fs.mkdir(path.join(cfgDir, '.roxy'), { recursive: true })
+    await fs.writeFile(
+      path.join(cfgDir, '.roxy', 'worktree.json'),
+      JSON.stringify({ setup: 'echo hello' })
+    )
+    check('reads the setup command', loadWorktreeConfig(cfgDir).setup === 'echo hello')
+
+    await fs.writeFile(path.join(cfgDir, '.roxy', 'worktree.json'), '{ not json')
+    check('malformed config degrades to empty', loadWorktreeConfig(cfgDir).setup === undefined)
+
+    await fs.writeFile(path.join(cfgDir, '.roxy', 'worktree.json'), JSON.stringify({ setup: 42 }))
+    check('a non-string setup is ignored', loadWorktreeConfig(cfgDir).setup === undefined)
+    check('an empty project root is safe', loadWorktreeConfig('').setup === undefined)
   }
 
   // ---- change_session_metadata (the agent organizing its own session) ----

@@ -9,9 +9,79 @@
  * missing git binary, a locked index or an offline fetch degrades to "run in the
  * project folder", never to a turn that won't start.
  */
+import { existsSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import * as repo from '../db/repo'
 import * as git from './git'
+import { ensureDevPort } from './ports'
+import { startBackground, killSessionBackground } from '../harness'
+import { activeBackgroundSubChatIds, hasActiveBackgroundJobs } from './background-tasks'
 import type { WorktreeIntent } from '../../shared/types'
+
+/**
+ * Optional per-project worktree config, read from `<project>/.roxy/worktree.json`
+ * — the same convention as `.roxy/mcp.json` (see services/mcp.ts).
+ *
+ *   { "setup": "cp $ROXY_PROJECT_ROOT/.env . && pnpm install" }
+ */
+export interface WorktreeConfig {
+  /** Shell command run in a NEW worktree, once, right after it's created. */
+  setup?: string
+}
+
+/**
+ * Read `.roxy/worktree.json`. Missing or malformed yields `{}` — a broken
+ * config must degrade to "no setup script", never break worktree creation.
+ */
+export function loadWorktreeConfig(projectRoot: string): WorktreeConfig {
+  if (!projectRoot) return {}
+  const file = path.join(projectRoot, '.roxy', 'worktree.json')
+  if (!existsSync(file)) return {}
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as WorktreeConfig
+    if (!parsed || typeof parsed !== 'object') return {}
+    return { setup: typeof parsed.setup === 'string' ? parsed.setup : undefined }
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Run the project's setup script in a freshly created worktree.
+ *
+ * A new worktree has an EMPTY node_modules and no .env — git only tracks what's
+ * committed. There is deliberately no auto-copy and no symlink here:
+ *   - copying node_modules costs gigabytes per session, and native modules are
+ *     built per platform/arch anyway;
+ *   - symlinking it to the main checkout would let one branch's `npm install`
+ *     mutate every other session's dependencies, which destroys the isolation
+ *     this whole feature exists to provide.
+ * So the user declares what their project needs, and we run it.
+ *
+ * It goes through `startBackground` — the same path the `bash` tool uses — so
+ * the install shows up in bash_list, streams its output, is owned by the
+ * session, and is killed when the session is deleted. Never awaited: a
+ * `pnpm install` takes minutes and must not hold up the turn.
+ */
+function runSetupScript(input: {
+  chatId: string
+  projectRoot: string
+  worktreePath: string
+  devPort: number | null
+}): void {
+  const { setup } = loadWorktreeConfig(input.projectRoot)
+  if (!setup?.trim()) return
+  try {
+    startBackground(setup, input.worktreePath, repo.rootSessionId(input.chatId), {
+      ROXY_PROJECT_ROOT: input.projectRoot,
+      ROXY_WORKTREE_PATH: input.worktreePath,
+      ...(input.devPort ? { ROXY_PORT: String(input.devPort), PORT: String(input.devPort) } : {})
+    })
+  } catch (e) {
+    // A failing setup script must never block the turn.
+    console.warn('[worktree] setup script failed to start:', e)
+  }
+}
 
 export interface MaterializeResult {
   /** True when the session now has a worktree (created, attached, or already had one). */
@@ -61,6 +131,20 @@ export async function materializePendingWorktree(chatId: string): Promise<Materi
     worktreePath: result.worktreePath,
     branch: result.branch ?? null
   })
+
+  // Give the session its own dev port before the setup script runs, so an
+  // install that builds against a port sees the right one. Allocation failure
+  // (range exhausted) is not fatal — the session just has no reserved port.
+  const devPort = await ensureDevPort(chatId)
+
+  // Fire-and-forget: installs take minutes, and the turn starts now.
+  runSetupScript({
+    chatId,
+    projectRoot: workspace,
+    worktreePath: result.worktreePath,
+    devPort
+  })
+
   return result
 }
 
@@ -156,9 +240,16 @@ export async function pruneWorktrees(
 /**
  * Remove a session's worktree, if it owns one no other session shares.
  *
- * Never blocks session deletion: a worktree still in use, or one git refuses to
- * remove (a live dev server holding a handle on Windows), is reported and left
- * alone rather than raising.
+ * ORDERING IS LOAD-BEARING on Windows: a dev server still running in the
+ * worktree holds open handles inside node_modules/.next, and `git worktree
+ * remove` then fails with a lock error. So the session's background processes
+ * are killed FIRST and the kill is awaited (process teardown is not
+ * synchronous — taskkill /t needs a moment to reap the tree) before git is
+ * asked to delete the directory.
+ *
+ * Never blocks session deletion: a shared worktree, a still-running background
+ * subagent, or a git refusal are all reported and left alone rather than
+ * raising. Whatever survives is swept up later by `pruneWorktrees`.
  */
 export async function removeWorktreeForChat(
   chatId: string,
@@ -167,11 +258,43 @@ export async function removeWorktreeForChat(
   const chat = repo.getChat(chatId)
   const target = chat?.worktreePath
   if (!target) return { ok: true, removed: false }
-  // Shared with another session (T3's mistake was auto-removing these).
+
+  // Shared with another session — never auto-remove (T3's mistake).
   const others = repo.chatsUsingWorktree(target).filter((c) => c.id !== chatId)
   if (others.length) return { ok: true, removed: false }
+
+  // A detached background subagent deliberately outlives the turn that launched
+  // it (see services/background-tasks.ts). Deleting the tree out from under one
+  // turns every tool call it makes into an ENOENT, so leave it be.
+  const busy = activeBackgroundSubChatIds()
+  const subIds = repo.listSubchats(chatId).map((c) => c.id)
+  if (hasActiveBackgroundJobs(chatId) || subIds.some((id) => busy.has(id))) {
+    return {
+      ok: false,
+      removed: false,
+      error: 'A background task is still running in this worktree, so it was left in place.'
+    }
+  }
+
+  // Stop dev servers/watchers before git touches the directory. Awaited: the
+  // kill has to have actually happened, not merely been requested.
+  await stopSessionProcesses(chatId)
+
   const r = await git.removeWorktree(target, { force: opts.force ?? true })
   return { ok: r.ok, removed: r.ok, error: r.error }
+}
+
+/**
+ * Kill a session's background processes and give the OS a moment to release
+ * their file handles.
+ *
+ * On Windows the process tree is torn down asynchronously by `taskkill /t`, so
+ * returning the instant kill() is called would race `git worktree remove`
+ * straight back into the lock error this exists to avoid.
+ */
+async function stopSessionProcesses(chatId: string): Promise<void> {
+  const killed = killSessionBackground(repo.rootSessionId(chatId))
+  if (killed > 0) await new Promise((r) => setTimeout(r, 300))
 }
 
 /**

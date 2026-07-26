@@ -105,9 +105,10 @@ export function registerIpc(): void {
     // Close this session's browser window (if any) so it doesn't linger orphaned.
     browser.disposeSession(id)
     // Remove this session's worktree, if it owns one no other session shares.
-    // Fire-and-forget AFTER killSessionBackground above: deletion must never
-    // block on git, so a failure here is logged and the session goes anyway
-    // (`git:prune-worktrees` sweeps up whatever is left behind).
+    // Fire-and-forget: deletion must never block on git, so a failure here is
+    // logged and the session goes anyway (`git:prune-worktrees` sweeps up
+    // whatever is left behind). It re-kills the session's processes internally
+    // and awaits them — the ordering that keeps removal working on Windows.
     void removeWorktreeForChat(id).then(
       (r) => {
         if (!r.ok && r.error) console.warn('[worktree] remove on delete failed:', r.error)

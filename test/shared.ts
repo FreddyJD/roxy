@@ -1692,6 +1692,20 @@ async function main(): Promise<void> {
   check('portable: safe path rejects a drive letter', !isSafeSkillFilePath('C:/x'))
   check('portable: safe path rejects backslashes', !isSafeSkillFilePath('a\\b'))
 
+  // ---- <env> dev port (parallel sessions must not fight over :3000) ----
+  {
+    const withPort = buildEnvironment({ cwd: '/w', devPort: 3101 })
+    check('buildEnvironment states the dev port', withPort.includes('Dev server port: 3101'), withPort)
+    check(
+      'the port line tells the model other sessions own others',
+      /other sessions own other ports/.test(withPort)
+    )
+    // PORT alone is not enough (vite.config.ts etc. hardcode a port), but a
+    // session WITHOUT one must not get a misleading line.
+    check('no port -> no port line', !buildEnvironment({ cwd: '/w' }).includes('Dev server port'))
+    check('port 0 is not emitted', !buildEnvironment({ cwd: '/w', devPort: 0 }).includes('Dev server port'))
+  }
+
   // ---- resolveWorktreeCwd (worktree path math) ----
   // Exercised against BOTH path flavours: Roxy ships on Windows and posix, and
   // the repo-subfolder case is where a naive join breaks.

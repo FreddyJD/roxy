@@ -252,6 +252,47 @@ function fmtBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/**
+ * Environment for a spawned command: color coaxing, plus this session's own dev
+ * port when it has one.
+ *
+ * PORT is what Next/CRA/Rails/Express and most dev servers read, so three
+ * sessions each running `npm run dev` land on three different ports instead of
+ * fighting over :3000. It is only ever SET when the session owns a port —
+ * clobbering an inherited PORT for a session without one would break commands
+ * that legitimately expect the parent's value.
+ *
+ * It isn't a complete fix: a project with a hardcoded port in vite.config.ts
+ * ignores PORT entirely. That's why the port is also stated in the model's
+ * <env> block (see shared/prompt.ts), so the agent can pass `--port` itself.
+ */
+function spawnEnv(sessionId: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    // Coax CLIs into emitting ANSI color even though stdout is a pipe, not a
+    // TTY. The UI renders the color; the agent strips it before the model reads it.
+    FORCE_COLOR: '3',
+    CLICOLOR_FORCE: '1',
+    TERM: 'xterm-256color'
+  }
+  const port = devPortFor(sessionId)
+  if (port) {
+    env.PORT = String(port)
+    env.ROXY_PORT = String(port)
+  }
+  return env
+}
+
+/** The dev port owned by a session, or null. Never throws (tests have no DB). */
+function devPortFor(sessionId: string): number | null {
+  if (!sessionId) return null
+  try {
+    return repo.getChat(sessionId)?.devPort ?? null
+  } catch {
+    return null
+  }
+}
+
 /** Resolve a path within the workspace, rejecting anything that escapes it. */
 function resolveInCwd(cwd: string, p: string): string {
   const resolved = path.resolve(cwd, p)
@@ -271,6 +312,7 @@ function runBash(
   if (!command.trim()) return Promise.resolve({ ok: false, output: 'bash: missing "command"' })
   // Long-running commands (dev servers, watchers) run detached; poll via bash_output.
   if (opts.background) return Promise.resolve(startBackground(command, cwd, opts.sessionId ?? ''))
+
   const timeoutMs = Math.min(Math.max((opts.timeout ?? 60) * 1000, 1000), FG_TIMEOUT_MAX)
   const { cmd, args } = shellInvocation(command)
   return new Promise((resolve) => {
@@ -282,9 +324,7 @@ function runBash(
     const child = spawn(cmd, args, {
       cwd,
       windowsHide: true,
-      // Coax CLIs into emitting ANSI color even though stdout is a pipe, not a
-      // TTY. The UI renders the color; the agent strips it before the model reads it.
-      env: { ...process.env, FORCE_COLOR: '3', CLICOLOR_FORCE: '1', TERM: 'xterm-256color' }
+      env: spawnEnv(opts.sessionId ?? '')
     })
     const onData = (buf: Buffer): void => {
       if (truncated) return
@@ -322,14 +362,27 @@ function runBash(
   })
 }
 
-/** Start a long-running command that keeps running after this call returns. */
-function startBackground(command: string, cwd: string, sessionId: string): ToolResult {
+/**
+ * Start a long-running command that keeps running after this call returns.
+ *
+ * `extraEnv` overlays the standard spawn env — used by the worktree setup
+ * script, which needs ROXY_PROJECT_ROOT/ROXY_WORKTREE_PATH on top of the usual
+ * variables. Exported (via the harness barrel) so the setup script runs through
+ * THIS path rather than a second spawn implementation: it then shows up in
+ * bash_list, is owned by the session, and dies with it.
+ */
+export function startBackground(
+  command: string,
+  cwd: string,
+  sessionId: string,
+  extraEnv?: NodeJS.ProcessEnv
+): ToolResult {
   const id = `bg_${++bgCounter}`
   const { cmd, args } = shellInvocation(command)
   const child = spawn(cmd, args, {
     cwd,
     windowsHide: true,
-    env: { ...process.env, FORCE_COLOR: '3', CLICOLOR_FORCE: '1', TERM: 'xterm-256color' }
+    env: { ...spawnEnv(sessionId), ...(extraEnv ?? {}) }
   })
   const proc: BgProc = {
     id,

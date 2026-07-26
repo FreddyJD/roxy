@@ -9,6 +9,7 @@
  */
 export {
   runTool,
+  startBackground,
   killAllBackground,
   killSessionBackground,
   _resetBackgroundProcs,

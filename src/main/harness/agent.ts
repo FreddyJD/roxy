@@ -396,6 +396,16 @@ export function projectInstructions(cwd: string): string[] {
  * (AGENTS.md/CLAUDE.md/CONTEXT.md), layer any agent-specific prompt on top (e.g.
  * Plan mode's read-only reminder), and fold in any compaction summary.
  */
+/** This session's dev port for the <env> block. Never throws into prompt building. */
+function devPortForPrompt(chatId?: string): number | undefined {
+  if (!chatId) return undefined
+  try {
+    return repo.getChat(chatId)?.devPort ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
 function buildSystemMessage(
   providerId: string,
   model: string,
@@ -411,6 +421,7 @@ function buildSystemMessage(
     cwd: cwd || undefined,
     worktree: gitRoot,
     isGitRepo: cwd ? gitRoot !== undefined : undefined,
+    devPort: devPortForPrompt(chatId),
     platform: process.platform,
     modelId: model,
     providerId,
