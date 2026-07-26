@@ -7,6 +7,7 @@ import { MessageBubble } from './MessageBubble'
 import { Composer } from './Composer'
 import { LoopDetailsPane } from './LoopDetailsPane'
 import { SessionInfo } from './SessionInfo'
+import { WorkstreamStrip } from './WorkstreamStrip'
 import {
   Queue,
   QueueItem,
@@ -292,6 +293,8 @@ export function ChatView(): JSX.Element {
           </div>
         </div>
       )}
+
+      <WorkstreamStrip />
 
       <Composer onSend={submit} sending={sending} onStop={stop} />
 

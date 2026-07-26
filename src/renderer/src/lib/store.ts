@@ -25,6 +25,7 @@ import { isOverflow, pruneToolMessages, KEEP_RECENT_TOKENS } from '@shared/conte
 import { uniqueSlug } from '@shared/slugs'
 import { api } from './api'
 import type { ComposerImage } from './images'
+import type { GitStatusView, WorktreeView } from '@shared/api'
 
 interface RoxyStore {
   ready: boolean
@@ -56,6 +57,17 @@ interface RoxyStore {
   runningTasks: Record<string, TaskUpdate[]>
   /** Remote Workspace sharing status — mirrors the main process's RemoteState. */
   remote: RemoteState
+  /** Is a `git` binary available at all? null until probed once. */
+  gitAvailable: boolean | null
+  /**
+   * Git state per WORKTREE path (or project folder for sessions without one),
+   * so N sessions sharing a worktree share one poll instead of N.
+   */
+  gitStatus: Record<string, GitStatusView>
+  /** Live worktrees per project folder, for the workstream menu. */
+  worktrees: Record<string, WorktreeView[]>
+  /** Branches per project folder, loaded lazily when the menu opens. */
+  gitBranches: Record<string, string[]>
 
   bootstrap: () => Promise<void>
   refreshChats: () => Promise<void>
@@ -96,6 +108,23 @@ interface RoxyStore {
   /** Sync the current sharing status from main (e.g. after a window reload). */
   refreshRemote: () => Promise<void>
   compactConversation: (chatId?: string) => Promise<void>
+  /**
+   * Refresh git status for a session's cwd. Cheap and idempotent — the strip
+   * calls it on a timer and on window focus. Polling, not fs.watch: with N
+   * worktrees watchers multiply, and fs.watch is unreliable on Windows.
+   */
+  refreshGitStatus: (chatId: string) => Promise<void>
+  /** Load the worktrees + branches for a project (menu open). */
+  refreshWorktrees: (workspacePath: string) => Promise<void>
+  /**
+   * Create a workstream and open a NEW SESSION in it. Never relocates the
+   * current session — a workstream is a parallel line of work, not a move.
+   */
+  newWorkstream: (input: {
+    workspacePath: string
+    mode: 'new' | 'fromBranch' | 'attach'
+    branch?: string
+  }) => Promise<void>
   /** Handle a background subagent task state change (Phase 11). */
   handleTaskUpdate: (update: TaskUpdate) => Promise<void>
 }
@@ -152,6 +181,10 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   compactingChats: {},
   runningTasks: {},
   remote: { phase: 'idle', guests: 0, rev: 0 },
+  gitAvailable: null,
+  gitStatus: {},
+  worktrees: {},
+  gitBranches: {},
 
   bootstrap: async () => {
     const [settings, providers, chats, loops, projectOrder] = await Promise.all([
@@ -317,6 +350,61 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
 
   stopRemote: async () => {
     set({ remote: await api.remote.stop() })
+  },
+
+  refreshGitStatus: async (chatId) => {
+    const chat = get().chats.find((c) => c.id === chatId)
+    if (!chat) return
+    // Sub-sessions inherit their parent's workstream — never poll them separately.
+    if (chat.kind === 'sub') return
+    const key = chat.worktreePath ?? chat.workspacePath
+    if (!key) return
+    // Probe for git once per app run; a machine without it hides the UI entirely.
+    if (get().gitAvailable === null) {
+      try {
+        set({ gitAvailable: await api.git.available() })
+      } catch {
+        set({ gitAvailable: false })
+      }
+    }
+    if (!get().gitAvailable) return
+    try {
+      const status = await api.git.status(key)
+      set((s) => ({ gitStatus: { ...s.gitStatus, [key]: status } }))
+    } catch {
+      // Best-effort: a transient git failure leaves the last known state.
+    }
+  },
+
+  refreshWorktrees: async (workspacePath) => {
+    if (!workspacePath || !get().gitAvailable) return
+    try {
+      const [worktrees, branches] = await Promise.all([
+        api.git.worktrees(workspacePath),
+        api.git.branches(workspacePath)
+      ])
+      set((s) => ({
+        worktrees: { ...s.worktrees, [workspacePath]: worktrees },
+        gitBranches: { ...s.gitBranches, [workspacePath]: branches }
+      }))
+    } catch {
+      // Menu just shows what it already had.
+    }
+  },
+
+  newWorkstream: async ({ workspacePath, mode, branch }) => {
+    // The worktree itself is created lazily on the session's first turn (so an
+    // abandoned composer leaves nothing on disk) — here we only record the intent.
+    const taken = get()
+      .chats.filter((c) => c.kind === 'main' && c.workspacePath === workspacePath)
+      .map((c) => c.title)
+    const chat = await api.chats.create({
+      title: branch?.trim() || uniqueSlug(taken),
+      workspacePath,
+      worktree: { mode, branch }
+    })
+    await get().refreshChats()
+    await get().selectChat(chat.id)
   },
 
   refreshRemote: async () => {

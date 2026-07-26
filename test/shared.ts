@@ -38,6 +38,11 @@ import {
   WEBSEARCH_DEFAULT_RESULTS
 } from '../src/shared/web'
 import { resolveWorktreeCwd } from '../src/shared/workspace'
+import {
+  workstreamStripView,
+  statusKeyForSession,
+  type StripSession
+} from '../src/shared/workstream'
 import { posix as posixPath, win32 as win32Path } from 'node:path'
 import type { Message, MessagePart } from '../src/shared/types'
 import type { ChatMessage } from '../src/shared/api'
@@ -1691,6 +1696,83 @@ async function main(): Promise<void> {
   check('portable: safe path rejects absolute', !isSafeSkillFilePath('/etc/passwd'))
   check('portable: safe path rejects a drive letter', !isSafeSkillFilePath('C:/x'))
   check('portable: safe path rejects backslashes', !isSafeSkillFilePath('a\\b'))
+
+  // ---- workstream strip visibility rules ----
+  // Every rule here is a visible bug when it's wrong: a strip that flashes and
+  // vanishes, a sub-session offering a dropdown that would move its parent's
+  // tree, or a permanent greyed-out row in every non-git folder.
+  {
+    const mk = (over: Partial<StripSession> = {}): StripSession => ({
+      id: 's1',
+      title: 'auth work',
+      kind: 'main',
+      parentId: null,
+      workspacePath: '/proj',
+      worktreePath: null,
+      branch: null,
+      ...over
+    })
+    const repoStatus = { isRepo: true, branch: 'main', dirty: false, changed: 0 }
+    const NO_STATUS = 'none' as const
+    const view = (
+      chat: StripSession | null,
+      status: typeof repoStatus | typeof NO_STATUS = repoStatus,
+      gitAvailable: boolean | null = true,
+      all: StripSession[] = []
+    ) =>
+      workstreamStripView({
+        chat,
+        findChat: (id) => all.find((c) => c.id === id) ?? null,
+        gitAvailable,
+        status: status === NO_STATUS ? undefined : status
+      })
+
+    check('strip: hidden with no session', view(null) === null)
+    check('strip: hidden when git is unavailable', view(mk(), repoStatus, false) === null)
+    check('strip: hidden when the folder has no workspace', view(mk({ workspacePath: null })) === null)
+    check('strip: hidden before the first status lands', view(mk(), NO_STATUS) === null)
+    check(
+      'strip: hidden when the folder is not a repo',
+      view(mk(), { isRepo: false, branch: null, dirty: false, changed: 0 }) === null
+    )
+    // Probing (null) must not hide it permanently once status says it's a repo.
+    check('strip: shows while git availability is still unknown', view(mk(), repoStatus, null) !== null)
+
+    const plain = view(mk())
+    check('strip: default workstream is labelled as such', plain?.label === 'default workstream')
+    check('strip: falls back to the git branch', plain?.branch === 'main')
+    check('strip: default workstream polls the project folder', plain?.statusKey === '/proj')
+    check('strip: a main session gets the dropdown', plain?.readOnly === false)
+    check('strip: default workstream is not in a worktree', plain?.inWorktree === false)
+
+    const wt = view(mk({ worktreePath: '/wt/auth', branch: 'roxy/auth' }))
+    check('strip: a worktree session is labelled by its title', wt?.label === 'auth work')
+    check('strip: ...and shows its own branch', wt?.branch === 'roxy/auth')
+    check('strip: ...and polls by WORKTREE path', wt?.statusKey === '/wt/auth')
+    check('strip: ...and is flagged in-worktree', wt?.inWorktree === true)
+
+    // A sub-session shows its PARENT's workstream, read-only — acting on it
+    // would move the parent's tree out from under it.
+    const parent = mk({ id: 'p1', worktreePath: '/wt/auth', branch: 'roxy/auth' })
+    const sub = mk({ id: 'sub1', kind: 'sub', parentId: 'p1', workspacePath: null })
+    const subView = view(sub, repoStatus, true, [parent, sub])
+    check('strip: a sub-session shows its parent workstream', subView?.label === 'auth work')
+    check('strip: ...owned by the parent', subView?.ownerId === 'p1')
+    check('strip: ...read-only (no dropdown)', subView?.readOnly === true)
+    check('strip: an orphaned sub renders nothing', view(sub, repoStatus, true, [sub]) === null)
+
+    const dirty = view(mk(), { isRepo: true, branch: 'main', dirty: true, changed: 3 })
+    check('strip: surfaces the dirty flag', dirty?.dirty === true)
+
+    // Polling keys: N sessions on one worktree share a single poll, and subs
+    // never poll separately from their parent.
+    check('poll key: default workstream -> project folder', statusKeyForSession(mk()) === '/proj')
+    check(
+      'poll key: worktree session -> worktree path',
+      statusKeyForSession(mk({ worktreePath: '/wt/auth' })) === '/wt/auth'
+    )
+    check('poll key: a sub-session never polls', statusKeyForSession(sub) === null)
+  }
 
   // ---- <env> dev port (parallel sessions must not fight over :3000) ----
   {

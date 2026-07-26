@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   ChevronRight,
   FolderOpen,
+  GitBranch,
   Hammer,
   Lightbulb,
   MessageSquarePlus,
@@ -52,6 +53,7 @@ export function Sidebar(): JSX.Element {
   const chats = useRoxyStore((s) => s.chats)
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const selectChat = useRoxyStore((s) => s.selectChat)
+  const gitStatus = useRoxyStore((s) => s.gitStatus)
   const newSession = useRoxyStore((s) => s.newSession)
   const newSessionInProject = useRoxyStore((s) => s.newSessionInProject)
   const deleteChat = useRoxyStore((s) => s.deleteChat)
@@ -259,6 +261,18 @@ export function Sidebar(): JSX.Element {
     if (paths.every((p, i) => p === current[i])) return
     void reorderProjects(paths)
   }
+
+  // Which sessions have uncommitted changes, from the git status the strip
+  // already polls (keyed by worktree path). No extra polling here — N sessions
+  // sharing a worktree share one entry.
+  const dirtyById = useMemo(() => {
+    const ids = new Set<string>()
+    for (const c of chats) {
+      const key = c.worktreePath
+      if (key && gitStatus[key]?.dirty) ids.add(c.id)
+    }
+    return ids
+  }, [chats, gitStatus])
 
   // Subagent sessions grouped by the main chat that spawned them.
   const subsByParent = useMemo(() => {
@@ -631,10 +645,24 @@ export function Sidebar(): JSX.Element {
                                     <button
                                       onClick={() => selectChat(chat.id)}
                                       onDoubleClick={() => beginRename(chat)}
-                                      title={chat.title}
-                                      className="min-w-0 flex-1 truncate text-left"
+                                      title={chat.branch ? `${chat.title} — ${chat.branch}` : chat.title}
+                                      className="min-w-0 flex-1 text-left"
                                     >
-                                      {chat.title}
+                                      <span className="block truncate">{chat.title}</span>
+                                      {/* A worktree session's branch: this is what makes the
+                                          sidebar readable as N parallel workstreams. */}
+                                      {chat.branch && (
+                                        <span className="flex items-center gap-1 text-[10px] text-text-subtle">
+                                          <GitBranch className="h-2.5 w-2.5 shrink-0 opacity-70" />
+                                          <span className="truncate">{chat.branch}</span>
+                                          {dirtyById.has(chat.id) && (
+                                            <span
+                                              className="h-1 w-1 shrink-0 rounded-full bg-warning"
+                                              title="Uncommitted changes"
+                                            />
+                                          )}
+                                        </span>
+                                      )}
                                     </button>
                                   )}
                                   {subs.length > 0 && (
