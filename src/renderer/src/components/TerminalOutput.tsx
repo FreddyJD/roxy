@@ -15,6 +15,18 @@ import { Scroller } from './Scroller'
 /** A trailing status line our bash wrapper appends, e.g. `[exit 1]` / `[timed out after 60s …]`. */
 const FOOTER_RE = /^\[(exit \d+|timed out[\s\S]*|error:[\s\S]*)\]$/
 
+/**
+ * One grey for every footer, success or not.
+ *
+ * `[exit 1]` in an agent's shell is ordinary: the model runs a build to see what
+ * breaks, greps for a match that isn't there, probes a port before the server is
+ * up. Rendering each of those in red made a perfectly normal transcript read
+ * like a disaster log, and a colour that fires on routine events stops meaning
+ * anything when something is genuinely wrong. The footer still says "exit 1" —
+ * the fact is intact, it just doesn't shout.
+ */
+const FOOTER_COLOR = '#9a9aa3'
+
 export function TerminalOutput({
   text,
   state,
@@ -33,7 +45,7 @@ export function TerminalOutput({
     prompt = nl === -1 ? body : body.slice(0, nl)
     body = nl === -1 ? '' : body.slice(nl + 1)
   }
-  // Pull off a trailing status line so we can color it green/amber/red.
+  // Pull off a trailing status line so we can set it apart from the body.
   let footer = ''
   const lines = body.split('\n')
   const lastLine = lines[lines.length - 1]
@@ -41,11 +53,6 @@ export function TerminalOutput({
     footer = lastLine
     body = lines.slice(0, -1).join('\n')
   }
-  const footerColor = footer.startsWith('[timed')
-    ? '#fbbf24'
-    : footer.startsWith('[exit') || footer.startsWith('[error')
-      ? '#f87171'
-      : '#9a9aa3'
   const trimmed = body.replace(/[\r\n]+$/, '')
   return (
     <Scroller
@@ -59,7 +66,7 @@ export function TerminalOutput({
       {trimmed && <span>{renderAnsi(trimmed)}</span>}
       {!prompt && !trimmed && !footer && (state === 'running' ? 'Running…' : '(no output)')}
       {footer && (
-        <div className="mt-0.5" style={{ color: footerColor }}>
+        <div className="mt-0.5" style={{ color: FOOTER_COLOR }}>
           {footer}
         </div>
       )}
