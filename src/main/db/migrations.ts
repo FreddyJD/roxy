@@ -166,5 +166,15 @@ export const MIGRATIONS: string[] = [
     ALTER TABLE chats ADD COLUMN worktree_path TEXT;
     ALTER TABLE chats ADD COLUMN branch TEXT;
     ALTER TABLE chats ADD COLUMN dev_port INTEGER;
+  `,
+
+  // ---- v15: pending worktree intent ----
+  // Worktrees are materialized LAZILY, on a session's first turn rather than at
+  // create time, so an abandoned composer never leaves an orphan directory on
+  // disk. The requested mode/branch is parked here as JSON and cleared once the
+  // worktree exists (or once creation fails and we fall back to working in the
+  // project folder).
+  /* sql */ `
+    ALTER TABLE chats ADD COLUMN worktree_pending TEXT;
   `
 ]

@@ -90,6 +90,17 @@ export interface SessionTask {
   status: 'pending' | 'in_progress' | 'completed'
 }
 
+/**
+ * How a session wants its worktree created.
+ *   new        — a fresh branch off the default branch
+ *   fromBranch — a new worktree checking out an existing branch
+ *   attach     — reuse the worktree that already holds `branch`
+ */
+export interface WorktreeIntent {
+  mode: 'new' | 'fromBranch' | 'attach'
+  branch?: string
+}
+
 export interface Chat {
   id: string
   title: string
@@ -103,6 +114,12 @@ export interface Chat {
    * Sub-sessions never set this; they run in their parent's tree.
    */
   worktreePath: string | null
+  /**
+   * A worktree this session asked for but hasn't got yet. Materialized on the
+   * first turn (so an abandoned composer leaves nothing on disk) and cleared
+   * either way — on success, and on failure so it isn't retried forever.
+   */
+  worktreePending: WorktreeIntent | null
   /** The branch checked out in `worktreePath`. Git is the source of truth. */
   branch: string | null
   /** The dev-server port this session owns, so parallel sessions don't collide. */

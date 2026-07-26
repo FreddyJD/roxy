@@ -16,6 +16,9 @@ import * as repo from '../src/main/db/repo'
 import { closeDb } from '../src/main/db/database'
 import { runTool, killSessionBackground } from '../src/main/harness'
 import { sessionCwd } from '../src/main/services/workspace'
+import * as git from '../src/main/services/git'
+import { materializePendingWorktree, pruneWorktrees, removeWorktreeForChat } from '../src/main/services/worktree'
+import { spawn } from 'node:child_process'
 import * as browser from '../src/main/services/browser'
 import {
   boundToolOutput,
@@ -538,6 +541,164 @@ async function main(): Promise<void> {
     repo.removeChat(plain.id)
     repo.removeChat(noWs.id)
     repo.removeChat(subFolder.id)
+  }
+
+  // ---- git service + real worktrees ----
+  // Builds an actual repo on disk and drives the real `git` binary. Skipped
+  // wholesale when git isn't installed, so the suite still runs on a bare box.
+  {
+    const gitOk = await git.isGitAvailable()
+    if (!gitOk) {
+      console.log('  (skipping git/worktree checks — no git binary)')
+    } else {
+      const gitRepo = path.join(tmp, 'gitrepo')
+      await fs.mkdir(gitRepo, { recursive: true })
+      const runGit = (args: string[], cwd = gitRepo): Promise<number> =>
+        new Promise((resolve) => {
+          const c = spawn('git', args, { cwd, shell: false, windowsHide: true })
+          c.on('close', (code) => resolve(code ?? 1))
+          c.on('error', () => resolve(1))
+        })
+      await runGit(['init', '--initial-branch=main'])
+      await runGit(['config', 'user.email', 'smoke@roxy.test'])
+      await runGit(['config', 'user.name', 'Roxy Smoke'])
+      await runGit(['config', 'commit.gpgsign', 'false'])
+      await fs.writeFile(path.join(gitRepo, 'README.md'), '# smoke\n')
+      await runGit(['add', '.'])
+      await runGit(['commit', '-m', 'initial'])
+
+      // ---- queries ----
+      const root = await git.repoRoot(gitRepo)
+      check('git.repoRoot finds the repo', !!root, String(root))
+      check('git.repoRoot is null outside a repo', (await git.repoRoot(tmp)) === null)
+      check('git.currentBranch reads the branch', (await git.currentBranch(gitRepo)) === 'main')
+      check('git.defaultBranch falls back to local main', (await git.defaultBranch(gitRepo)) === 'main')
+      const branches = await git.listBranches(gitRepo)
+      check('git.listBranches includes main', branches.includes('main'), branches.join(','))
+
+      const st = await git.status(gitRepo)
+      check('git.status: a fresh checkout is clean', st?.dirty === false, JSON.stringify(st))
+      await fs.writeFile(path.join(gitRepo, 'dirty.txt'), 'x')
+      const st2 = await git.status(gitRepo)
+      check('git.status: an untracked file is dirty', st2?.dirty === true && st2.changed === 1)
+      await fs.rm(path.join(gitRepo, 'dirty.txt'))
+
+      // The main working tree is always listed, and flagged as main.
+      const wt0 = await git.listWorktrees(root!)
+      check('git.listWorktrees lists the main tree', wt0.length === 1 && wt0[0].isMain === true)
+
+      // ---- branch naming ----
+      const tmpBranch = git.temporaryBranchName()
+      check('temporaryBranchName looks like roxy/<8 hex>', /^roxy\/[0-9a-f]{8}$/.test(tmpBranch), tmpBranch)
+      check('isTemporaryBranch accepts a generated name', git.isTemporaryBranch(tmpBranch))
+      check('isTemporaryBranch rejects a user branch', !git.isTemporaryBranch('fix-auth'))
+      check('isTemporaryBranch rejects a roxy-prefixed real name', !git.isTemporaryBranch('roxy/fix-auth'))
+      check('isTemporaryBranch rejects null', !git.isTemporaryBranch(null))
+
+      // ---- create ----
+      const created = await git.createWorktree({ repoRoot: root!, branch: tmpBranch })
+      check('createWorktree succeeds', created.ok && !!created.worktree, created.error ?? '')
+      const wtPath = created.worktree!.path
+      check('the worktree directory exists', existsSync(wtPath))
+      check(
+        'the worktree lives OUTSIDE the repo',
+        !path.normalize(wtPath).startsWith(path.normalize(gitRepo)),
+        wtPath
+      )
+      check('the worktree has the repo content', existsSync(path.join(wtPath, 'README.md')))
+      check('createWorktree records the PR base in git config',
+        (await git.baseBranchFor(gitRepo, tmpBranch)) === 'main')
+      const wt1 = await git.listWorktrees(root!)
+      check('listWorktrees now sees two trees', wt1.length === 2, String(wt1.length))
+      check('the new worktree is not flagged main', wt1.some((w) => w.path === wtPath && !w.isMain))
+
+      // Asking for the same branch again ATTACHES rather than failing — git
+      // refuses to check one branch out twice.
+      const again = await git.createWorktree({ repoRoot: root!, branch: tmpBranch })
+      check('createWorktree on a checked-out branch attaches instead of failing',
+        again.ok && again.attached === true && again.worktree?.path === wtPath, again.error ?? '')
+
+      // ---- sessionCwd resolves into the worktree ----
+      const wtChat = repo.createChat({ title: 'worktree session', kind: 'main', workspacePath: gitRepo })
+      repo.setChatWorktree(wtChat.id, { worktreePath: wtPath, branch: tmpBranch })
+      check('sessionCwd resolves into the worktree', sessionCwd(wtChat.id) === wtPath, sessionCwd(wtChat.id))
+
+      // A tool run in that session must actually land in the worktree.
+      const wrote = await runTool('write', { path: 'from-agent.txt', content: 'hi' }, {
+        cwd: sessionCwd(wtChat.id),
+        sessionId: wtChat.id
+      })
+      check('a tool writes inside the worktree', wrote.ok && existsSync(path.join(wtPath, 'from-agent.txt')))
+      check('...and NOT in the main checkout', !existsSync(path.join(gitRepo, 'from-agent.txt')))
+
+      // ---- lazy materialization ----
+      const lazy = repo.createChat({
+        title: 'lazy worktree',
+        kind: 'main',
+        workspacePath: gitRepo,
+        worktree: { mode: 'new' }
+      })
+      check('a pending worktree intent is persisted', repo.getChat(lazy.id)?.worktreePending?.mode === 'new')
+      check('...and no worktree exists yet', repo.getChat(lazy.id)?.worktreePath === null)
+      const mat = await materializePendingWorktree(lazy.id)
+      check('materialize creates the worktree on first turn', mat.ok && !!mat.worktreePath, mat.error ?? '')
+      check('the intent is cleared afterwards', repo.getChat(lazy.id)?.worktreePending === null)
+      check('the session now points at its worktree', repo.getChat(lazy.id)?.worktreePath === mat.worktreePath)
+      // Second call: the intent is gone, so it reports "nothing to do" and must
+      // leave the existing worktree alone rather than making another.
+      const wtCountBefore = (await git.listWorktrees(root!)).length
+      const redo = await materializePendingWorktree(lazy.id)
+      check('materialize does nothing on a second call', redo.ok === false)
+      check('...and the session keeps its worktree', repo.getChat(lazy.id)?.worktreePath === mat.worktreePath)
+      check('...and no extra worktree was created',
+        (await git.listWorktrees(root!)).length === wtCountBefore)
+
+      // A sub-session must never take a worktree of its own.
+      const subWt = repo.createChat({
+        title: 'sub w/ intent',
+        kind: 'sub',
+        parentId: lazy.id,
+        workspacePath: gitRepo,
+        worktree: { mode: 'new' }
+      })
+      const subMat = await materializePendingWorktree(subWt.id)
+      check('a sub-session never materializes its own worktree', subMat.ok === false)
+      check('...and its intent is dropped', repo.getChat(subWt.id)?.worktreePending === null)
+
+      // ---- prune ----
+      const orphan = await git.createWorktree({ repoRoot: root!, branch: 'roxy/aaaaaaaa' })
+      check('created an orphan worktree for prune', orphan.ok, orphan.error ?? '')
+      const dry = await pruneWorktrees(gitRepo, { dryRun: true })
+      check('prune (dry run) finds the orphan',
+        dry.ok && dry.candidates.some((c) => c.path === orphan.worktree!.path), JSON.stringify(dry.candidates))
+      check('prune (dry run) does NOT list a session-owned worktree',
+        !dry.candidates.some((c) => c.path === wtPath))
+      check('prune (dry run) removes nothing', dry.removed.length === 0 && existsSync(orphan.worktree!.path))
+      const wet = await pruneWorktrees(gitRepo, { dryRun: false, force: true })
+      check('prune removes the orphan', wet.removed.includes(orphan.worktree!.path),
+        JSON.stringify(wet.failed))
+      check('...and the directory is gone', !existsSync(orphan.worktree!.path))
+      check('prune never touches the main working tree', existsSync(path.join(gitRepo, 'README.md')))
+
+      // ---- remove ----
+      const shared = repo.createChat({ title: 'shares the worktree', kind: 'main', workspacePath: gitRepo })
+      repo.setChatWorktree(shared.id, { worktreePath: wtPath, branch: tmpBranch })
+      const blocked = await removeWorktreeForChat(wtChat.id)
+      check('a worktree shared with another session is NOT removed', blocked.ok && blocked.removed === false)
+      check('...and it still exists', existsSync(wtPath))
+      repo.removeChat(shared.id)
+
+      const removed = await removeWorktreeForChat(wtChat.id, { force: true })
+      check('removeWorktreeForChat removes an unshared worktree', removed.ok && removed.removed, removed.error ?? '')
+      check('the worktree directory is gone', !existsSync(wtPath))
+      const wt2 = await git.listWorktrees(root!)
+      check('git no longer lists the removed worktree', !wt2.some((w) => w.path === wtPath))
+      check('removeWorktreeForChat is a no-op without a worktree',
+        (await removeWorktreeForChat(shared.id)).removed === false)
+
+      repo.removeChat(wtChat.id)
+      repo.removeChat(lazy.id)
+    }
   }
 
   // ---- change_session_metadata (the agent organizing its own session) ----

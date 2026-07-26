@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { CHANNELS } from '../../shared/ipc'
-import type { CreateChatInput, CreateLoopInput, LlmStartInput, McpServerView, RemoteStartInput, SkillView, SkillWriteInput, UpsertMcpServerInput } from '../../shared/api'
+import type { CreateChatInput, CreateLoopInput, CreateWorktreeInput, CreateWorktreeResult, GitStatusView, LlmStartInput, McpServerView, RemoteStartInput, SkillView, SkillWriteInput, UpsertMcpServerInput } from '../../shared/api'
 import type { AddMessageInput, ConnectProviderInput, QueueImage, ReasoningEffort } from '../../shared/types'
 import * as repo from '../db/repo'
 import * as copilot from '../services/copilot'
@@ -9,6 +9,8 @@ import { listModels } from '../services/models'
 import { compactChat } from '../services/compaction'
 import { runTool, projectInstructions, killSessionBackground } from '../harness'
 import { sessionCwd } from '../services/workspace'
+import * as git from '../services/git'
+import { pruneWorktrees, removeWorktreeForChat } from '../services/worktree'
 import { checkForUpdates, quitAndInstall, getUpdateState } from '../services/updater'
 import {
   cancelBackgroundJob,
@@ -102,6 +104,16 @@ export function registerIpc(): void {
     killSessionBackground(id)
     // Close this session's browser window (if any) so it doesn't linger orphaned.
     browser.disposeSession(id)
+    // Remove this session's worktree, if it owns one no other session shares.
+    // Fire-and-forget AFTER killSessionBackground above: deletion must never
+    // block on git, so a failure here is logged and the session goes anyway
+    // (`git:prune-worktrees` sweeps up whatever is left behind).
+    void removeWorktreeForChat(id).then(
+      (r) => {
+        if (!r.ok && r.error) console.warn('[worktree] remove on delete failed:', r.error)
+      },
+      (e) => console.warn('[worktree] remove on delete threw:', e)
+    )
     return repo.removeChat(id)
   })
   ipcMain.handle(CHANNELS.chatsReorder, (_e, workspacePath: string | null, ids: string[]) =>
@@ -401,6 +413,76 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.browserActivateTab, (e, id: string) => browser.activateTab(id, keyOf(e)))
   ipcMain.handle(CHANNELS.browserMoveTab, (e, id: string, toIndex: number) =>
     browser.moveTab(id, toIndex, keyOf(e))
+  )
+
+  // ---- git (worktree-backed sessions) ----
+  // Every handler degrades instead of throwing: a folder that isn't a repo, or a
+  // machine with no git, gets an empty/false answer so the UI simply hides.
+  ipcMain.handle(CHANNELS.gitAvailable, () => git.isGitAvailable())
+
+  ipcMain.handle(CHANNELS.gitStatus, async (_e, cwd: string): Promise<GitStatusView> => {
+    const empty: GitStatusView = {
+      isRepo: false,
+      root: null,
+      branch: null,
+      dirty: false,
+      changed: 0,
+      ahead: 0,
+      behind: 0,
+      hasUpstream: false,
+      defaultBranch: null
+    }
+    if (!cwd || !(await git.isGitAvailable())) return empty
+    const root = await git.repoRoot(cwd)
+    if (!root) return empty
+    const [st, def] = await Promise.all([git.status(cwd), git.defaultBranch(cwd)])
+    return {
+      isRepo: true,
+      root,
+      branch: st?.branch ?? null,
+      dirty: st?.dirty ?? false,
+      changed: st?.changed ?? 0,
+      ahead: st?.ahead ?? 0,
+      behind: st?.behind ?? 0,
+      hasUpstream: st?.hasUpstream ?? false,
+      defaultBranch: def
+    }
+  })
+
+  ipcMain.handle(CHANNELS.gitBranches, async (_e, cwd: string) =>
+    (await git.isGitAvailable()) ? git.listBranches(cwd) : []
+  )
+
+  ipcMain.handle(CHANNELS.gitWorktrees, async (_e, cwd: string) => {
+    if (!cwd || !(await git.isGitAvailable())) return []
+    const root = await git.repoRoot(cwd)
+    return root ? git.listWorktrees(root) : []
+  })
+
+  ipcMain.handle(
+    CHANNELS.gitCreateWorktree,
+    async (_e, input: CreateWorktreeInput): Promise<CreateWorktreeResult> => {
+      if (!(await git.isGitAvailable())) return { ok: false, error: 'Git isn’t installed.' }
+      const root = await git.repoRoot(input.cwd)
+      if (!root) return { ok: false, error: 'This folder isn’t a git repository.' }
+      const r =
+        input.mode === 'new'
+          ? await git.createWorktree({
+              repoRoot: root,
+              branch: input.branch?.trim() || git.temporaryBranchName()
+            })
+          : await git.attachWorktree({ repoRoot: root, branch: input.branch?.trim() ?? '' })
+      return { ok: r.ok, worktree: r.worktree, attached: r.attached, error: r.error }
+    }
+  )
+
+  ipcMain.handle(CHANNELS.gitRemoveWorktree, async (_e, worktreePath: string, force?: boolean) => {
+    if (!(await git.isGitAvailable())) return { ok: false, error: 'Git isn’t installed.' }
+    return git.removeWorktree(worktreePath, { force: force ?? false })
+  })
+
+  ipcMain.handle(CHANNELS.gitPruneWorktrees, (_e, cwd: string, dryRun?: boolean) =>
+    pruneWorktrees(cwd, { dryRun: dryRun ?? true, force: true })
   )
 
   // ---- remote (Remote Workspace: share a session to a phone via roxy.gg) ----

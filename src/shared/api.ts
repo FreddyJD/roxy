@@ -18,7 +18,8 @@ import type {
   ReasoningEffort,
   SessionKind,
   ToolDiff,
-  ToolResult
+  ToolResult,
+  WorktreeIntent
 } from './types'
 import type { McpServerConfig } from './mcp'
 
@@ -84,6 +85,66 @@ export interface CreateChatInput {
   model?: string | null
   workspacePath?: string | null
   parentId?: string | null
+  /**
+   * Run this session in its own git worktree — an isolated checkout on its own
+   * branch, so it can't collide with other sessions on the same repo. Recorded
+   * now, created on the first turn.
+   */
+  worktree?: WorktreeIntent
+}
+
+/**
+ * Git state for the workstream strip. Everything is optional-by-degradation:
+ * a folder with no repo (or no git binary) reports `isRepo: false` and the UI
+ * renders nothing at all.
+ */
+export interface GitStatusView {
+  isRepo: boolean
+  /** The repository root, when `cwd` is inside one. */
+  root: string | null
+  branch: string | null
+  dirty: boolean
+  /** Changed entries: staged + unstaged + untracked. */
+  changed: number
+  ahead: number
+  behind: number
+  hasUpstream: boolean
+  /** The branch new workstreams branch off (origin/HEAD, else main/master). */
+  defaultBranch: string | null
+}
+
+/** One checkout of a repository — the main working tree, or a workstream's. */
+export interface WorktreeView {
+  path: string
+  branch: string | null
+  head: string | null
+  /** The repo's own working tree; never removable. */
+  isMain: boolean
+}
+
+export interface CreateWorktreeInput {
+  /** Any folder inside the repo (usually a session's project folder). */
+  cwd: string
+  mode: 'new' | 'fromBranch' | 'attach'
+  /** Required for fromBranch/attach; omitted for `new` -> a generated name. */
+  branch?: string
+}
+
+export interface CreateWorktreeResult {
+  ok: boolean
+  worktree?: WorktreeView
+  /** True when an existing worktree was reused instead of a new one created. */
+  attached?: boolean
+  error?: string
+}
+
+/** What `worktrees.prune` found and (when not a dry run) removed. */
+export interface PruneWorktreesResult {
+  ok: boolean
+  candidates: { path: string; branch: string | null }[]
+  removed: string[]
+  failed: { path: string; error: string }[]
+  error?: string
 }
 
 export interface CreateLoopInput {
@@ -449,6 +510,25 @@ export interface RoxyApi {
     onState(callback: (state: BrowserState) => void): () => void
     /** Subscribe to the open tab list; returns an unsubscribe fn. */
     onTabs(callback: (tabs: BrowserTab[]) => void): () => void
+  }
+  git: {
+    /** Whether a usable `git` binary exists (probed once, cached). */
+    available(): Promise<boolean>
+    /** Repo/branch/dirty/ahead-behind for a folder. `isRepo:false` when it isn't one. */
+    status(cwd: string): Promise<GitStatusView>
+    /** Local + origin branches, deduped and sorted. */
+    branches(cwd: string): Promise<string[]>
+    /** Live worktrees for the repo containing `cwd` (stale records dropped). */
+    worktrees(cwd: string): Promise<WorktreeView[]>
+    /** Create (or attach to) a worktree. */
+    createWorktree(input: CreateWorktreeInput): Promise<CreateWorktreeResult>
+    /** Remove a worktree directory and prune git's record of it. */
+    removeWorktree(path: string, force?: boolean): Promise<{ ok: boolean; error?: string }>
+    /**
+     * Find worktrees no session points at. Reports by default; pass
+     * `dryRun:false` to actually delete them.
+     */
+    pruneWorktrees(cwd: string, dryRun?: boolean): Promise<PruneWorktreesResult>
   }
   remote: {
     /** Mint a room on roxy.gg + open the host relay socket for a session. */

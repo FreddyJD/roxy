@@ -163,6 +163,15 @@ const roxy: RoxyApi = {
       return () => ipcRenderer.removeListener(CHANNELS.browserTabs, handler)
     }
   },
+  git: {
+    available: () => ipcRenderer.invoke(CHANNELS.gitAvailable),
+    status: (cwd) => ipcRenderer.invoke(CHANNELS.gitStatus, cwd),
+    branches: (cwd) => ipcRenderer.invoke(CHANNELS.gitBranches, cwd),
+    worktrees: (cwd) => ipcRenderer.invoke(CHANNELS.gitWorktrees, cwd),
+    createWorktree: (input) => ipcRenderer.invoke(CHANNELS.gitCreateWorktree, input),
+    removeWorktree: (path, force) => ipcRenderer.invoke(CHANNELS.gitRemoveWorktree, path, force),
+    pruneWorktrees: (cwd, dryRun) => ipcRenderer.invoke(CHANNELS.gitPruneWorktrees, cwd, dryRun)
+  },
   remote: {
     start: (input) => ipcRenderer.invoke(CHANNELS.remoteStart, input),
     stop: () => ipcRenderer.invoke(CHANNELS.remoteStop),

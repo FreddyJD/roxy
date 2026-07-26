@@ -107,6 +107,14 @@ export const CHANNELS = {
   /** main -> browser toolbar: open tab list */
   browserTabs: 'browser:tabs',
 
+  gitAvailable: 'git:available',
+  gitStatus: 'git:status',
+  gitBranches: 'git:branches',
+  gitWorktrees: 'git:worktrees',
+  gitCreateWorktree: 'git:create-worktree',
+  gitRemoveWorktree: 'git:remove-worktree',
+  gitPruneWorktrees: 'git:prune-worktrees',
+
   remoteStart: 'remote:start',
   remoteStop: 'remote:stop',
   remoteStatus: 'remote:status',

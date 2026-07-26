@@ -19,7 +19,8 @@ import type {
   ReasoningEffort,
   SessionKind,
   SessionStatus,
-  SessionTask
+  SessionTask,
+  WorktreeIntent
 } from '../../shared/types'
 import type { CreateChatInput, CreateLoopInput } from '../../shared/api'
 import { getDb } from './database'
@@ -47,6 +48,7 @@ interface ChatRow {
   model: string | null
   workspace_path: string | null
   worktree_path: string | null
+  worktree_pending: string | null
   branch: string | null
   dev_port: number | null
   parent_id: string | null
@@ -317,6 +319,7 @@ function rowToChat(row: ChatRow): Chat {
     model: row.model,
     workspacePath: row.workspace_path,
     worktreePath: row.worktree_path,
+    worktreePending: parseWorktreeIntent(row.worktree_pending),
     branch: row.branch,
     devPort: row.dev_port,
     parentId: row.parent_id,
@@ -357,6 +360,45 @@ export function getChatWorkspace(chatId: string): string | null {
   return row?.workspace_path ?? null
 }
 
+/** Decode the parked worktree intent, tolerating anything malformed. */
+function parseWorktreeIntent(json: string | null): WorktreeIntent | null {
+  if (!json) return null
+  try {
+    const v = JSON.parse(json) as WorktreeIntent
+    if (!v || (v.mode !== 'new' && v.mode !== 'fromBranch' && v.mode !== 'attach')) return null
+    return { mode: v.mode, branch: typeof v.branch === 'string' ? v.branch : undefined }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Park (or clear) a session's requested worktree, to be materialized on its
+ * first turn. Pass null to clear — done both on success and on failure, so a
+ * broken intent is never retried forever.
+ */
+export function setChatWorktreePending(chatId: string, intent: WorktreeIntent | null): void {
+  getDb()
+    .prepare('UPDATE chats SET worktree_pending = ? WHERE id = ?')
+    .run(intent ? JSON.stringify(intent) : null, chatId)
+}
+
+/** Every session currently pointing at a worktree (for prune bookkeeping). */
+export function listWorktreePaths(): string[] {
+  const rows = getDb()
+    .prepare('SELECT DISTINCT worktree_path FROM chats WHERE worktree_path IS NOT NULL')
+    .all() as { worktree_path: string }[]
+  return rows.map((r) => r.worktree_path)
+}
+
+/** Sessions pointing at a given worktree path (used before removing one). */
+export function chatsUsingWorktree(worktreePath: string): Chat[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM chats WHERE worktree_path = ?')
+    .all(worktreePath) as ChatRow[]
+  return rows.map(rowToChat)
+}
+
 /**
  * Point a session at a git worktree (or clear it by passing nulls).
  *
@@ -391,10 +433,13 @@ export function setChatWorktree(
 export function createChat(input: CreateChatInput = {}): Chat {
   const id = randomUUID()
   const now = Date.now()
+  // Parked, not acted on: the worktree is created on the first turn so an
+  // abandoned session never leaves a directory behind.
+  const pending = input.worktree ?? null
   getDb()
     .prepare(
-      `INSERT INTO chats(id, title, kind, provider_id, model, workspace_path, parent_id, sort_order, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO chats(id, title, kind, provider_id, model, workspace_path, worktree_pending, parent_id, sort_order, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -403,6 +448,7 @@ export function createChat(input: CreateChatInput = {}): Chat {
       input.providerId ?? null,
       input.model ?? null,
       input.workspacePath ?? null,
+      pending ? JSON.stringify(pending) : null,
       input.parentId ?? null,
       now, // sort_order: seed new sessions at the top of their project
       now,

@@ -15,6 +15,7 @@ import { runAgentTurn } from '../harness'
 import { activeBackgroundSubChatIds } from './background-tasks'
 import { setLabel as setBrowserLabel } from './browser'
 import { sessionCwd } from './workspace'
+import { materializePendingWorktree } from './worktree'
 import path from 'node:path'
 
 /**
@@ -27,6 +28,14 @@ export async function runSessionTurn(
   emit: (event: LlmEvent) => void,
   signal: AbortSignal
 ): Promise<LlmResult> {
+  // If this session asked for a worktree, build it now — on the first turn,
+  // not at create time, so an abandoned composer leaves nothing on disk. Soft
+  // by design: a git failure downgrades to working in the project folder and
+  // reports itself, but must never stop the turn from running.
+  const materialized = await materializePendingWorktree(input.sessionId)
+  if (materialized.error) {
+    emit({ type: 'text', delta: `_${materialized.error}_\n\n` })
+  }
   // Where this session's tools run — its worktree when it has one, else the
   // project folder. The single resolver; never read workspace_path directly.
   const cwd = sessionCwd(input.sessionId)
