@@ -373,7 +373,7 @@ export function Sidebar(): JSX.Element {
 
   if (railed) {
     return (
-      <aside className="sidebar-rail flex h-full shrink-0 flex-col items-center border-r border-border bg-surface">
+      <aside className="vibrancy-pane sidebar-rail flex h-full shrink-0 flex-col items-center border-r border-border">
         <div className="titlebar reserve-controls-left h-[54px] w-full shrink-0" />
         <div className="flex flex-col items-center gap-1 pt-1">
           <button
@@ -401,7 +401,7 @@ export function Sidebar(): JSX.Element {
             {remoteDot && (
               <span
                 className={cn(
-                  'absolute right-1 top-1 h-1.5 w-1.5 rounded-full ring-2 ring-surface',
+                  'vibrancy-ring absolute right-1 top-1 h-1.5 w-1.5 rounded-full ring-2 ring-surface',
                   remoteDot === 'green' ? 'bg-success' : 'bg-warning'
                 )}
               />
@@ -437,7 +437,7 @@ export function Sidebar(): JSX.Element {
   return (
     <aside
       style={{ width }}
-      className="relative flex h-full shrink-0 flex-col border-r border-border bg-surface"
+      className="vibrancy-pane relative flex h-full shrink-0 flex-col border-r border-border"
     >
       <div className="titlebar reserve-controls-left flex items-center gap-2 px-4 py-3.5">
         <div className="sidebar-brand flex items-center gap-2.5">
@@ -672,7 +672,7 @@ export function Sidebar(): JSX.Element {
                                     'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors',
                                     dragId && 'cursor-grabbing',
                                     chat.id === activeChatId
-                                      ? 'bg-elevated text-text'
+                                      ? 'vibrancy-chip bg-elevated text-text'
                                       : 'text-text-muted hover:bg-white/5 hover:text-text'
                                   )}
                                 >
@@ -770,7 +770,7 @@ export function Sidebar(): JSX.Element {
                                         'flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums transition-[opacity,color,background-color]',
                                         liveSubs > 0
                                           ? 'bg-accent/10 text-accent'
-                                          : 'bg-surface-2 text-text-subtle hover:text-text',
+                                          : 'vibrancy-chip-weak bg-surface-2 text-text-subtle hover:text-text',
                                         // This pill is a disclosure control, not a status light,
                                         // so it earns space only while the row is hovered or the
                                         // list it toggles is actually open. Live subagents used to
@@ -801,7 +801,7 @@ export function Sidebar(): JSX.Element {
                                           className={cn(
                                             'group/sub flex items-center gap-2 rounded-lg px-2 py-1 text-xs transition-colors',
                                             sub.id === activeChatId
-                                              ? 'bg-elevated text-text'
+                                              ? 'vibrancy-chip bg-elevated text-text'
                                               : 'text-text-muted hover:bg-white/5 hover:text-text'
                                           )}
                                         >

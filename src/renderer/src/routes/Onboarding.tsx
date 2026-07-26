@@ -24,7 +24,7 @@ export default function Onboarding(): JSX.Element {
   }
 
   return (
-    <div className="flex h-full w-full flex-col bg-bg">
+    <div className="vibrancy-solid flex h-full w-full flex-col">
       <header className="titlebar reserve-controls-left reserve-controls-right flex h-14 shrink-0 items-center px-5">
         <div className="flex items-center gap-2.5">
           <img
