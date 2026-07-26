@@ -151,5 +151,20 @@ export const MIGRATIONS: string[] = [
       FROM chats
       WHERE workspace_path IS NOT NULL
       GROUP BY workspace_path;
+  `,
+
+  // ---- v14: git-worktree-backed sessions ----
+  // A session can run in its own `git worktree` — an isolated checkout of the
+  // same repo on its own branch — so several agents work in parallel without
+  // sharing one filesystem. All three columns are NULL for a normal session,
+  // which keeps today's behaviour exactly (see services/workspace.ts).
+  //   worktree_path — the worktree's directory, or NULL to work in place
+  //   branch        — the branch checked out there (mirrors git; git is truth)
+  //   dev_port      — the port this session's dev server owns, so N sessions
+  //                   don't all fight over :3000
+  /* sql */ `
+    ALTER TABLE chats ADD COLUMN worktree_path TEXT;
+    ALTER TABLE chats ADD COLUMN branch TEXT;
+    ALTER TABLE chats ADD COLUMN dev_port INTEGER;
   `
 ]

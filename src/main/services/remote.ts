@@ -34,6 +34,7 @@ import { DEFAULT_AGENT_ID } from '../../shared/agents'
 import * as repo from '../db/repo'
 import { listModels } from './models'
 import { runSessionTurn } from './session-turn'
+import { sessionCwd } from './workspace'
 import { MAX_FRAME_BYTES, parseFrame, type HostFrame, type RemoteSessionInfo } from './remote-protocol'
 /**
  * Relay base. Prod dials roxy.gg; a dev build defaults to the local roxy.gg
@@ -200,7 +201,8 @@ function sendMeta(sessionId: string): void {
     t: 'meta',
     sessionId,
     title: chat?.title,
-    cwd: repo.getChatWorkspace(sessionId) ?? undefined
+    // Show the phone where work actually lands (the worktree, when there is one).
+    cwd: sessionCwd(sessionId) || undefined
   })
 }
 

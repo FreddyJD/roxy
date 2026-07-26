@@ -15,6 +15,7 @@ import { app } from 'electron'
 import * as repo from '../src/main/db/repo'
 import { closeDb } from '../src/main/db/database'
 import { runTool, killSessionBackground } from '../src/main/harness'
+import { sessionCwd } from '../src/main/services/workspace'
 import * as browser from '../src/main/services/browser'
 import {
   boundToolOutput,
@@ -463,6 +464,80 @@ async function main(): Promise<void> {
 
     repo.removeChat(sessA.id)
     repo.removeChat(sessB.id)
+  }
+
+  // ---- sessionCwd (the one working-directory resolver) ----
+  {
+    check('sessionCwd: an unknown chat resolves to empty', sessionCwd('nope') === '')
+    check('sessionCwd: an empty id resolves to empty', sessionCwd('') === '')
+
+    const plain = repo.createChat({ title: 'cwd plain', kind: 'main', workspacePath: ws })
+    check('sessionCwd: no worktree -> the project folder', sessionCwd(plain.id) === ws)
+
+    const noWs = repo.createChat({ title: 'cwd no workspace', kind: 'main' })
+    check('sessionCwd: no workspace -> empty', sessionCwd(noWs.id) === '')
+
+    // New columns default to NULL, so nothing changes for existing sessions.
+    const fresh = repo.getChat(plain.id)
+    check(
+      'migration v14: worktree columns default to null',
+      fresh?.worktreePath === null && fresh?.branch === null && fresh?.devPort === null
+    )
+
+    // A worktree redirects the session; the project IS the repo root here, so
+    // the cwd is the worktree itself.
+    const wtDir = path.join(tmp, 'wt-fix-auth')
+    await fs.mkdir(wtDir, { recursive: true })
+    repo.setChatWorktree(plain.id, {
+      worktreePath: wtDir,
+      branch: 'roxy/a1b2c3d4',
+      devPort: 3101
+    })
+    const wired = repo.getChat(plain.id)
+    check(
+      'setChatWorktree persists path/branch/port',
+      wired?.worktreePath === wtDir &&
+        wired?.branch === 'roxy/a1b2c3d4' &&
+        wired?.devPort === 3101
+    )
+    // `ws` has no .git, so findGitRoot finds nothing and we stay put — this is
+    // the deliberate "can't trust the mapping" fallback.
+    check(
+      'sessionCwd: a worktree without a repo root falls back to the project folder',
+      sessionCwd(plain.id) === ws
+    )
+
+    // With a real repo root, the sub-path is preserved.
+    const repoRoot = path.join(tmp, 'repo-with-git')
+    const pkgDir = path.join(repoRoot, 'apps', 'web')
+    await fs.mkdir(pkgDir, { recursive: true })
+    await fs.mkdir(path.join(repoRoot, '.git'), { recursive: true })
+    const subFolder = repo.createChat({ title: 'cwd subfolder', kind: 'main', workspacePath: pkgDir })
+    repo.setChatWorktree(subFolder.id, { worktreePath: wtDir, branch: 'roxy/deadbeef' })
+    check(
+      'sessionCwd: a project inside a repo keeps its subpath in the worktree',
+      sessionCwd(subFolder.id) === path.join(wtDir, 'apps', 'web')
+    )
+
+    // Subagents always run in their parent's tree, never their own.
+    const kid = repo.createChat({ title: 'cwd sub', kind: 'sub', parentId: subFolder.id })
+    check(
+      'sessionCwd: a sub-session resolves through its parent',
+      sessionCwd(kid.id) === path.join(wtDir, 'apps', 'web')
+    )
+    const grandkid = repo.createChat({ title: 'cwd sub2', kind: 'sub', parentId: kid.id })
+    check(
+      'sessionCwd: a nested sub-session still resolves to the root worktree',
+      sessionCwd(grandkid.id) === path.join(wtDir, 'apps', 'web')
+    )
+
+    // Clearing the worktree returns the session to the project folder.
+    repo.setChatWorktree(subFolder.id, { worktreePath: null })
+    check('sessionCwd: clearing the worktree restores the project folder', sessionCwd(subFolder.id) === pkgDir)
+
+    repo.removeChat(plain.id)
+    repo.removeChat(noWs.id)
+    repo.removeChat(subFolder.id)
   }
 
   // ---- change_session_metadata (the agent organizing its own session) ----

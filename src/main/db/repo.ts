@@ -46,6 +46,9 @@ interface ChatRow {
   provider_id: string | null
   model: string | null
   workspace_path: string | null
+  worktree_path: string | null
+  branch: string | null
+  dev_port: number | null
   parent_id: string | null
   context_summary: string | null
   context_summary_at: number | null
@@ -313,6 +316,9 @@ function rowToChat(row: ChatRow): Chat {
     providerId: row.provider_id,
     model: row.model,
     workspacePath: row.workspace_path,
+    worktreePath: row.worktree_path,
+    branch: row.branch,
+    devPort: row.dev_port,
     parentId: row.parent_id,
     contextSummary: row.context_summary,
     contextSummaryAt: row.context_summary_at,
@@ -336,12 +342,50 @@ export function getChat(id: string): Chat | undefined {
   return row ? rowToChat(row) : undefined
 }
 
-/** Workspace path for a chat (null for loops / unset sessions). */
+/**
+ * The PROJECT folder a chat belongs to (null for loops / unset sessions).
+ *
+ * This is the folder the user opened — it is NOT necessarily where the agent
+ * runs. A session with a worktree runs somewhere else entirely. Use this for
+ * project grouping/pruning; use `services/workspace.ts` `sessionCwd()` for
+ * anything that touches the filesystem.
+ */
 export function getChatWorkspace(chatId: string): string | null {
   const row = getDb()
     .prepare('SELECT workspace_path FROM chats WHERE id = ?')
     .get(chatId) as { workspace_path: string | null } | undefined
   return row?.workspace_path ?? null
+}
+
+/**
+ * Point a session at a git worktree (or clear it by passing nulls).
+ *
+ * Only fields present in `input` are written, so callers can set the branch
+ * after an LLM rename without touching the path. Never call this for a sub
+ * chat: subagents always run in their parent's tree (see `sessionCwd`).
+ */
+export function setChatWorktree(
+  chatId: string,
+  input: { worktreePath?: string | null; branch?: string | null; devPort?: number | null }
+): void {
+  const sets: string[] = []
+  const values: (string | number | null)[] = []
+  if ('worktreePath' in input) {
+    sets.push('worktree_path = ?')
+    values.push(input.worktreePath ?? null)
+  }
+  if ('branch' in input) {
+    sets.push('branch = ?')
+    values.push(input.branch ?? null)
+  }
+  if ('devPort' in input) {
+    sets.push('dev_port = ?')
+    values.push(input.devPort ?? null)
+  }
+  if (!sets.length) return
+  getDb()
+    .prepare(`UPDATE chats SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`)
+    .run(...values, Date.now(), chatId)
 }
 
 export function createChat(input: CreateChatInput = {}): Chat {
@@ -381,6 +425,8 @@ export function renameChat(id: string, title: string): void {
 
 export function removeChat(id: string): void {
   const db = getDb()
+  // The PROJECT folder (not sessionCwd): we're deciding whether the project row
+  // still has sessions, which is about the folder the user opened.
   const workspace = getChatWorkspace(id)
   // Cascade to any subagent sessions this chat spawned.
   db.prepare('DELETE FROM chats WHERE parent_id = ?').run(id)
@@ -679,6 +725,7 @@ export function setLoopEnabled(id: string, enabled: boolean): void {
 export function removeLoop(id: string): void {
   const loop = getLoop(id)
   if (!loop) return
+  // The PROJECT folder (not sessionCwd) — same reason as removeChat.
   const workspace = getChatWorkspace(loop.chatId)
   // Deleting the chat cascades to the loop row and its messages.
   getDb().prepare('DELETE FROM chats WHERE id = ?').run(loop.chatId)

@@ -14,6 +14,7 @@ import * as repo from '../db/repo'
 import { runAgentTurn } from '../harness'
 import { activeBackgroundSubChatIds } from './background-tasks'
 import { setLabel as setBrowserLabel } from './browser'
+import { sessionCwd } from './workspace'
 import path from 'node:path'
 
 /**
@@ -26,7 +27,9 @@ export async function runSessionTurn(
   emit: (event: LlmEvent) => void,
   signal: AbortSignal
 ): Promise<LlmResult> {
-  const cwd = repo.getChatWorkspace(input.sessionId) ?? ''
+  // Where this session's tools run — its worktree when it has one, else the
+  // project folder. The single resolver; never read workspace_path directly.
+  const cwd = sessionCwd(input.sessionId)
   // Name this session's browser window after its project so concurrent windows
   // are tellable apart (a no-op until/unless the agent opens the browser).
   if (cwd) setBrowserLabel(input.sessionId, path.basename(cwd))

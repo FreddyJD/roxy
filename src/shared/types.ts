@@ -97,6 +97,16 @@ export interface Chat {
   providerId: string | null
   model: string | null
   workspacePath: string | null
+  /**
+   * This session's git worktree — an isolated checkout of the project's repo on
+   * its own branch. Null means the session works directly in `workspacePath`.
+   * Sub-sessions never set this; they run in their parent's tree.
+   */
+  worktreePath: string | null
+  /** The branch checked out in `worktreePath`. Git is the source of truth. */
+  branch: string | null
+  /** The dev-server port this session owns, so parallel sessions don't collide. */
+  devPort: number | null
   /** The chat that spawned this one (set for `sub` subagent sessions). */
   parentId: string | null
   /** Compaction summary of earlier turns, or null if not compacted. */

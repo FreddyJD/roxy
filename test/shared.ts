@@ -37,6 +37,8 @@ import {
   WEBSEARCH_MAX_RESULTS,
   WEBSEARCH_DEFAULT_RESULTS
 } from '../src/shared/web'
+import { resolveWorktreeCwd } from '../src/shared/workspace'
+import { posix as posixPath, win32 as win32Path } from 'node:path'
 import type { Message, MessagePart } from '../src/shared/types'
 import type { ChatMessage } from '../src/shared/api'
 import {
@@ -1689,6 +1691,56 @@ async function main(): Promise<void> {
   check('portable: safe path rejects absolute', !isSafeSkillFilePath('/etc/passwd'))
   check('portable: safe path rejects a drive letter', !isSafeSkillFilePath('C:/x'))
   check('portable: safe path rejects backslashes', !isSafeSkillFilePath('a\\b'))
+
+  // ---- resolveWorktreeCwd (worktree path math) ----
+  // Exercised against BOTH path flavours: Roxy ships on Windows and posix, and
+  // the repo-subfolder case is where a naive join breaks.
+  for (const [label, p] of [
+    ['posix', posixPath] as const,
+    ['win32', win32Path] as const
+  ]) {
+    const sep = label === 'win32' ? '\\' : '/'
+    const root = label === 'win32' ? 'C:\\repo' : '/repo'
+    const wt = label === 'win32' ? 'C:\\wt\\fix' : '/wt/fix'
+
+    check(
+      `resolveWorktreeCwd (${label}): no workspace -> ''`,
+      resolveWorktreeCwd('', wt, root, p) === ''
+    )
+    check(
+      `resolveWorktreeCwd (${label}): no worktree -> the project folder`,
+      resolveWorktreeCwd(root, null, root, p) === root
+    )
+    check(
+      `resolveWorktreeCwd (${label}): project IS the repo root -> the worktree`,
+      resolveWorktreeCwd(root, wt, root, p) === wt
+    )
+    check(
+      `resolveWorktreeCwd (${label}): project is a SUBFOLDER -> same subpath inside`,
+      resolveWorktreeCwd(`${root}${sep}apps${sep}web`, wt, root, p) ===
+        `${wt}${sep}apps${sep}web`
+    )
+    check(
+      `resolveWorktreeCwd (${label}): no repo root -> the project folder`,
+      resolveWorktreeCwd(`${root}${sep}apps${sep}web`, wt, null, p) ===
+        `${root}${sep}apps${sep}web`
+    )
+    check(
+      `resolveWorktreeCwd (${label}): workspace outside the repo -> the project folder`,
+      resolveWorktreeCwd(
+        label === 'win32' ? 'C:\\elsewhere\\app' : '/elsewhere/app',
+        wt,
+        root,
+        p
+      ) === (label === 'win32' ? 'C:\\elsewhere\\app' : '/elsewhere/app')
+    )
+  }
+  // A worktree must never silently drop a deep subpath.
+  check(
+    'resolveWorktreeCwd keeps a nested subpath intact',
+    resolveWorktreeCwd('/repo/packages/ui/src', '/wt/fix', '/repo', posixPath) ===
+      '/wt/fix/packages/ui/src'
+  )
   if (fails.length) {
     console.error(`\nSHARED FAILED \u2014 ${fails.length} failing: ${fails.join(', ')}`)
     process.exit(1)

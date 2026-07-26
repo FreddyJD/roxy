@@ -49,6 +49,7 @@ import {
   SKILL_TOOL_DESCRIPTION
 } from '../../shared/skills'
 import { listSkills, skillInstructions } from '../services/skills'
+import { findGitRoot } from '../services/workspace'
 import {
   registerBackgroundJob,
   finishBackgroundJob
@@ -326,22 +327,6 @@ export function setAgentPromptText(text: Record<string, string>): void {
 /** Minimal prompt used only when no tuned text was injected (e.g. the smoke harness). */
 const FALLBACK_PROMPT =
   'You are Roxy, an autonomous AI coding agent running inside a desktop app. You have tools to read, write, and edit files, run shell commands, search the workspace, and drive a browser. When the user asks you to build, fix, or change something, use the tools to actually do it, then give a short summary of what you did.'
-
-/** Walk up from `dir` looking for a `.git` entry; returns the repo root if found. */
-function findGitRoot(dir: string): string | undefined {
-  let cur = dir
-  for (let i = 0; i < 64 && cur; i++) {
-    try {
-      if (existsSync(join(cur, '.git'))) return cur
-    } catch {
-      /* ignore unreadable dirs */
-    }
-    const parent = dirname(cur)
-    if (parent === cur) break
-    cur = parent
-  }
-  return undefined
-}
 
 /**
  * Project-instruction filenames to look for, in precedence order (mirrors

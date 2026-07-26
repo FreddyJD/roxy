@@ -8,6 +8,7 @@ import * as browser from '../services/browser'
 import { listModels } from '../services/models'
 import { compactChat } from '../services/compaction'
 import { runTool, projectInstructions, killSessionBackground } from '../harness'
+import { sessionCwd } from '../services/workspace'
 import { checkForUpdates, quitAndInstall, getUpdateState } from '../services/updater'
 import {
   cancelBackgroundJob,
@@ -309,7 +310,9 @@ export function registerIpc(): void {
   ipcMain.handle(
     CHANNELS.toolsRun,
     async (_e, sessionId: string, name: string, input: Record<string, unknown>) => {
-      const cwd = repo.getChatWorkspace(sessionId)
+      // Same cwd the agent turn would use (worktree-aware), so a manual tool
+      // card and the agent never operate on different trees.
+      const cwd = sessionCwd(sessionId)
       // Browser & loop tools don't need a workspace; file/bash tools do.
       const needsWorkspace = !name.startsWith('browser_') && !name.startsWith('loop_')
       if (!cwd && needsWorkspace) {
