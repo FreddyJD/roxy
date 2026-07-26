@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Check,
   ChevronRight,
@@ -8,6 +8,7 @@ import {
   ListTree,
   Loader2,
   Repeat,
+  RotateCw,
   Settings
 } from 'lucide-react'
 import type { Chat } from '@shared/types'
@@ -33,13 +34,28 @@ import {
 import { Button } from './ui'
 import roxy from '../assets/roxy.png'
 
-/** Only render the most recent N messages — older ones stay in the DB but off-screen. */
-/** Render the latest N messages; scrolling to the top reveals PAGE more. */
-const VISIBLE_MESSAGES = 8
-const PAGE = 8
+/**
+ * Render only the most recent N messages; scrolling near the top reveals PAGE
+ * more. Older turns stay in the DB, they are just not in the DOM.
+ *
+ * This cap exists because a single message is not cheap: an agent turn can carry
+ * dozens of tool cards, each with its own syntax-highlighted diff or terminal
+ * output, and the whole transcript is markdown re-parsed by Streamdown on every
+ * render. A few hundred of those is a visibly janky pane.
+ *
+ * 8 was too aggressive though — it is fewer turns than fit on a 1440p screen, so
+ * an ordinary session showed the "showing the last 8 of N" notice while its own
+ * content did not even fill the viewport, and any scroll up immediately paged.
+ * 30 still bounds the worst case while covering essentially every session you
+ * actually scroll through by hand.
+ */
+const VISIBLE_MESSAGES = 30
+const PAGE = 30
 
 export function ChatView(): JSX.Element {
   const messages = useRoxyStore((s) => s.messages)
+  const messagesChatId = useRoxyStore((s) => s.messagesChatId)
+  const messagesError = useRoxyStore((s) => s.messagesError)
   const streaming = useRoxyStore((s) =>
     s.activeChatId ? (s.streamingChats[s.activeChatId] ?? null) : null
   )
@@ -72,6 +88,11 @@ export function ChatView(): JSX.Element {
   // Show only the latest N; scrolling up loads older ones a page at a time.
   const [visibleCount, setVisibleCount] = useState(VISIBLE_MESSAGES)
   const restoreHeight = useRef<number | null>(null)
+  // Which chat `restoreHeight` was measured in — a height from another session
+  // is meaningless and must not be applied.
+  const restoreChatId = useRef<string | null>(null)
+  // The message column, watched so the bottom-pin survives late layout.
+  const contentRef = useRef<HTMLDivElement>(null)
   // Overlay scrollbars for the transcript. Because the element is initialized
   // as its own viewport, every read below (scrollTop / scrollHeight /
   // clientHeight / scrollTo) and the onScroll prop keep working unchanged.
@@ -84,29 +105,69 @@ export function ChatView(): JSX.Element {
     // Near the top with more history → reveal another page, preserving position.
     if (el.scrollTop < 80 && visibleCount < messages.length) {
       restoreHeight.current = el.scrollHeight
+      restoreChatId.current = activeChatId
       setVisibleCount((c) => Math.min(messages.length, c + PAGE))
     }
   }
 
   // Switching chats starts you pinned to the latest message + collapses details.
+  //
+  // The scroll offset has to be reset by hand here. This component is never
+  // remounted between sessions (no `key={activeChatId}` upstream), so the
+  // scroller is the same DOM node throughout and `scrollTop` is a DOM property
+  // that survives the swap. Leaving it alone meant arriving in a short session
+  // still scrolled to a long one's offset — past the end of the new content,
+  // showing nothing but background. Clamped by the browser only against the
+  // CURRENT scrollHeight, which at this point is still the outgoing session's.
   useEffect(() => {
     stickToBottom.current = true
+    // Drop any pending prepend-anchor: it holds the previous session's
+    // scrollHeight, and applying that delta to the new one throws the offset
+    // somewhere arbitrary.
+    restoreHeight.current = null
+    restoreChatId.current = null
     setInfoOpen(false)
     setVisibleCount(VISIBLE_MESSAGES)
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
   }, [activeChatId])
 
   // Keep the scroll anchored when older messages prepend (no jump to the top).
+  // Guarded on the chat the measurement was taken in — `visibleCount` also
+  // changes on a session switch, which would otherwise replay a stale delta.
   useEffect(() => {
     const el = scrollRef.current
-    if (el && restoreHeight.current !== null) {
+    if (el && restoreHeight.current !== null && restoreChatId.current === activeChatId) {
       el.scrollTop += el.scrollHeight - restoreHeight.current
-      restoreHeight.current = null
     }
+    restoreHeight.current = null
+    restoreChatId.current = null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleCount])
 
-  useEffect(() => {
-    if (!stickToBottom.current) return
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+  // Follow the tail.
+  //
+  // Runs on layout (not after paint) so the jump is never a visible frame, and
+  // re-pins on the next frame as well: a turn's content keeps growing AFTER this
+  // commit — images decode, `lazy()` diff/file views resolve, Streamdown re-lays
+  // out — and a single scrollTo lands short of the real bottom every time.
+  useLayoutEffect(() => {
+    if (!stickToBottom.current || !scrollRef.current) return
+    const pin = (): void => {
+      if (stickToBottom.current && scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      }
+    }
+    pin()
+    const frame = requestAnimationFrame(pin)
+    // Content that settles later (a decoded screenshot is the common one) resizes
+    // the column well after any frame we could schedule; watch it instead of
+    // guessing a delay.
+    const observer = new ResizeObserver(pin)
+    if (contentRef.current) observer.observe(contentRef.current)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+    }
   }, [messages, streaming])
 
   const activeChat = chats.find((c) => c.id === activeChatId)
@@ -145,7 +206,12 @@ export function ChatView(): JSX.Element {
     )
   }
 
-  const isEmpty = messages.length === 0 && (streaming === null || streaming.length === 0)
+  const hasContent = messages.length > 0 || (streaming !== null && streaming.length > 0)
+  // `messages` is cleared the instant you click a session and refilled only after
+  // the round trip, so an empty array on its own says nothing about whether the
+  // session HAS messages. Trusting it painted the empty state over every switch.
+  const loading = !hasContent && !messagesError && messagesChatId !== activeChatId
+  const isEmpty = !hasContent && !loading
 
   return (
     <div className="vibrancy-solid relative flex h-full min-w-0 flex-1 flex-col">
@@ -249,8 +315,36 @@ export function ChatView(): JSX.Element {
 
       {infoOpen && <SessionInfo chat={activeChat} />}
 
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
-        {isEmpty ? (
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        // overflow-anchor is off because this pane does its own scroll math:
+        // paging in older messages measures scrollHeight and re-applies the
+        // delta by hand. Chromium's anchoring would apply its own correction on
+        // top of that, and the two together overshoot.
+        style={{ overflowAnchor: 'none' }}
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
+        {messagesError ? (
+          // A failed load used to be indistinguishable from an empty session:
+          // silent, blank, and with no way back other than clicking away and
+          // returning. Name it and make it recoverable.
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+            <p className="max-w-xs text-sm text-text-muted">
+              Couldn&apos;t load this session&apos;s messages.
+            </p>
+            <Button variant="ghost" onClick={() => void selectChat(activeChat.id)}>
+              <RotateCw className="h-4 w-4" /> Retry
+            </Button>
+          </div>
+        ) : loading ? (
+          // Deliberately blank: a transcript read is a local SQLite query, so it
+          // resolves within a frame or two and a spinner would be a flash of
+          // chrome rather than information. This branch exists to stop the EMPTY
+          // state (and its loop copy) from claiming the session has no messages
+          // before we know that.
+          <div className="h-full" />
+        ) : isEmpty ? (
           <div className="flex h-full flex-col items-center justify-center px-6 text-center">
             {activeLoop ? (
               <p className="max-w-xs text-sm text-text-muted">
@@ -265,7 +359,7 @@ export function ChatView(): JSX.Element {
         ) : (
           // pb clears the fade below: at max scroll the last line has to end
           // ABOVE the gradient, otherwise the final message always looks dimmed.
-          <div className="mx-auto max-w-3xl px-4 pb-6 pt-4">
+          <div ref={contentRef} className="mx-auto max-w-3xl px-4 pb-6 pt-4">
             {messages.length > visibleCount && (
               <p className="mb-3 text-center text-xs text-text-subtle">
                 Scroll up to load older — showing the last {visibleCount} of {messages.length}

@@ -50,6 +50,23 @@ interface RoxyStore {
   chats: Chat[]
   activeChatId: string | null
   messages: Message[]
+  /**
+   * Which chat `messages` actually holds, or `null` while a load is in flight.
+   *
+   * `selectChat` blanks `messages` synchronously and refills it only after an
+   * await, so in between `messages: []` means "not loaded yet" — indistinguishable
+   * from "this session is genuinely empty" if you only look at the array. The
+   * transcript rendered its empty state for both, so every switch flashed a blank
+   * pane, and a load that rejected left it blank permanently (nothing retried, and
+   * the rejection surfaced nowhere).
+   *
+   * Keyed on the chat id rather than a boolean because it also has to be wrong in
+   * the right way: during a switch it names the PREVIOUS chat, which is still not
+   * `activeChatId`, so the pane knows it is stale without a second flag.
+   */
+  messagesChatId: string | null
+  /** Set when a transcript load failed, so the pane can offer a retry. */
+  messagesError: boolean
   /** Chats with an in-flight send, keyed by chat id. Survives switching chats. */
   sendingChats: Record<string, boolean>
   /** In-progress assistant parts per chat while a reply streams in. */
@@ -315,7 +332,7 @@ async function mirrorSharedChat(sessionId: string, rev: number): Promise<void> {
     remoteMirror.deferred = true
     return
   }
-  useRoxyStore.setState({ messages })
+  useRoxyStore.setState({ messages, messagesChatId: sessionId })
 }
 
 /**
@@ -449,8 +466,9 @@ function applySubagentDelta(payload: SubagentDelta): void {
     // The run's transcript landed a moment ago — swap the live bubble for the
     // persisted message, and refresh the sidebar (a finished sub may now prune).
     void (async () => {
+      const subMessages = await api.messages.list(subChatId)
       if (useRoxyStore.getState().activeChatId === subChatId) {
-        useRoxyStore.setState({ messages: await api.messages.list(subChatId) })
+        useRoxyStore.setState({ messages: subMessages, messagesChatId: subChatId })
       }
       await useRoxyStore.getState().refreshChats()
     })()
@@ -562,6 +580,8 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   chats: [],
   activeChatId: null,
   messages: [],
+  messagesChatId: null,
+  messagesError: false,
   sendingChats: {},
   streamingChats: {},
   activeAgentId: DEFAULT_AGENT_ID,
@@ -601,8 +621,9 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         set({ loops: fresh })
         const loop = fresh.find((l) => l.id === loopId)
         if (!loop) return
+        const loopMessages = await api.messages.list(loop.chatId)
         if (get().activeChatId === loop.chatId) {
-          set({ messages: await api.messages.list(loop.chatId) })
+          set({ messages: loopMessages, messagesChatId: loop.chatId })
         }
         // Real heartbeat: run the agent on the loop's prompt in its project each
         // beat — the "infinite prompting" session. Needs a connected provider.
@@ -1020,6 +1041,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     set({
       activeChatId: id,
       messages: [],
+      // `null` = loading. Without this the pane cannot tell a session that is
+      // still fetching from one with no messages, and shows the empty state for
+      // both — a blank flash on every switch.
+      messagesChatId: null,
+      messagesError: false,
       queue: [],
       activeAgentId: chat?.agentId ?? DEFAULT_AGENT_ID
     })
@@ -1031,14 +1057,25 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     // Opening a subagent mid-run: pull what it has already done so the live
     // bubble starts from the whole transcript, not from the next delta.
     if (chat?.kind === 'sub') void hydrateSubagent(id)
-    const [messages, queue] = await Promise.all([api.messages.list(id), api.queue.list(id)])
-    if (get().activeChatId === id) set({ messages, queue })
+    // A rejection here used to leave the pane blank forever: `messages` was
+    // already cleared above, the set below never ran, and the promise floated
+    // back into an onClick where nothing handled it. Now the failure is state,
+    // so the transcript can say so and offer a retry.
+    try {
+      const [messages, queue] = await Promise.all([api.messages.list(id), api.queue.list(id)])
+      if (get().activeChatId === id) set({ messages, queue, messagesChatId: id })
+    } catch (e) {
+      console.error('Failed to load transcript:', e)
+      if (get().activeChatId === id) set({ messagesError: true })
+    }
   },
 
   clearActive: () =>
     set({
       activeChatId: null,
       messages: [],
+      messagesChatId: null,
+      messagesError: false,
       queue: [],
       activeAgentId: DEFAULT_AGENT_ID
     }),
@@ -1449,7 +1486,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
               await get().refreshChats()
               const active = get().activeChatId
               if (active && get().chats.find((c) => c.id === active)?.kind === 'sub') {
-                set({ messages: await api.messages.list(active) })
+                const loaded = await api.messages.list(active)
+                // Re-check: two awaits have passed since `active` was read.
+                if (get().activeChatId === active) {
+                  set({ messages: loaded, messagesChatId: active })
+                }
               }
             })()
           } else if (
@@ -1584,7 +1625,10 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     try {
       await api.context.compact(chatId, provider.id, model)
       await get().refreshChats()
-      if (get().activeChatId === chatId) set({ messages: await api.messages.list(chatId) })
+      const compacted = await api.messages.list(chatId)
+      if (get().activeChatId === chatId) {
+        set({ messages: compacted, messagesChatId: chatId })
+      }
     } catch (e) {
       console.error('Compaction failed:', e)
     } finally {
@@ -1616,7 +1660,9 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const active = get().activeChatId
     if (!active) return
     if (active === update.sessionId || active === update.subChatId) {
-      set({ messages: await api.messages.list(active) })
+      const loaded = await api.messages.list(active)
+      // `active` was captured before the await above — confirm it still holds.
+      if (get().activeChatId === active) set({ messages: loaded, messagesChatId: active })
     }
   }
 }))
