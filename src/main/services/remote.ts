@@ -32,7 +32,7 @@ import type { Message } from '../../shared/types'
 import { reconstructTurn } from '../../shared/tool-history'
 import { PartsFold, partsToContent } from '../../shared/parts'
 import { pruneToolMessages, KEEP_RECENT_TOKENS } from '../../shared/context'
-import { DEFAULT_AGENT_ID } from '../../shared/agents'
+import { contextBudgetFor, resolveSessionConfig } from '../../shared/session-config'
 import * as repo from '../db/repo'
 import { listModels } from './models'
 import { pickDefaultModel } from '../../shared/models'
@@ -453,11 +453,13 @@ async function runTurn(
     // user message was just persisted + bumped above; the reply streams next).
     broadcastDeltaFor(active, { sessionId, kind: 'turn', state: 'running' })
 
-    // Reproduce the renderer's provider/model/budget resolution in the main process.
+    // Resolve THIS SESSION's config, exactly as the renderer does - through the
+    // one shared resolver, so a phone turn runs on the model the desktop shows
+    // for that session rather than whatever was last picked globally.
     const settings = repo.getSettings()
+    const config = resolveSessionConfig(repo.getChat(sessionId), settings)
     const providers = repo.listConnectedProviders()
-    const provider =
-      providers.find((p) => p.id === settings.activeProviderId) ?? providers[0] ?? null
+    const provider = providers.find((p) => p.id === config.providerId) ?? providers[0] ?? null
     if (!provider) {
       sendFrameFor(active, { t: 'error', message: 'No provider is connected on the desktop.' })
       return
@@ -472,16 +474,13 @@ async function runTurn(
       // Offline model catalog — fall back to conservative defaults below.
     }
     const model =
-      settings.activeModel ||
+      (config.providerId === provider.id ? config.model : null) ||
       provider.defaultModel ||
       pickDefaultModel(catalog) ||
       (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
     const info = catalog.find((m) => m.id === model)
     const modelContext = info?.contextLimit ?? 128_000
-    const contextBudget = Math.min(
-      settings.contextLimit ?? Math.min(modelContext, 200_000),
-      modelContext
-    )
+    const contextBudget = contextBudgetFor(config.contextLimit, modelContext)
     const messages = buildRemoteMessages(sessionId, contextBudget, info?.outputLimit ?? 4096)
 
     const result = await runSessionTurn(
@@ -491,9 +490,11 @@ async function runTurn(
         providerId: provider.id,
         model,
         messages,
-        agentId: DEFAULT_AGENT_ID,
+        // The session's own mode: a session left in Plan mode stays read-only
+        // when it is driven from the phone.
+        agentId: config.agentId,
         reasoning: info?.reasoning ?? false,
-        reasoningEffort: settings.reasoningEffort ?? 'high',
+        reasoningEffort: config.reasoningEffort,
         contextLimit: contextBudget
       },
       (event) => {

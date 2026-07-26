@@ -56,6 +56,13 @@ import {
 } from '../src/shared/web'
 import { resolveWorktreeCwd } from '../src/shared/workspace'
 import {
+  contextBudgetFor,
+  effectiveContextMax,
+  parseReasoningEffort,
+  resolveSessionConfig,
+  seedSessionConfig
+} from '../src/shared/session-config'
+import {
   workstreamStripView,
   statusKeyForSession,
   type StripSession
@@ -2914,6 +2921,140 @@ async function main(): Promise<void> {
   check('relativeAge: hours', relativeAge(NOW - 3 * 3_600_000, NOW) === '3h ago')
   check('relativeAge: days', relativeAge(NOW - 4 * 86_400_000, NOW) === '4d ago')
   check('relativeAge: future clamps to now', relativeAge(NOW + 10_000, NOW) === 'just now')
+  // ---- per-session inference config (model/mode/effort/context) ----
+  //
+  // Two rules carry the whole feature, so both are pinned here:
+  //   1. a session that pinned a value keeps it, whatever the globals say
+  //   2. a session that pinned nothing follows the globals (the last-used
+  //      template), which is what every pre-upgrade session does.
+  const gSettings = {
+    onboardingCompleted: true,
+    activeProviderId: 'anthropic',
+    activeModel: 'claude-opus-5',
+    activeAgentId: 'plan',
+    reasoningEffort: 'max' as const,
+    contextLimit: 1_000_000,
+    webSearchApiKey: null
+  }
+  const bare = {
+    providerId: null,
+    model: null,
+    agentId: null,
+    reasoningEffort: null,
+    contextLimit: null
+  }
+
+  const inherited = resolveSessionConfig(bare, gSettings)
+  check(
+    'session config: an unpinned session inherits the global model',
+    inherited.providerId === 'anthropic' && inherited.model === 'claude-opus-5'
+  )
+  check(
+    'session config: an unpinned session inherits effort + context',
+    inherited.reasoningEffort === 'max' && inherited.contextLimit === 1_000_000
+  )
+  check(
+    'session config: mode falls back to the default agent, not the global',
+    resolveSessionConfig(bare, gSettings).agentId === DEFAULT_AGENT_ID
+  )
+
+  const pinned = resolveSessionConfig(
+    {
+      ...bare,
+      providerId: 'openai',
+      model: 'gpt-5',
+      agentId: 'build',
+      reasoningEffort: 'low' as const,
+      contextLimit: 64_000
+    },
+    gSettings
+  )
+  check(
+    'session config: a pinned session ignores the global model',
+    pinned.providerId === 'openai' && pinned.model === 'gpt-5'
+  )
+  check(
+    'session config: a pinned session ignores global effort + context',
+    pinned.reasoningEffort === 'low' && pinned.contextLimit === 64_000
+  )
+  check('session config: a pinned session keeps its own mode', pinned.agentId === 'build')
+
+  // provider + model are ONE decision: a session pinned to a provider must not
+  // borrow another provider's model id, which would 404 the turn.
+  const halfPinned = resolveSessionConfig({ ...bare, providerId: 'openai' }, gSettings)
+  check(
+    "session config: pinning a provider does not inherit the other provider's model",
+    halfPinned.providerId === 'openai' && halfPinned.model === null
+  )
+
+  // No settings at all (fresh install, before onboarding).
+  const empty = resolveSessionConfig(null, null)
+  check(
+    'session config: resolves with no chat and no settings',
+    empty.providerId === null &&
+      empty.model === null &&
+      empty.agentId === DEFAULT_AGENT_ID &&
+      empty.reasoningEffort === 'high' &&
+      empty.contextLimit === null
+  )
+
+  // The seed is what a NEW session is stamped with - the "next session
+  // remembers what I last picked" half of the feature. Unlike the resolver, it
+  // DOES take the global mode.
+  const seeded = seedSessionConfig(gSettings)
+  check(
+    'session seed: a new session inherits the last-used model + mode',
+    seeded.providerId === 'anthropic' &&
+      seeded.model === 'claude-opus-5' &&
+      seeded.agentId === 'plan'
+  )
+  check(
+    'session seed: a new session inherits the last-used effort + context',
+    seeded.reasoningEffort === 'max' && seeded.contextLimit === 1_000_000
+  )
+  check(
+    'session seed: no settings yields the plain defaults',
+    seedSessionConfig(null).agentId === DEFAULT_AGENT_ID &&
+      seedSessionConfig(null).reasoningEffort === 'high'
+  )
+
+  // parseReasoningEffort guards the DB column + IPC payloads.
+  check(
+    'session config: parseReasoningEffort accepts the ladder',
+    parseReasoningEffort('low') === 'low' &&
+      parseReasoningEffort('xhigh') === 'xhigh' &&
+      parseReasoningEffort('max') === 'max'
+  )
+  check(
+    'session config: parseReasoningEffort rejects junk',
+    parseReasoningEffort('turbo') === null &&
+      parseReasoningEffort(null) === null &&
+      parseReasoningEffort(7) === null
+  )
+
+  // Claude reports a 200K base but really exposes 1M - the picker's ceiling.
+  check(
+    'context max: a large reasoning model is raised to 1M',
+    effectiveContextMax({ reasoning: true, contextLimit: 200_000 }) === 1_000_000
+  )
+  check(
+    'context max: a non-reasoning model keeps its real window',
+    effectiveContextMax({ reasoning: false, contextLimit: 200_000 }) === 200_000
+  )
+  check(
+    'context max: a small model is left alone',
+    effectiveContextMax({ reasoning: true, contextLimit: 128_000 }) === 128_000
+  )
+  check(
+    'context budget: defaults to 200K, capped by the model window',
+    contextBudgetFor(null, 1_000_000) === 200_000 && contextBudgetFor(null, 128_000) === 128_000
+  )
+  check(
+    'context budget: a chosen limit never exceeds the model window',
+    contextBudgetFor(1_000_000, 128_000) === 128_000 &&
+      contextBudgetFor(400_000, 1_000_000) === 400_000
+  )
+
   if (fails.length) {
     console.error(`\nSHARED FAILED \u2014 ${fails.length} failing: ${fails.join(', ')}`)
     process.exit(1)

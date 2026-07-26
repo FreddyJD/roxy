@@ -22,6 +22,7 @@ const roxy: RoxyApi = {
     getAll: () => ipcRenderer.invoke(CHANNELS.settingsGetAll),
     setActiveProvider: (providerId, model) =>
       ipcRenderer.invoke(CHANNELS.settingsSetActiveProvider, providerId, model),
+    setActiveAgent: (agentId) => ipcRenderer.invoke(CHANNELS.settingsSetActiveAgent, agentId),
     setReasoningEffort: (level) => ipcRenderer.invoke(CHANNELS.settingsSetReasoningEffort, level),
     setContextLimit: (limit) => ipcRenderer.invoke(CHANNELS.settingsSetContextLimit, limit),
     setWebSearchApiKey: (key) => ipcRenderer.invoke(CHANNELS.settingsSetWebSearchApiKey, key),
@@ -38,7 +39,8 @@ const roxy: RoxyApi = {
     create: (input) => ipcRenderer.invoke(CHANNELS.chatsCreate, input),
     rename: (id, title) => ipcRenderer.invoke(CHANNELS.chatsRename, id, title),
     remove: (id) => ipcRenderer.invoke(CHANNELS.chatsRemove, id),
-    reorder: (workspacePath, ids) => ipcRenderer.invoke(CHANNELS.chatsReorder, workspacePath, ids)
+    reorder: (workspacePath, ids) => ipcRenderer.invoke(CHANNELS.chatsReorder, workspacePath, ids),
+    setConfig: (id, patch) => ipcRenderer.invoke(CHANNELS.chatsSetConfig, id, patch)
   },
   projects: {
     listOrder: () => ipcRenderer.invoke(CHANNELS.projectsListOrder),

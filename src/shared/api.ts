@@ -26,6 +26,7 @@ import type {
 } from './types'
 import type { McpServerConfig } from './mcp'
 import type { ForgeStatusView, ForgeHostView, ForgeKind } from './forge'
+import type { SessionConfigPatch } from './session-config'
 
 /** A configured MCP server merged with its live connection status (for Settings). */
 export interface McpServerView {
@@ -85,6 +86,11 @@ export interface SkillInstallResult {
 export interface CreateChatInput {
   title?: string
   kind?: SessionKind
+  /**
+   * Pin this session to a provider/model instead of inheriting the last-used
+   * ones. Passed together or not at all - a provider without a model resolves
+   * to that provider's default rather than the previous provider's model id.
+   */
   providerId?: string | null
   model?: string | null
   workspacePath?: string | null
@@ -463,6 +469,8 @@ export interface RoxyApi {
   settings: {
     getAll(): Promise<AppSettings>
     setActiveProvider(providerId: string, model: string | null): Promise<AppSettings>
+    /** Remember the last-used mode, so the next NEW session opens in it. */
+    setActiveAgent(agentId: string): Promise<AppSettings>
     setReasoningEffort(level: ReasoningEffort): Promise<AppSettings>
     setContextLimit(limit: number | null): Promise<AppSettings>
     setWebSearchApiKey(key: string | null): Promise<AppSettings>
@@ -479,6 +487,8 @@ export interface RoxyApi {
     create(input?: CreateChatInput): Promise<Chat>
     rename(id: string, title: string): Promise<void>
     remove(id: string): Promise<void>
+    /** Pin part of one session's inference config (model / mode / effort / context). */
+    setConfig(id: string, patch: SessionConfigPatch): Promise<Chat>
     /** Reorder a project's sessions; `ids` is the full project session list, top-to-bottom. */
     reorder(workspacePath: string | null, ids: string[]): Promise<void>
   }

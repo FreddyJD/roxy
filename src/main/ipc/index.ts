@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { CHANNELS } from '../../shared/ipc'
+import type { SessionConfigPatch } from '../../shared/session-config'
 import type {
   CreateChatInput,
   CreateLoopInput,
@@ -114,6 +115,9 @@ export function registerIpc(): void {
     CHANNELS.settingsSetActiveProvider,
     (_e, providerId: string, model: string | null) => repo.setActiveProvider(providerId, model)
   )
+  ipcMain.handle(CHANNELS.settingsSetActiveAgent, (_e, agentId: string) =>
+    repo.setActiveAgent(agentId)
+  )
   ipcMain.handle(CHANNELS.settingsSetReasoningEffort, (_e, level: ReasoningEffort) =>
     repo.setReasoningEffort(level)
   )
@@ -138,6 +142,9 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.chatsCreate, (_e, input?: CreateChatInput) => repo.createChat(input))
   ipcMain.handle(CHANNELS.chatsRename, (_e, id: string, title: string) =>
     repo.renameChat(id, title)
+  )
+  ipcMain.handle(CHANNELS.chatsSetConfig, (_e, id: string, patch: SessionConfigPatch) =>
+    repo.setChatConfig(id, patch)
   )
   ipcMain.handle(CHANNELS.chatsRemove, (_e, id: string) => {
     // Cancel any background subagents this session launched before it's deleted,
