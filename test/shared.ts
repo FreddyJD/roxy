@@ -64,6 +64,13 @@ import {
   placeholderBranchName
 } from '../src/shared/branch'
 import {
+  contextBudgetFor,
+  effectiveContextMax,
+  parseReasoningEffort,
+  resolveSessionConfig,
+  seedSessionConfig
+} from '../src/shared/session-config'
+import {
   workstreamStripView,
   statusKeyForSession,
   shouldAutoWorkstream,
@@ -167,6 +174,16 @@ import {
   BUNDLE_KIND,
   BUNDLE_VERSION
 } from '../src/shared/portable'
+import {
+  parseRemote,
+  splitRemoteUrl,
+  forgeKindForHost,
+  detectHost,
+  branchLifecycle,
+  relativeAge,
+  FORGE_NAMES,
+  type PullRequestView
+} from '../src/shared/forge'
 
 let pass = 0
 const fails: string[] = []
@@ -1136,6 +1153,73 @@ check('renderBackgroundStarted warns against polling', /DO NOT poll/i.test(start
       { type: 'tool', tool: 'bash', state: 'done', output: 'raw' },
       { type: 'text', text: '  done  ' }
     ]) === 'done'
+  )
+}
+
+{
+  // ---- PartsFold.seed: resuming a run already in progress ----
+  // Opening a subagent's session mid-run seeds the renderer's fold from main's
+  // snapshot. Seeding must rebuild the call-id index, or every card inherited
+  // from the snapshot would ignore its own tool-end and spin forever.
+  const live = new PartsFold()
+  live.apply({ type: 'text', delta: 'looking' })
+  live.apply({ type: 'tool-start', callId: 'c1', tool: 'bash', title: 'ls' })
+  live.apply({ type: 'tool-start', callId: 'c2', tool: 'read', title: 'a.ts' })
+  const snapshot = live.parts
+
+  const viewer = new PartsFold()
+  viewer.seed(snapshot)
+  check('fold/seed: adopts the snapshot as-is', viewer.parts.length === 3)
+
+  // The events that arrive AFTER the viewer joined must land on the right cards.
+  viewer.apply({ type: 'tool-end', callId: 'c1', output: 'a.ts b.ts', ok: true })
+  viewer.apply({ type: 'tool-end', callId: 'c2', output: 'contents', ok: false })
+  const c1 = viewer.parts[1]
+  const c2 = viewer.parts[2]
+  check(
+    'fold/seed: a tool started before the viewer joined still resolves',
+    c1.type === 'tool' && c1.state === 'done' && c1.output === 'a.ts b.ts'
+  )
+  check(
+    'fold/seed: and an error result lands on the right card too',
+    c2.type === 'tool' && c2.state === 'error' && c2.output === 'contents'
+  )
+
+  // Prose keeps growing from where the snapshot left off rather than fragmenting.
+  viewer.apply({ type: 'text', delta: ' more' })
+  const tail = viewer.parts[viewer.parts.length - 1]
+  check(
+    'fold/seed: text after a seed appends a fresh part, not a rewrite',
+    tail.type === 'text' && tail.text === ' more'
+  )
+
+  // Seeding is immutable toward the snapshot: main keeps folding into its own
+  // instance, and a viewer must never mutate the array it was handed.
+  check('fold/seed: does not mutate the source parts', snapshot.length === 3)
+}
+
+{
+  // A seeded fold must also resume NESTED transcripts — a subagent's task card
+  // rebuilt from a snapshot has to keep folding its own children correctly.
+  const live = new PartsFold()
+  live.apply({ type: 'tool-start', callId: 't1', tool: 'task', title: 'delegate' })
+  live.apply({
+    type: 'tool-child',
+    callId: 't1',
+    event: { type: 'tool-start', callId: 'n1', tool: 'grep', title: 'find' }
+  })
+  const viewer = new PartsFold()
+  viewer.seed(live.parts)
+  viewer.apply({
+    type: 'tool-child',
+    callId: 't1',
+    event: { type: 'tool-end', callId: 'n1', output: 'found', ok: true }
+  })
+  const card = viewer.parts[0]
+  const nested = card.type === 'tool' ? card.children?.[0] : undefined
+  check(
+    'fold/seed: nested children resume on the right slots',
+    nested?.type === 'tool' && nested.state === 'done' && nested.output === 'found'
   )
 }
 
@@ -2814,6 +2898,516 @@ async function main(): Promise<void> {
   check(
     'activity: idle today → current streak 0',
     aggregateActivity([aNow - 5 * DAYMS], aNow, 182).currentStreak === 0
+  )
+
+  // ---- forge: remote URL parsing ------------------------------------------
+  // Every shape below was taken from a real clone URL the vendors hand out.
+  // These are the highest-risk lines in the feature: a mis-parse means requests
+  // fired at the wrong host or a silent 404, with no obvious cause in the UI.
+
+  check(
+    'forge: scp-like github',
+    (() => {
+      const r = parseRemote('git@github.com:FreddyJD/roxy.git')
+      return r?.kind === 'github' && r.owner === 'FreddyJD' && r.repo === 'roxy'
+    })()
+  )
+  check(
+    'forge: https github + .git',
+    (() => {
+      const r = parseRemote('https://github.com/FreddyJD/roxy.git')
+      return r?.slug === 'FreddyJD/roxy' && r.apiBase === 'https://api.github.com'
+    })()
+  )
+  check(
+    'forge: github enterprise uses /api/v3',
+    (() => {
+      const r = parseRemote('https://github.acme.com/team/app.git')
+      return (
+        r?.kind === 'github' && r.cloud === false && r.apiBase === 'https://github.acme.com/api/v3'
+      )
+    })()
+  )
+  check(
+    'forge: ssh:// github with port',
+    (() => {
+      const r = parseRemote('ssh://git@github.com:22/FreddyJD/roxy.git')
+      return r?.kind === 'github' && r.owner === 'FreddyJD' && r.repo === 'roxy'
+    })()
+  )
+
+  check(
+    'forge: ADO dev.azure.com org/project/_git/repo',
+    (() => {
+      const r = parseRemote('https://dev.azure.com/msft/Edge/_git/browser')
+      return (
+        r?.kind === 'azure-devops' &&
+        r.owner === 'msft' &&
+        r.project === 'Edge' &&
+        r.repo === 'browser'
+      )
+    })()
+  )
+  check(
+    'forge: ADO with org in userinfo',
+    (() => {
+      const r = parseRemote('https://msft@dev.azure.com/msft/Edge/_git/browser')
+      return r?.owner === 'msft' && r.project === 'Edge' && r.repo === 'browser'
+    })()
+  )
+  check(
+    'forge: ADO shorthand /_git/repo implies project==repo',
+    (() => {
+      const r = parseRemote('https://dev.azure.com/msft/_git/browser')
+      return r?.owner === 'msft' && r.project === 'browser' && r.repo === 'browser'
+    })()
+  )
+  check(
+    'forge: ADO ssh v3 form',
+    (() => {
+      const r = parseRemote('git@ssh.dev.azure.com:v3/msft/Edge/browser')
+      return (
+        r?.kind === 'azure-devops' &&
+        r.owner === 'msft' &&
+        r.project === 'Edge' &&
+        r.repo === 'browser'
+      )
+    })()
+  )
+  check(
+    'forge: ADO legacy visualstudio.com',
+    (() => {
+      const r = parseRemote('https://msft.visualstudio.com/Edge/_git/browser')
+      return (
+        r?.kind === 'azure-devops' &&
+        r.owner === 'msft' &&
+        r.project === 'Edge' &&
+        r.repo === 'browser'
+      )
+    })()
+  )
+  check(
+    'forge: ADO legacy DefaultCollection is skipped',
+    (() => {
+      const r = parseRemote('https://msft.visualstudio.com/DefaultCollection/Edge/_git/browser')
+      return r?.project === 'Edge' && r.repo === 'browser'
+    })()
+  )
+  check(
+    'forge: ADO project with a space survives',
+    (() => {
+      const r = parseRemote('https://dev.azure.com/msft/My%20Project/_git/app')
+      return r?.project === 'My%20Project' && r.repo === 'app'
+    })()
+  )
+
+  check(
+    'forge: gitlab nested groups keep full namespace',
+    (() => {
+      const r = parseRemote('https://gitlab.com/group/subgroup/app.git')
+      return r?.kind === 'gitlab' && r.owner === 'group/subgroup' && r.repo === 'app'
+    })()
+  )
+  check(
+    'forge: gitlab self-hosted api/v4',
+    (() => {
+      const r = parseRemote('git@gitlab.acme.com:team/app.git')
+      return (
+        r?.kind === 'gitlab' && r.apiBase === 'https://gitlab.acme.com/api/v4' && r.cloud === false
+      )
+    })()
+  )
+
+  check(
+    'forge: bitbucket cloud',
+    (() => {
+      const r = parseRemote('https://bitbucket.org/acme/app.git')
+      return (
+        r?.kind === 'bitbucket' && r.cloud === true && r.apiBase === 'https://api.bitbucket.org/2.0'
+      )
+    })()
+  )
+  check(
+    'forge: bitbucket server /scm/ prefix stripped',
+    (() => {
+      const r = parseRemote('https://bitbucket.acme.com/scm/PROJ/app.git')
+      return r?.kind === 'bitbucket' && r.cloud === false && r.owner === 'PROJ' && r.repo === 'app'
+    })()
+  )
+
+  check('forge: local path is not a forge', parseRemote('/home/me/repo.git') === null)
+  check('forge: file:// is not a forge', parseRemote('file:///srv/repo.git') === null)
+  check('forge: unknown host is not guessed', parseRemote('git@example.com:me/app.git') === null)
+  check('forge: empty string is safe', parseRemote('') === null)
+  check('forge: junk is safe', parseRemote('not a url at all') === null)
+
+  check(
+    'forge: splitRemoteUrl scp colon is not a port',
+    (() => {
+      const s = splitRemoteUrl('git@github.com:FreddyJD/roxy.git')
+      return s?.host === 'github.com' && s.path === 'FreddyJD/roxy'
+    })()
+  )
+  check('forge: host detection is case-insensitive', forgeKindForHost('GitHub.COM') === 'github')
+  check('forge: every kind has a display name', Object.keys(FORGE_NAMES).length === 4)
+
+  // ---- forge: branch lifecycle --------------------------------------------
+  const noSync = { ahead: 0, behind: 0, hasUpstream: false, dirty: false }
+  const mkPr = (over: Partial<PullRequestView>): PullRequestView => ({
+    number: 42,
+    title: 't',
+    state: 'open',
+    url: 'u',
+    sourceBranch: 's',
+    targetBranch: 'main',
+    author: 'a',
+    createdAt: 0,
+    updatedAt: 0,
+    checks: null,
+    review: null,
+    ...over
+  })
+
+  check(
+    'lifecycle: no upstream is local',
+    (() => {
+      const v = branchLifecycle({ sync: noSync, pr: null, forgeKnown: false })
+      return v.phase === 'unpublished' && v.label === 'local' && v.action === 'push'
+    })()
+  )
+  check(
+    'lifecycle: ahead shows the count',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true, ahead: 3 },
+        pr: null,
+        forgeKnown: true
+      })
+      return v.phase === 'ahead' && v.label === '\u21913' && v.action === 'push'
+    })()
+  )
+  check(
+    'lifecycle: behind suggests a pull',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true, behind: 2 },
+        pr: null,
+        forgeKnown: true
+      })
+      return v.phase === 'behind' && v.action === 'pull' && v.tone === 'warning'
+    })()
+  )
+  check(
+    'lifecycle: synced + forge known offers a PR',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true },
+        pr: null,
+        forgeKnown: true
+      })
+      return v.phase === 'synced' && v.action === 'open-pr'
+    })()
+  )
+  check(
+    'lifecycle: synced + forge UNKNOWN offers nothing',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true },
+        pr: null,
+        forgeKnown: false
+      })
+      return v.phase === 'synced' && v.action === null
+    })()
+  )
+  check(
+    'lifecycle: open PR shows its number',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true },
+        pr: mkPr({}),
+        forgeKnown: true
+      })
+      return v.phase === 'open' && v.label === '#42' && v.action === 'view-pr'
+    })()
+  )
+  check(
+    'lifecycle: failing checks turn the chip danger',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true },
+        pr: mkPr({ checks: 'failing' }),
+        forgeKnown: true
+      })
+      return v.tone === 'danger'
+    })()
+  )
+  check(
+    'lifecycle: changes requested is a warning',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true },
+        pr: mkPr({ review: 'changes_requested' }),
+        forgeKnown: true
+      })
+      return v.tone === 'warning'
+    })()
+  )
+  check(
+    'lifecycle: draft reads as draft',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true },
+        pr: mkPr({ state: 'draft' }),
+        forgeKnown: true
+      })
+      return v.phase === 'draft' && v.label === '#42 draft'
+    })()
+  )
+  // The important one: a merged PR is the truth even when the local branch
+  // still looks unpushed. Showing "local" on merged work is the bug this guards.
+  check(
+    'lifecycle: merged PR outranks stale local state',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, ahead: 9 },
+        pr: mkPr({ state: 'merged' }),
+        forgeKnown: true
+      })
+      return v.phase === 'merged' && v.label === 'merged' && v.tone === 'success'
+    })()
+  )
+  check(
+    'lifecycle: closed PR outranks ahead count',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true, ahead: 4 },
+        pr: mkPr({ state: 'closed' }),
+        forgeKnown: true
+      })
+      return v.phase === 'closed'
+    })()
+  )
+
+  // ---- forge: unknown hosts + user override -------------------------------
+  // The separation that matters: a LOCAL path is "no host, show nothing", while
+  // an unrecognised DOMAIN is "a real server, ask the user once". Collapsing
+  // them would break self-hosted GitLab/Bitbucket behind a corporate domain -
+  // the most common case in exactly the enterprises this is for.
+
+  check('detect: local path has no host at all', detectHost('/home/me/repo.git') === null)
+  check(
+    'detect: bare host with no repo path is unusable',
+    detectHost('https://git.mycorp.com') === null
+  )
+  check(
+    'detect: known host resolves without asking',
+    (() => {
+      const p = detectHost('https://github.com/a/b.git')
+      return p?.host === 'github.com' && p.kind === 'github'
+    })()
+  )
+  check(
+    'detect: unknown domain is a real host awaiting an answer',
+    (() => {
+      const p = detectHost('https://git.mycorp.com/team/app.git')
+      return p?.host === 'git.mycorp.com' && p.kind === null
+    })()
+  )
+  check(
+    'detect: scp-like unknown host still probes',
+    (() => {
+      const p = detectHost('git@git.mycorp.com:team/app.git')
+      return p?.host === 'git.mycorp.com' && p.kind === null
+    })()
+  )
+
+  check(
+    'override: applies to an unrecognised host',
+    (() => {
+      const r = parseRemote('https://git.mycorp.com/team/app.git', 'gitlab')
+      return (
+        r?.kind === 'gitlab' &&
+        r.owner === 'team' &&
+        r.repo === 'app' &&
+        r.apiBase === 'https://git.mycorp.com/api/v4'
+      )
+    })()
+  )
+  check(
+    'override: unknown host without one stays unresolved',
+    (() => {
+      return parseRemote('https://git.mycorp.com/team/app.git') === null
+    })()
+  )
+  // The safety property: a saved override must never hijack a host we can
+  // identify, or one bad guess would silently mis-route github.com forever.
+  check(
+    'override: never overrides a KNOWN host',
+    (() => {
+      const r = parseRemote('https://github.com/a/b.git', 'gitlab')
+      return r?.kind === 'github'
+    })()
+  )
+  check(
+    'override: null behaves as absent',
+    (() => {
+      return parseRemote('https://git.mycorp.com/team/app.git', null) === null
+    })()
+  )
+  check(
+    'override: cannot rescue a non-host',
+    (() => {
+      return parseRemote('/home/me/repo.git', 'github') === null
+    })()
+  )
+  check(
+    'override: azure-devops shape still parses under override',
+    (() => {
+      const r = parseRemote(
+        'https://tfs.mycorp.com/DefaultCollection/Proj/_git/app',
+        'azure-devops'
+      )
+      return r?.kind === 'azure-devops' && r.project === 'Proj' && r.repo === 'app'
+    })()
+  )
+  const NOW = 1_700_000_000_000
+  check('relativeAge: seconds', relativeAge(NOW - 5_000, NOW) === 'just now')
+  check('relativeAge: minutes', relativeAge(NOW - 5 * 60_000, NOW) === '5m ago')
+  check('relativeAge: hours', relativeAge(NOW - 3 * 3_600_000, NOW) === '3h ago')
+  check('relativeAge: days', relativeAge(NOW - 4 * 86_400_000, NOW) === '4d ago')
+  check('relativeAge: future clamps to now', relativeAge(NOW + 10_000, NOW) === 'just now')
+  // ---- per-session inference config (model/mode/effort/context) ----
+  //
+  // Two rules carry the whole feature, so both are pinned here:
+  //   1. a session that pinned a value keeps it, whatever the globals say
+  //   2. a session that pinned nothing follows the globals (the last-used
+  //      template), which is what every pre-upgrade session does.
+  const gSettings = {
+    onboardingCompleted: true,
+    activeProviderId: 'anthropic',
+    activeModel: 'claude-opus-5',
+    activeAgentId: 'plan',
+    reasoningEffort: 'max' as const,
+    contextLimit: 1_000_000,
+    webSearchApiKey: null
+  }
+  const bare = {
+    providerId: null,
+    model: null,
+    agentId: null,
+    reasoningEffort: null,
+    contextLimit: null
+  }
+
+  const inherited = resolveSessionConfig(bare, gSettings)
+  check(
+    'session config: an unpinned session inherits the global model',
+    inherited.providerId === 'anthropic' && inherited.model === 'claude-opus-5'
+  )
+  check(
+    'session config: an unpinned session inherits effort + context',
+    inherited.reasoningEffort === 'max' && inherited.contextLimit === 1_000_000
+  )
+  check(
+    'session config: mode falls back to the default agent, not the global',
+    resolveSessionConfig(bare, gSettings).agentId === DEFAULT_AGENT_ID
+  )
+
+  const pinned = resolveSessionConfig(
+    {
+      ...bare,
+      providerId: 'openai',
+      model: 'gpt-5',
+      agentId: 'build',
+      reasoningEffort: 'low' as const,
+      contextLimit: 64_000
+    },
+    gSettings
+  )
+  check(
+    'session config: a pinned session ignores the global model',
+    pinned.providerId === 'openai' && pinned.model === 'gpt-5'
+  )
+  check(
+    'session config: a pinned session ignores global effort + context',
+    pinned.reasoningEffort === 'low' && pinned.contextLimit === 64_000
+  )
+  check('session config: a pinned session keeps its own mode', pinned.agentId === 'build')
+
+  // provider + model are ONE decision: a session pinned to a provider must not
+  // borrow another provider's model id, which would 404 the turn.
+  const halfPinned = resolveSessionConfig({ ...bare, providerId: 'openai' }, gSettings)
+  check(
+    "session config: pinning a provider does not inherit the other provider's model",
+    halfPinned.providerId === 'openai' && halfPinned.model === null
+  )
+
+  // No settings at all (fresh install, before onboarding).
+  const empty = resolveSessionConfig(null, null)
+  check(
+    'session config: resolves with no chat and no settings',
+    empty.providerId === null &&
+      empty.model === null &&
+      empty.agentId === DEFAULT_AGENT_ID &&
+      empty.reasoningEffort === 'high' &&
+      empty.contextLimit === null
+  )
+
+  // The seed is what a NEW session is stamped with - the "next session
+  // remembers what I last picked" half of the feature. Unlike the resolver, it
+  // DOES take the global mode.
+  const seeded = seedSessionConfig(gSettings)
+  check(
+    'session seed: a new session inherits the last-used model + mode',
+    seeded.providerId === 'anthropic' &&
+      seeded.model === 'claude-opus-5' &&
+      seeded.agentId === 'plan'
+  )
+  check(
+    'session seed: a new session inherits the last-used effort + context',
+    seeded.reasoningEffort === 'max' && seeded.contextLimit === 1_000_000
+  )
+  check(
+    'session seed: no settings yields the plain defaults',
+    seedSessionConfig(null).agentId === DEFAULT_AGENT_ID &&
+      seedSessionConfig(null).reasoningEffort === 'high'
+  )
+
+  // parseReasoningEffort guards the DB column + IPC payloads.
+  check(
+    'session config: parseReasoningEffort accepts the ladder',
+    parseReasoningEffort('low') === 'low' &&
+      parseReasoningEffort('xhigh') === 'xhigh' &&
+      parseReasoningEffort('max') === 'max'
+  )
+  check(
+    'session config: parseReasoningEffort rejects junk',
+    parseReasoningEffort('turbo') === null &&
+      parseReasoningEffort(null) === null &&
+      parseReasoningEffort(7) === null
+  )
+
+  // Claude reports a 200K base but really exposes 1M - the picker's ceiling.
+  check(
+    'context max: a large reasoning model is raised to 1M',
+    effectiveContextMax({ reasoning: true, contextLimit: 200_000 }) === 1_000_000
+  )
+  check(
+    'context max: a non-reasoning model keeps its real window',
+    effectiveContextMax({ reasoning: false, contextLimit: 200_000 }) === 200_000
+  )
+  check(
+    'context max: a small model is left alone',
+    effectiveContextMax({ reasoning: true, contextLimit: 128_000 }) === 128_000
+  )
+  check(
+    'context budget: defaults to 200K, capped by the model window',
+    contextBudgetFor(null, 1_000_000) === 200_000 && contextBudgetFor(null, 128_000) === 128_000
+  )
+  check(
+    'context budget: a chosen limit never exceeds the model window',
+    contextBudgetFor(1_000_000, 128_000) === 128_000 &&
+      contextBudgetFor(400_000, 1_000_000) === 400_000
   )
 
   if (fails.length) {

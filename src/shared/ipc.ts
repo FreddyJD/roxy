@@ -2,6 +2,7 @@
 export const CHANNELS = {
   settingsGetAll: 'settings:getAll',
   settingsSetActiveProvider: 'settings:setActiveProvider',
+  settingsSetActiveAgent: 'settings:setActiveAgent',
   settingsSetReasoningEffort: 'settings:setReasoningEffort',
   settingsSetContextLimit: 'settings:setContextLimit',
   settingsSetWebSearchApiKey: 'settings:setWebSearchApiKey',
@@ -19,6 +20,8 @@ export const CHANNELS = {
   chatsRename: 'chats:rename',
   chatsRemove: 'chats:remove',
   chatsReorder: 'chats:reorder',
+  /** Pin part of a single session's inference config (model/mode/effort/context). */
+  chatsSetConfig: 'chats:setConfig',
 
   /** Project (workspace) display order — read + drag-to-reorder. */
   projectsListOrder: 'projects:listOrder',
@@ -88,6 +91,15 @@ export const CHANNELS = {
   /** renderer -> main: cancel a running background task */
   tasksCancel: 'tasks:cancel',
 
+  /** main -> renderer: one live step of a subagent, tagged with ITS OWN session id */
+  subagentDelta: 'subagent:delta',
+  /** renderer -> main: catch-up parts for a subagent already mid-run */
+  subagentSnapshot: 'subagent:snapshot',
+  /** renderer -> main: every subagent currently running (window (re)load) */
+  subagentListRunning: 'subagent:listRunning',
+  /** renderer -> main: which chat is on screen, so a viewed sub session isn't pruned */
+  subagentSetViewed: 'subagent:setViewed',
+
   modelsList: 'models:list',
 
   contextCompact: 'context:compact',
@@ -132,6 +144,12 @@ export const CHANNELS = {
   gitPruneWorktrees: 'git:prune-worktrees',
   gitRenameBranch: 'git:rename-branch',
 
+  /** Forge = the git host (GitHub/Azure DevOps/GitLab/Bitbucket) behind `origin`. */
+  forgeStatus: 'forge:status',
+  forgePush: 'forge:push',
+  forgeCreateUrl: 'forge:create-url',
+  forgeListHosts: 'forge:list-hosts',
+  forgeSetHostKind: 'forge:set-host-kind',
   remoteStart: 'remote:start',
   remoteStop: 'remote:stop',
   remoteStatus: 'remote:status',

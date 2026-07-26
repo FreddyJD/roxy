@@ -5,6 +5,7 @@ import type { AppVersions, ConnectedProvider } from '@shared/types'
 import type { UpdateInfo } from '@shared/api'
 import { AUTH_LABELS } from '@shared/providers'
 import { api } from '../lib/api'
+import { CodeHosts } from '../components/CodeHosts'
 import { Button, Switch } from '../components/ui'
 import { cn } from '../lib/cn'
 import {
@@ -254,6 +255,15 @@ export default function Settings(): JSX.Element {
         </div>
       </section>
 
+      {/* Distinct from "Providers" above on purpose: that list is who runs the
+          MODEL, this one is where the CODE lives. GitHub appears in both, as
+          two unrelated accounts. */}
+      <section className="mb-8">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          Code hosts
+        </h2>
+        <CodeHosts />
+      </section>
       <section className="mb-8">
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
           MCP servers

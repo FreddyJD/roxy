@@ -9,6 +9,7 @@ import type {
   BrowserTab,
   RemoteState,
   RemoteDelta,
+  SubagentDelta,
   UpdateState
 } from '../shared/api'
 
@@ -21,6 +22,7 @@ const roxy: RoxyApi = {
     getAll: () => ipcRenderer.invoke(CHANNELS.settingsGetAll),
     setActiveProvider: (providerId, model) =>
       ipcRenderer.invoke(CHANNELS.settingsSetActiveProvider, providerId, model),
+    setActiveAgent: (agentId) => ipcRenderer.invoke(CHANNELS.settingsSetActiveAgent, agentId),
     setReasoningEffort: (level) => ipcRenderer.invoke(CHANNELS.settingsSetReasoningEffort, level),
     setContextLimit: (limit) => ipcRenderer.invoke(CHANNELS.settingsSetContextLimit, limit),
     setWebSearchApiKey: (key) => ipcRenderer.invoke(CHANNELS.settingsSetWebSearchApiKey, key),
@@ -39,7 +41,8 @@ const roxy: RoxyApi = {
     create: (input) => ipcRenderer.invoke(CHANNELS.chatsCreate, input),
     rename: (id, title) => ipcRenderer.invoke(CHANNELS.chatsRename, id, title),
     remove: (id) => ipcRenderer.invoke(CHANNELS.chatsRemove, id),
-    reorder: (workspacePath, ids) => ipcRenderer.invoke(CHANNELS.chatsReorder, workspacePath, ids)
+    reorder: (workspacePath, ids) => ipcRenderer.invoke(CHANNELS.chatsReorder, workspacePath, ids),
+    setConfig: (id, patch) => ipcRenderer.invoke(CHANNELS.chatsSetConfig, id, patch)
   },
   projects: {
     listOrder: () => ipcRenderer.invoke(CHANNELS.projectsListOrder),
@@ -142,6 +145,17 @@ const roxy: RoxyApi = {
       return () => ipcRenderer.removeListener(CHANNELS.taskUpdate, handler)
     }
   },
+  subagents: {
+    snapshot: (subChatId) => ipcRenderer.invoke(CHANNELS.subagentSnapshot, subChatId),
+    listRunning: () => ipcRenderer.invoke(CHANNELS.subagentListRunning),
+    setViewed: (chatId) => ipcRenderer.invoke(CHANNELS.subagentSetViewed, chatId),
+    onDelta: (callback) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: SubagentDelta): void =>
+        callback(payload)
+      ipcRenderer.on(CHANNELS.subagentDelta, handler)
+      return () => ipcRenderer.removeListener(CHANNELS.subagentDelta, handler)
+    }
+  },
   models: {
     list: (providerId) => ipcRenderer.invoke(CHANNELS.modelsList, providerId)
   },
@@ -190,6 +204,13 @@ const roxy: RoxyApi = {
     removeWorktree: (path, force) => ipcRenderer.invoke(CHANNELS.gitRemoveWorktree, path, force),
     renameBranch: (sessionId, to) => ipcRenderer.invoke(CHANNELS.gitRenameBranch, sessionId, to),
     pruneWorktrees: (cwd, dryRun) => ipcRenderer.invoke(CHANNELS.gitPruneWorktrees, cwd, dryRun)
+  },
+  forge: {
+    status: (cwd, force) => ipcRenderer.invoke(CHANNELS.forgeStatus, cwd, force),
+    push: (cwd) => ipcRenderer.invoke(CHANNELS.forgePush, cwd),
+    createUrl: (cwd) => ipcRenderer.invoke(CHANNELS.forgeCreateUrl, cwd),
+    listHosts: () => ipcRenderer.invoke(CHANNELS.forgeListHosts),
+    setHostKind: (host, kind) => ipcRenderer.invoke(CHANNELS.forgeSetHostKind, host, kind)
   },
   remote: {
     start: (input) => ipcRenderer.invoke(CHANNELS.remoteStart, input),

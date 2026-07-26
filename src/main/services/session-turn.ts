@@ -13,6 +13,7 @@ import type { LlmEvent, LlmResult, LlmStartInput } from '../../shared/api'
 import * as repo from '../db/repo'
 import { runAgentTurn } from '../harness'
 import { activeBackgroundSubChatIds } from './background-tasks'
+import { protectedSubChatIds } from './subagent-stream'
 import { setLabel as setBrowserLabel } from './browser'
 import { sessionCwd } from './workspace'
 import { materializePendingWorktree } from './worktree'
@@ -36,6 +37,16 @@ function safeSessionCwd(sessionId: string): string {
       return ''
     }
   }
+}
+
+/**
+ * Sub sessions that must survive the end-of-turn prune: any with a detached
+ * background job still running, any still streaming, and the one on screen.
+ */
+function keepSubchats(): Set<string> {
+  const keep = protectedSubChatIds()
+  for (const id of activeBackgroundSubChatIds()) keep.add(id)
+  return keep
 }
 
 /**
@@ -82,9 +93,11 @@ export async function runSessionTurn(
       emit
     })
     // The turn's subagents are one-shot — drop any with nothing queued so they
-    // don't linger in the sidebar after the work is done. Sub-sessions with a
-    // still-running background task are kept (Phase 11) until it reports back.
-    repo.pruneSubchats(input.sessionId, activeBackgroundSubChatIds())
+    // don't linger in the sidebar after the work is done. Spared: sub sessions
+    // with a still-running background task (Phase 11), one still streaming, and
+    // whichever one the user currently has open (pruning a transcript out from
+    // under someone reading it is the one thing this sweep must never do).
+    repo.pruneSubchats(input.sessionId, keepSubchats())
     return { ok: true }
   } catch (e) {
     if (signal.aborted) return { ok: false, error: 'Stopped.' }

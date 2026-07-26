@@ -26,6 +26,11 @@ import type {
   WorktreeIntent
 } from '../../shared/types'
 import type { CreateChatInput, CreateLoopInput } from '../../shared/api'
+import {
+  parseReasoningEffort,
+  seedSessionConfig,
+  type SessionConfigPatch
+} from '../../shared/session-config'
 import { getDb } from './database'
 import { decryptSecret, encryptSecret } from '../services/secure'
 
@@ -49,6 +54,9 @@ interface ChatRow {
   kind: string
   provider_id: string | null
   model: string | null
+  agent_id: string | null
+  reasoning_effort: string | null
+  context_limit: number | null
   workspace_path: string | null
   worktree_path: string | null
   worktree_pending: string | null
@@ -92,6 +100,7 @@ export function getSettings(): AppSettings {
     onboardingCompleted: map.get('onboarding_completed') === '1',
     activeProviderId: map.get('active_provider_id') ?? null,
     activeModel: map.get('active_model') ?? null,
+    activeAgentId: map.get('active_agent_id') ?? null,
     reasoningEffort: ((): ReasoningEffort => {
       const v = map.get('reasoning_effort')
       return v === 'low' || v === 'medium' || v === 'high' || v === 'xhigh' || v === 'max'
@@ -122,9 +131,59 @@ function setSetting(key: string, value: string | null): void {
   ).run(key, value)
 }
 
+// ---- Forge host overrides ----------------------------------------------
+// Which software an UNRECOGNISED git host runs (`git.mycorp.com` -> gitlab).
+// Only consulted when auto-detection fails, so a stale or mistaken answer can
+// never mis-route a well-known host.
+//
+// Stored as one JSON blob in `settings` rather than its own table: it's a
+// handful of string pairs, it has no relations, and it therefore needs no
+// migration - which matters because migrations here are append-only forever.
+// A dedicated table would be the right call the moment this grows per-host
+// settings beyond `kind`.
+
+const FORGE_HOSTS_KEY = 'forge_host_kinds'
+
+export function getForgeHostKinds(): Record<string, string> {
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(FORGE_HOSTS_KEY) as
+    | { value: string }
+    | undefined
+  if (!row?.value) return {}
+  try {
+    const parsed: unknown = JSON.parse(row.value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k.toLowerCase()] = v
+    }
+    return out
+  } catch {
+    // Corrupt JSON degrades to "nothing is overridden", which just means the
+    // user is asked again - never a crash on startup.
+    return {}
+  }
+}
+
+/** Record (or clear, with null) which software a host runs. */
+export function setForgeHostKind(host: string, kind: string | null): void {
+  const map = getForgeHostKinds()
+  const key = host.toLowerCase()
+  if (kind === null) delete map[key]
+  else map[key] = kind
+  setSetting(FORGE_HOSTS_KEY, Object.keys(map).length ? JSON.stringify(map) : null)
+}
 export function setActiveProvider(providerId: string, model: string | null): AppSettings {
   setSetting('active_provider_id', providerId)
   setSetting('active_model', model)
+  return getSettings()
+}
+
+/**
+ * Remember the last-used primary agent (mode), so the NEXT new session opens in
+ * it. The open session keeps its own `agent_id`; this is only the template.
+ */
+export function setActiveAgent(agentId: string): AppSettings {
+  setSetting('active_agent_id', agentId)
   return getSettings()
 }
 
@@ -339,6 +398,9 @@ function rowToChat(row: ChatRow): Chat {
     kind: row.kind as SessionKind,
     providerId: row.provider_id,
     model: row.model,
+    agentId: row.agent_id,
+    reasoningEffort: parseReasoningEffort(row.reasoning_effort),
+    contextLimit: row.context_limit,
     workspacePath: row.workspace_path,
     worktreePath: row.worktree_path,
     worktreePending: parseWorktreeIntent(row.worktree_pending),
@@ -469,17 +531,30 @@ export function createChat(input: CreateChatInput = {}): Chat {
   // Parked, not acted on: the worktree is created on the first turn so an
   // abandoned session never leaves a directory behind.
   const pending = input.worktree ?? null
+  // Stamp the session with the config the user last chose, so a new session
+  // picks up where the previous one left off - and then owns that config
+  // independently, because it is a COPY: changing the model here later must
+  // never reach back into sessions already running on something else. An
+  // explicit input (the remote/test callers) wins over the inherited default.
+  const seed = seedSessionConfig(getSettings())
+  const providerId = input.providerId ?? seed.providerId
+  // Model follows its provider: pairing an explicit provider with the seeded
+  // model would cross e.g. anthropic with a `gpt-4o` id, which 404s the turn.
+  const model = input.model ?? (input.providerId ? null : seed.model)
   getDb()
     .prepare(
-      `INSERT INTO chats(id, title, kind, provider_id, model, workspace_path, worktree_pending, parent_id, sort_order, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO chats(id, title, kind, provider_id, model, agent_id, reasoning_effort, context_limit, workspace_path, worktree_pending, parent_id, sort_order, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
       input.title?.trim() || 'New chat',
       input.kind ?? 'main',
-      input.providerId ?? null,
-      input.model ?? null,
+      providerId,
+      model,
+      seed.agentId,
+      seed.reasoningEffort,
+      seed.contextLimit,
       input.workspacePath ?? null,
       pending ? JSON.stringify(pending) : null,
       input.parentId ?? null,
@@ -570,6 +645,47 @@ export function setChatSummary(chatId: string, summary: string, throughAt: numbe
       'UPDATE chats SET context_summary = ?, context_summary_at = ?, updated_at = ? WHERE id = ?'
     )
     .run(summary, throughAt, Date.now(), chatId)
+  const chat = getChat(chatId)
+  if (!chat) throw new Error('Chat not found')
+  return chat
+}
+
+/**
+ * Pin part of a session's inference config (any subset). This is what the
+ * composer pickers write, alongside the matching global setting that seeds the
+ * next new session.
+ *
+ * `providerId` and `model` are written TOGETHER whenever either is present, so
+ * a session can never end up holding one provider with another's model id.
+ * Passing null for a field clears the override, returning that field to the
+ * global default.
+ */
+export function setChatConfig(chatId: string, patch: SessionConfigPatch): Chat {
+  const sets: string[] = []
+  const vals: (string | number | null)[] = []
+  if ('providerId' in patch || 'model' in patch) {
+    sets.push('provider_id = ?', 'model = ?')
+    vals.push(patch.providerId ?? null, patch.model ?? null)
+  }
+  if ('agentId' in patch) {
+    sets.push('agent_id = ?')
+    vals.push(patch.agentId ?? null)
+  }
+  if ('reasoningEffort' in patch) {
+    sets.push('reasoning_effort = ?')
+    vals.push(patch.reasoningEffort ?? null)
+  }
+  if ('contextLimit' in patch) {
+    sets.push('context_limit = ?')
+    vals.push(patch.contextLimit ?? null)
+  }
+  if (sets.length) {
+    // Deliberately does NOT touch updated_at: choosing a model is not activity,
+    // and bumping it would reshuffle the sidebar every time a picker is opened.
+    getDb()
+      .prepare(`UPDATE chats SET ${sets.join(', ')} WHERE id = ?`)
+      .run(...vals, chatId)
+  }
   const chat = getChat(chatId)
   if (!chat) throw new Error('Chat not found')
   return chat

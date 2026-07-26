@@ -54,6 +54,7 @@ export function Sidebar(): JSX.Element {
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const selectChat = useRoxyStore((s) => s.selectChat)
   const gitStatus = useRoxyStore((s) => s.gitStatus)
+  const runningSubagents = useRoxyStore((s) => s.runningSubagents)
   const newSession = useRoxyStore((s) => s.newSession)
   const newSessionInProject = useRoxyStore((s) => s.newSessionInProject)
   const deleteChat = useRoxyStore((s) => s.deleteChat)
@@ -574,6 +575,10 @@ export function Sidebar(): JSX.Element {
                             const sending = !!sendingChats[chat.id]
                             const subs = subsByParent.get(chat.id) ?? []
                             const subsOpen = expandedSubs.has(chat.id)
+                            // How many of this session's delegates are working
+                            // right now — so a COLLAPSED parent still shows that
+                            // something is happening underneath it.
+                            const liveSubs = subs.filter((x) => runningSubagents[x.id]).length
                             return (
                               <li
                                 key={chat.id}
@@ -648,7 +653,13 @@ export function Sidebar(): JSX.Element {
                                     <button
                                       onClick={() => selectChat(chat.id)}
                                       onDoubleClick={() => beginRename(chat)}
-                                      title={chat.branch ? `${chat.title} — ${chat.branch}` : chat.title}
+                                      title={
+                                        chat.branch
+                                          ? dirtyById.has(chat.id)
+                                            ? `${chat.title} - ${chat.branch} (uncommitted changes)`
+                                            : `${chat.title} - ${chat.branch}`
+                                          : chat.title
+                                      }
                                       className="min-w-0 flex-1 text-left"
                                     >
                                       <span className="block truncate">{chat.title}</span>
@@ -658,11 +669,12 @@ export function Sidebar(): JSX.Element {
                                         <span className="flex items-center gap-1 text-[10px] text-text-subtle">
                                           <GitBranch className="h-2.5 w-2.5 shrink-0 opacity-70" />
                                           <span className="truncate">{chat.branch}</span>
+                                          {/* Uncommitted work. The label lives on the row
+                                              tooltip above, not here: a 4px dot is too small
+                                              to hover deliberately, so its own `title` would
+                                              never be seen. */}
                                           {dirtyById.has(chat.id) && (
-                                            <span
-                                              className="h-1 w-1 shrink-0 rounded-full bg-warning"
-                                              title="Uncommitted changes"
-                                            />
+                                            <span className="h-1 w-1 shrink-0 rounded-full bg-warning" />
                                           )}
                                         </span>
                                       )}
@@ -671,8 +683,15 @@ export function Sidebar(): JSX.Element {
                                   {subs.length > 0 && (
                                     <button
                                       onClick={() => toggleSubs(chat.id)}
-                                      title={`${subs.length} subagent${subs.length === 1 ? '' : 's'} — tap to ${subsOpen ? 'hide' : 'view'}`}
-                                      className="flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-surface-2 px-1 text-[10px] font-medium tabular-nums text-text-subtle transition-colors hover:text-text"
+                                      title={`${subs.length} subagent${subs.length === 1 ? '' : 's'}${
+                                        liveSubs > 0 ? ` (${liveSubs} working)` : ''
+                                      } — tap to ${subsOpen ? 'hide' : 'view'}`}
+                                      className={cn(
+                                        'flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums transition-colors',
+                                        liveSubs > 0
+                                          ? 'bg-accent/10 text-accent'
+                                          : 'bg-surface-2 text-text-subtle hover:text-text'
+                                      )}
                                     >
                                       {subs.length}
                                     </button>
@@ -697,7 +716,11 @@ export function Sidebar(): JSX.Element {
                                               : 'text-text-muted hover:bg-white/5 hover:text-text'
                                           )}
                                         >
-                                          <Hammer className="h-3 w-3 shrink-0 opacity-70" />
+                                          {runningSubagents[sub.id] ? (
+                                            <BrailleSpinner className="shrink-0 text-xs text-accent" />
+                                          ) : (
+                                            <Hammer className="h-3 w-3 shrink-0 opacity-70" />
+                                          )}
                                           {editingId === sub.id ? (
                                             <input
                                               autoFocus

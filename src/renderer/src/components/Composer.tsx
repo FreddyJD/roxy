@@ -68,7 +68,10 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 168)}px`
   }
 
-  const showStop = !!sending && !value.trim() && images.length === 0
+  // Stop needs a handler to be honest: a session can be busy with a turn this
+  // composer doesn't own (a subagent's run is driven by its parent), and a Stop
+  // button that does nothing is worse than none. Fall through to a disabled Send.
+  const showStop = !!sending && !!onStop && !value.trim() && images.length === 0
   const canSend = !!value.trim() || images.length > 0
 
   return (

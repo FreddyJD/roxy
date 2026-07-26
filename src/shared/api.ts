@@ -14,6 +14,7 @@ import type {
   IntegrationConnection,
   Loop,
   Message,
+  MessagePart,
   QueueImage,
   QueueItem,
   ReasoningEffort,
@@ -24,6 +25,8 @@ import type {
   WorktreeIntent
 } from './types'
 import type { McpServerConfig } from './mcp'
+import type { ForgeStatusView, ForgeHostView, ForgeKind } from './forge'
+import type { SessionConfigPatch } from './session-config'
 
 /** A configured MCP server merged with its live connection status (for Settings). */
 export interface McpServerView {
@@ -83,6 +86,11 @@ export interface SkillInstallResult {
 export interface CreateChatInput {
   title?: string
   kind?: SessionKind
+  /**
+   * Pin this session to a provider/model instead of inheriting the last-used
+   * ones. Passed together or not at all - a provider without a model resolves
+   * to that provider's default rather than the previous provider's model id.
+   */
   providerId?: string | null
   model?: string | null
   workspacePath?: string | null
@@ -261,6 +269,33 @@ export interface LlmDelta {
   event: LlmEvent
 }
 
+/**
+ * One step of a subagent's turn, tagged with the SUB session's own id.
+ *
+ * The twin of `LlmDelta`'s `tool-child` wrapper, aimed the other way. That one
+ * addresses the parent's `task` card (keyed by the parent's requestId + callId)
+ * so the launching session shows the delegate working. This one addresses the
+ * subagent's OWN session, so opening it mid-run streams live instead of sitting
+ * on the seeded prompt until the run ends. Same events, two audiences.
+ *
+ * `run` frames bracket the stream so the renderer knows exactly when to open the
+ * live bubble and when to drop it in favour of the persisted transcript.
+ */
+export type SubagentDelta =
+  | { subChatId: string; kind: 'event'; event: LlmChildEvent }
+  | { subChatId: string; kind: 'run'; state: 'running' | 'completed' | 'error' }
+
+/** A subagent run in flight, for restoring live state after a window (re)load. */
+export interface SubagentRunView {
+  subChatId: string
+  parentChatId: string | null
+  description: string
+  subagentType: string
+  /** True for a detached (`background: true`) run — it outlives its launching turn. */
+  background: boolean
+  startedAt: number
+}
+
 /** A background subagent task's lifecycle state, broadcast to all windows. */
 export interface TaskUpdate {
   jobId: string
@@ -434,6 +469,8 @@ export interface RoxyApi {
   settings: {
     getAll(): Promise<AppSettings>
     setActiveProvider(providerId: string, model: string | null): Promise<AppSettings>
+    /** Remember the last-used mode, so the next NEW session opens in it. */
+    setActiveAgent(agentId: string): Promise<AppSettings>
     setReasoningEffort(level: ReasoningEffort): Promise<AppSettings>
     setContextLimit(limit: number | null): Promise<AppSettings>
     setWebSearchApiKey(key: string | null): Promise<AppSettings>
@@ -452,6 +489,8 @@ export interface RoxyApi {
     create(input?: CreateChatInput): Promise<Chat>
     rename(id: string, title: string): Promise<void>
     remove(id: string): Promise<void>
+    /** Pin part of one session's inference config (model / mode / effort / context). */
+    setConfig(id: string, patch: SessionConfigPatch): Promise<Chat>
     /** Reorder a project's sessions; `ids` is the full project session list, top-to-bottom. */
     reorder(workspacePath: string | null, ids: string[]): Promise<void>
   }
@@ -570,6 +609,26 @@ export interface RoxyApi {
     /** Subscribe to background-task state changes; returns an unsubscribe fn. */
     onUpdate(callback: (update: TaskUpdate) => void): () => void
   }
+  subagents: {
+    /**
+     * Live parts of a subagent already mid-run, for a window that opens its
+     * session halfway through. Null when nothing is running for that id (its
+     * persisted transcript is then the truth).
+     */
+    snapshot(subChatId: string): Promise<MessagePart[] | null>
+    /** Every subagent currently running — restores live state after a window reload. */
+    listRunning(): Promise<SubagentRunView[]>
+    /**
+     * Tell main which chat is on screen, so the end-of-turn prune spares a sub
+     * session the user is reading. Pass null when the open chat isn't a sub.
+     */
+    setViewed(chatId: string | null): Promise<void>
+    /**
+     * Subscribe to a subagent's own live stream, keyed by ITS session id, so its
+     * individual chat view streams like any other. Returns an unsubscribe fn.
+     */
+    onDelta(callback: (payload: SubagentDelta) => void): () => void
+  }
   models: {
     /** Live model list for a provider id, from models.dev. */
     list(providerId: string): Promise<ModelInfo[]>
@@ -610,6 +669,30 @@ export interface RoxyApi {
     restart(sessionId: string, id: string): Promise<{ ok: boolean; id?: string; error?: string }>
     /** Open this session's OWN browser window at a service's localhost URL. */
     open(sessionId: string, port: number): Promise<void>
+  }
+  /**
+   * The git HOST behind `origin` - GitHub, Azure DevOps, GitLab or Bitbucket.
+   * Named "forge" because `remote` already means the roxy.gg phone relay here.
+   */
+  forge: {
+    /**
+     * Branch state, local + remote, in one call. Returns instantly with git
+     * state; pull-request data is served from cache and refreshed in the
+     * background, so a 5s poll never waits on the network. `force` waits.
+     */
+    status(cwd: string, force?: boolean): Promise<ForgeStatusView>
+    /** Push the current branch to origin, setting upstream when it has none. */
+    push(cwd: string): Promise<{ ok: boolean; error?: string }>
+    /** The host's "create a pull request" URL, pre-filled for this branch. */
+    createUrl(cwd: string): Promise<string | null>
+    /**
+     * Git hosts this user's projects use, with live connection state read from
+     * git's credential helper. Not a list of "accounts Roxy owns" - Roxy owns
+     * none; this is a view of what git already has.
+     */
+    listHosts(): Promise<ForgeHostView[]>
+    /** Record which software an unrecognised host runs (null clears it). */
+    setHostKind(host: string, kind: ForgeKind | null): Promise<void>
   }
   git: {
     /** Whether a usable `git` binary exists (probed once, cached). */

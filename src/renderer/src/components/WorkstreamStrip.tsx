@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { LifecycleAction, LifecycleTone, ForgeKind } from '@shared/forge'
+import { FORGE_NAMES, relativeAge } from '@shared/forge'
+import { api } from '../lib/api'
 import { Check, ChevronDown, GitBranch, Plus, SquareStack } from 'lucide-react'
 import type { Chat } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
@@ -90,12 +93,12 @@ export function WorkstreamStrip(): JSX.Element | null {
       <Divider />
 
       {/* Segment 2 — the branch, renameable in place. Generated names
-            (`roxy/6fdc60b8`) say nothing about the work, and the name is what
-            ends up on the PR, so renaming has to be reachable from where you
-            read it rather than from a terminal. Switching branches is still
-            NOT offered here: that is the workstream menu's job, and doing it in
-            the default workstream would mutate the checkout every other session
-            and the user's editor share. */}
+          (`roxy/6fdc60b8`) say nothing about the work, and the name is what ends
+          up on the PR, so renaming has to be reachable from where you read it
+          rather than from a terminal. Switching branches is still NOT offered
+          here: that is the workstream menu's job, and doing it in the default
+          workstream would mutate the checkout every other session and the user's
+          editor share. */}
       <BranchSegment
         sessionId={owner.id}
         branch={branch}
@@ -107,18 +110,10 @@ export function WorkstreamStrip(): JSX.Element | null {
 
       <Divider />
 
-      {/* Segment 3 — TODO: this becomes the branch lifecycle, and each state is
-            reachable with plain git except the last two:
-              ○ local  →  ↑N to push  →  pushed  →  PR #N  →  merged
-            Clicking it should open a panel with the remote, ahead/behind, and
-            commit/push actions. Left static here so the layout is final. */}
-      <span
-        className="flex items-center gap-1.5 px-1.5 py-1 text-text-subtle"
-        title={pending ? 'Created when this session starts' : 'Not pushed yet'}
-      >
-        <span className="h-1.5 w-1.5 rounded-full border border-text-subtle/70" />
-        {pending ? 'not created' : 'local'}
-      </span>
+      {/* Segment 3 — the branch lifecycle:
+            local -> up-N to push -> pushed -> PR #N -> merged
+          Clicking opens the remote panel. */}
+      <LifecycleChip ownerId={owner.id} statusKey={statusKey} />
 
       {/* Last, and only when there is something to say. Processes are the most
           volatile thing in the row, so they sit at the end where a changing
@@ -135,8 +130,8 @@ export function WorkstreamStrip(): JSX.Element | null {
 
 /**
  * The row itself: same px-4 gutter and centered max-w-3xl column as the
- * composer, so the strip reads as the composer's footer rather than a stray
- * row pinned to the left.
+ * composer, so the strip reads as the composer's footer rather than a stray row
+ * pinned to the left.
  */
 function StripRow({ children }: { children: React.ReactNode }): JSX.Element {
   return (
@@ -144,6 +139,302 @@ function StripRow({ children }: { children: React.ReactNode }): JSX.Element {
       <div className="mx-auto flex max-w-3xl items-center gap-1 px-1">{children}</div>
     </div>
   )
+}
+
+/**
+ * Segment 3 - where the work stands relative to the remote.
+ *
+ * The states form one line, and the chip's whole job is to answer "is this
+ * done?" at a glance:
+ *
+ *   local  ->  up-N  ->  pushed  ->  #42  ->  merged
+ *
+ * The first three come from git and render offline and instantly. The last two
+ * need the host, so they arrive a moment later - which is why the chip never
+ * shows a spinner or an empty state: it always displays the best answer it
+ * currently has, and quietly upgrades. A chip that flickered between "local"
+ * and "#42" every poll would be worse than no chip.
+ */
+function LifecycleChip({
+  ownerId,
+  statusKey
+}: {
+  ownerId: string
+  statusKey: string | null
+}): JSX.Element | null {
+  const forgeStatus = useRoxyStore((s) => s.forgeStatus)
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const view = statusKey ? forgeStatus[statusKey] : undefined
+  // Render nothing until the first status lands, rather than a placeholder that
+  // would visibly swap a moment later.
+  if (!view) return null
+
+  // An unrecognised host is the one case the chip cannot answer on its own.
+  // Asking here rather than only in Settings matters: this is the moment the
+  // user cares, and it is one click instead of a hunt through preferences.
+  if (view.unknownHost) return <UnknownHostChip host={view.unknownHost} />
+
+  const { lifecycle } = view
+
+  return (
+    <div className="relative" ref={ref}>
+      {open && (
+        <ForgePanel ownerId={ownerId} statusKey={statusKey} onClose={() => setOpen(false)} />
+      )}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        title={lifecycle.title}
+        className={cn(
+          'flex items-center gap-1.5 rounded-md px-1.5 py-1 transition hover:bg-white/5',
+          TONE_TEXT[lifecycle.tone]
+        )}
+      >
+        <StateDot tone={lifecycle.tone} filled={lifecycle.phase !== 'unpublished'} />
+        <span className="tabular-nums">{lifecycle.label}</span>
+      </button>
+    </div>
+  )
+}
+
+/**
+ * `git.mycorp.com` could be GitLab, Bitbucket Server or Azure DevOps Server,
+ * and the domain gives nothing away. Guessing would mean firing authenticated
+ * requests at an unrelated server, so we ask - once, then never again.
+ */
+function UnknownHostChip({ host }: { host: string }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const refreshGitStatus = useRoxyStore((s) => s.refreshGitStatus)
+  const activeChatId = useRoxyStore((s) => s.activeChatId)
+
+  const pick = async (kind: ForgeKind): Promise<void> => {
+    await api.forge.setHostKind(host, kind)
+    setOpen(false)
+    if (activeChatId) await refreshGitStatus(activeChatId)
+  }
+
+  return (
+    <div className="relative">
+      {open && (
+        <div className="absolute bottom-full right-0 z-50 w-56 pb-1.5">
+          <div className="overflow-hidden rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+            <div className="px-3 py-1.5 text-[11px] text-text-subtle">
+              What does <span className="text-text-muted">{host}</span> run?
+            </div>
+            {FORGE_KINDS.map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => void pick(k)}
+                className="flex w-full items-center px-3 py-1.5 text-left text-xs text-text-muted transition hover:bg-white/5 hover:text-text"
+              >
+                {FORGE_NAMES[k]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        title={`Roxy doesn't recognise ${host} - click to choose`}
+        className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-text-subtle transition hover:bg-white/5 hover:text-text-muted"
+      >
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
+        set up
+      </button>
+    </div>
+  )
+}
+
+const FORGE_KINDS: ForgeKind[] = ['github', 'azure-devops', 'gitlab', 'bitbucket']
+/**
+ * Colour is the fastest channel the chip has, so it carries the one thing worth
+ * interrupting for: whether something needs the user. Merged is the only green
+ * - "done" is the state worth celebrating, and if everything were coloured
+ * nothing would stand out.
+ */
+const TONE_TEXT: Record<LifecycleTone, string> = {
+  neutral: 'text-text-subtle hover:text-text-muted',
+  info: 'text-text-muted hover:text-text',
+  success: 'text-success',
+  warning: 'text-warning',
+  danger: 'text-danger'
+}
+
+const TONE_BG: Record<LifecycleTone, string> = {
+  neutral: 'bg-text-subtle/70',
+  info: 'bg-text-muted',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-danger'
+}
+
+/**
+ * Hollow while the work is local, filled once it exists on the server. It's the
+ * same visual grammar as an unread dot, and it means the two most common states
+ * are distinguishable without reading the label.
+ */
+function StateDot({ tone, filled }: { tone: LifecycleTone; filled: boolean }): JSX.Element {
+  return filled ? (
+    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', TONE_BG[tone])} />
+  ) : (
+    <span className="h-1.5 w-1.5 shrink-0 rounded-full border border-text-subtle/70" />
+  )
+}
+
+/**
+ * The panel behind the chip: who the host is, what the PR is, and the single
+ * most useful action for the current state.
+ *
+ * Exactly one primary action is offered at a time. A panel with push, pull,
+ * open-PR and view-PR all present would make the user decide what the app
+ * already knows.
+ */
+function ForgePanel({
+  ownerId,
+  statusKey,
+  onClose
+}: {
+  ownerId: string
+  statusKey: string | null
+  onClose: () => void
+}): JSX.Element {
+  const forgeStatus = useRoxyStore((s) => s.forgeStatus)
+  const gitStatus = useRoxyStore((s) => s.gitStatus)
+  const pushBranch = useRoxyStore((s) => s.pushBranch)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const view = statusKey ? forgeStatus[statusKey] : undefined
+  const git = statusKey ? gitStatus[statusKey] : undefined
+  const pull = view?.pull ?? null
+  const action = view?.lifecycle.action ?? null
+
+  const openUrl = (url: string): void => {
+    void api.system.openExternal(url)
+    onClose()
+  }
+
+  const run = async (): Promise<void> => {
+    if (busy || !action) return
+    setBusy(true)
+    setError(null)
+    try {
+      if (action === 'view-pr' && pull) return openUrl(pull.url)
+      if (action === 'open-pr') {
+        const url = statusKey ? await api.forge.createUrl(statusKey) : null
+        // A missing URL means we couldn't determine the base branch. Saying so
+        // beats opening a compare page pointed at the wrong target.
+        if (!url) return setError('Could not work out the base branch for this PR.')
+        return openUrl(url)
+      }
+      if (action === 'push') {
+        const r = await pushBranch(ownerId)
+        if (!r.ok) return setError(r.error ?? 'Push failed.')
+        return
+      }
+      // `pull` is deliberately not automated: merging into a dirty worktree
+      // that an agent is actively editing is how work gets lost.
+      if (action === 'pull') {
+        setError('Run `git pull` in this workstream - Roxy will not merge under a running agent.')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="absolute bottom-full right-0 z-50 w-80 pb-1.5">
+      <div className="overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl">
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+          <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
+            {view?.remote ? view.remote.slug : 'No remote'}
+          </span>
+          {view?.remote && (
+            <span className="shrink-0 text-[11px] text-text-subtle">
+              {FORGE_NAMES[view.remote.kind]}
+            </span>
+          )}
+        </div>
+
+        {pull ? (
+          <button
+            type="button"
+            onClick={() => openUrl(pull.url)}
+            className="flex w-full flex-col gap-1 px-3 py-2 text-left transition hover:bg-white/5"
+          >
+            <span className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-text">#{pull.number}</span>
+              <span className="truncate text-xs text-text-muted">{pull.title}</span>
+            </span>
+            <span className="text-[11px] text-text-subtle">
+              {pull.author ? `${pull.author} - ` : ''}
+              {relativeAge(pull.updatedAt || pull.createdAt, Date.now())}
+              {pull.targetBranch ? ` - into ${pull.targetBranch}` : ''}
+            </span>
+          </button>
+        ) : (
+          <div className="px-3 py-2 text-[11px] text-text-subtle">
+            {view?.lifecycle.title ?? 'No pull request'}
+          </div>
+        )}
+
+        {/* Ahead/behind is shown as raw numbers rather than folded into prose:
+            it's the one thing people cross-check against their terminal. */}
+        {git && git.hasUpstream && (git.ahead > 0 || git.behind > 0) && (
+          <div className="flex gap-3 border-t border-border px-3 py-1.5 text-[11px] text-text-subtle tabular-nums">
+            {git.ahead > 0 && <span>{git.ahead} ahead</span>}
+            {git.behind > 0 && <span>{git.behind} behind</span>}
+          </div>
+        )}
+
+        {(error || view?.error) && (
+          <div className="border-t border-border px-3 py-1.5 text-[11px] text-warning">
+            {error ?? view?.error?.message}
+          </div>
+        )}
+
+        {action && (
+          <div className="border-t border-border p-1.5">
+            <button
+              type="button"
+              onClick={() => void run()}
+              disabled={busy}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-text transition hover:bg-white/5 disabled:opacity-50"
+            >
+              {busy ? 'Working...' : ACTION_LABEL[action]}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const ACTION_LABEL: Record<LifecycleAction, string> = {
+  push: 'Push to origin',
+  pull: 'Behind origin',
+  'open-pr': 'Open a pull request',
+  'view-pr': 'View on the web'
 }
 
 function Divider(): JSX.Element {

@@ -171,6 +171,95 @@ async function main(): Promise<void> {
   repo.setWebSearchApiKey('   ')
   check('setWebSearchApiKey blanks to null', repo.getSettings().webSearchApiKey === null)
 
+  // ---- per-session inference config ----
+  //
+  // The two behaviours users expect at once: a NEW session starts from what you
+  // last picked, and changing one session never touches another. Exercised
+  // against the real DB because both halves live in SQL (createChat stamps the
+  // seed; setChatConfig writes one row).
+  repo.setActiveProvider('anthropic', 'claude-opus-5')
+  repo.setActiveAgent('plan')
+  repo.setReasoningEffort('max')
+  repo.setContextLimit(1_000_000)
+  check('setActiveAgent persists', repo.getSettings().activeAgentId === 'plan')
+
+  const cfgA = repo.createChat({ title: 'cfg A', kind: 'main', workspacePath: ws })
+  check(
+    'a new session inherits the last-used model',
+    cfgA.providerId === 'anthropic' && cfgA.model === 'claude-opus-5'
+  )
+  check(
+    'a new session inherits the last-used mode/effort/context',
+    cfgA.agentId === 'plan' && cfgA.reasoningEffort === 'max' && cfgA.contextLimit === 1_000_000
+  )
+
+  // Change session A. The GLOBAL template is written separately by the store
+  // (dual-write), so at this layer only A moves.
+  repo.setChatConfig(cfgA.id, { providerId: 'openai', model: 'gpt-5' })
+  repo.setChatConfig(cfgA.id, { reasoningEffort: 'low', contextLimit: 64_000 })
+  check(
+    'setChatConfig pins the session',
+    repo.getChat(cfgA.id)?.model === 'gpt-5' &&
+      repo.getChat(cfgA.id)?.reasoningEffort === 'low' &&
+      repo.getChat(cfgA.id)?.contextLimit === 64_000
+  )
+  check(
+    'setChatConfig does NOT touch the global template',
+    repo.getSettings().activeModel === 'claude-opus-5' &&
+      repo.getSettings().reasoningEffort === 'max'
+  )
+
+  // The isolation guarantee: a second session created from the same template is
+  // unaffected by anything session A did to itself.
+  const cfgB = repo.createChat({ title: 'cfg B', kind: 'main', workspacePath: ws })
+  check(
+    "a sibling session is unaffected by another session's model change",
+    cfgB.model === 'claude-opus-5' && cfgB.reasoningEffort === 'max'
+  )
+  repo.setChatConfig(cfgB.id, { agentId: 'build' })
+  check(
+    "changing one session's mode leaves its sibling alone",
+    repo.getChat(cfgB.id)?.agentId === 'build' && repo.getChat(cfgA.id)?.agentId === 'plan'
+  )
+
+  // A later template change reaches only sessions created AFTER it: the seed is
+  // a snapshot, so tuning a picker never rewrites sessions already in flight.
+  repo.setActiveProvider('google', 'gemini-3')
+  const cfgC = repo.createChat({ title: 'cfg C', kind: 'main', workspacePath: ws })
+  check(
+    'the next new session picks up the newest template',
+    cfgC.providerId === 'google' && cfgC.model === 'gemini-3'
+  )
+  check(
+    'existing sessions are NOT rewritten by a later template change',
+    repo.getChat(cfgA.id)?.model === 'gpt-5' && repo.getChat(cfgB.id)?.model === 'claude-opus-5'
+  )
+
+  // Clearing an override returns that field to the global default (null column).
+  repo.setChatConfig(cfgA.id, { contextLimit: null })
+  check(
+    'setChatConfig clears an override back to inherit',
+    repo.getChat(cfgA.id)?.contextLimit === null
+  )
+
+  // An explicit provider must never be paired with the seeded model id.
+  const cfgD = repo.createChat({
+    title: 'cfg D',
+    kind: 'main',
+    workspacePath: ws,
+    providerId: 'openai'
+  })
+  check(
+    'an explicitly-provided provider does not inherit the template model',
+    cfgD.providerId === 'openai' && cfgD.model === null
+  )
+
+  // Restore the template the rest of the suite expects.
+  repo.setActiveProvider('openai', 'gpt-test')
+  repo.setReasoningEffort('high')
+  repo.setContextLimit(null)
+  for (const id of [cfgA.id, cfgB.id, cfgC.id, cfgD.id]) repo.removeChat(id)
+
   // ---- chats / sessions ----
   const chat = repo.createChat({ title: 'smoke', kind: 'main', workspacePath: ws })
   check('createChat (main + workspace)', chat.kind === 'main' && chat.workspacePath === ws)

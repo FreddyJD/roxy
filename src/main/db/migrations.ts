@@ -347,6 +347,26 @@ export const MIGRATIONS: Migration[] = [
   // folder). Idempotent for the same reason as v15.
   (db) => {
     addColumnIfMissing(db, 'chats', 'worktree_pending', 'TEXT')
+  },
+
+  // ---- v17: per-session inference config ----
+  // Model/mode/effort/context used to be GLOBAL, so switching the model in one
+  // session switched it everywhere - including sessions mid-conversation on a
+  // different model. Each session now pins its own config, stamped from the
+  // global settings at create time (see repo.createChat + seedSessionConfig),
+  // which makes both behaviours users expect fall out at once: sessions stay
+  // independent, and a new one starts from whatever you last chose.
+  //
+  // `provider_id` and `model` already existed from v1 but were DEAD columns -
+  // written as NULL by createChat and never read except by the usage backfill.
+  // They go live here; the three below join them.
+  //
+  // NULL everywhere means "never chosen" and resolves to the global default, so
+  // every session that predates this keeps behaving exactly as it did before.
+  (db) => {
+    addColumnIfMissing(db, 'chats', 'agent_id', 'TEXT')
+    addColumnIfMissing(db, 'chats', 'reasoning_effort', 'TEXT')
+    addColumnIfMissing(db, 'chats', 'context_limit', 'INTEGER')
   }
 ]
 
@@ -379,6 +399,10 @@ export function repairSchema(db: Database): void {
   addColumnIfMissing(db, 'chats', 'branch', 'TEXT')
   addColumnIfMissing(db, 'chats', 'dev_port', 'INTEGER')
   addColumnIfMissing(db, 'chats', 'worktree_pending', 'TEXT')
+  // v17's per-session inference config.
+  addColumnIfMissing(db, 'chats', 'agent_id', 'TEXT')
+  addColumnIfMissing(db, 'chats', 'reasoning_effort', 'TEXT')
+  addColumnIfMissing(db, 'chats', 'context_limit', 'INTEGER')
   // `projects` is derived state — one row per workspace folder its sessions use
   // — so a restored table can be rebuilt from the chats themselves, exactly as
   // v13 did on first upgrade. Only when empty, so a hand-ordered project list is

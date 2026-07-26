@@ -389,6 +389,43 @@ export async function hasOrigin(cwd: string): Promise<boolean> {
 }
 
 /**
+ * The fetch URL of a remote (default `origin`) - the input to forge detection.
+ *
+ * Uses `remote get-url` rather than parsing `git remote -v`, whose output
+ * carries a `(fetch)`/`(push)` suffix that has to be stripped. This form also
+ * honours `insteadOf` rewrites the same way git itself does, so a corporate
+ * `url.<base>.insteadOf` rule resolves to the URL actually in use.
+ */
+export async function remoteUrl(cwd: string, name = 'origin'): Promise<string | null> {
+  if (!cwd) return null
+  const r = await git(['remote', 'get-url', name], cwd)
+  const out = r.stdout.trim().split('\n')[0]?.trim()
+  return r.ok && out ? out : null
+}
+
+/**
+ * Push a branch to origin, optionally setting upstream.
+ *
+ * Deliberately NOT forced, and deliberately not offering `--force-with-lease`:
+ * this is reachable from a one-click chip, and a single click that can destroy
+ * a colleague's commits is not an acceptable thing to build. A rejected push
+ * surfaces git's own error and the user resolves it deliberately.
+ *
+ * Takes the network timeout, since a push talks to the remote.
+ */
+export async function pushBranch(
+  cwd: string,
+  branch: string,
+  opts: { setUpstream?: boolean } = {}
+): Promise<{ ok: boolean; error?: string }> {
+  if (!cwd || !branch) return { ok: false, error: 'push: missing cwd or branch' }
+  const args = ['push']
+  if (opts.setUpstream) args.push('--set-upstream')
+  args.push('origin', branch)
+  const r = await git(args, cwd, FETCH_TIMEOUT_MS)
+  return r.ok ? { ok: true } : { ok: false, error: cleanGitError(r, 'Push failed') }
+}
+/**
  * Working-tree status: dirty flag, changed-entry count, and ahead/behind vs the
  * upstream. Uses `--porcelain=v2 --branch`, whose header lines carry the branch
  * and ahead/behind without a second command.

@@ -18,6 +18,7 @@ import type {
   ModelInfo,
   RemoteDelta,
   RemoteState,
+  SubagentDelta,
   TaskUpdate
 } from '@shared/api'
 import { selectPromptName, buildEnvironment, assembleSystemPrompt } from '@shared/prompt'
@@ -26,11 +27,18 @@ import { reconstructTurn, REPLAY_OUTPUT_CAP } from '@shared/tool-history'
 import { PartsFold, partsToContent } from '@shared/parts'
 import { isOverflow, pruneToolMessages, KEEP_RECENT_TOKENS } from '@shared/context'
 import { pickDefaultModel } from '@shared/models'
+import {
+  contextBudgetFor,
+  resolveSessionConfig,
+  type SessionConfig,
+  type SessionConfigPatch
+} from '@shared/session-config'
 import { uniqueSlug } from '@shared/slugs'
 import { shouldAutoWorkstream } from '@shared/workstream'
 import { api } from './api'
 import type { ComposerImage } from './images'
 import type { GitStatusView, ServiceView, WorktreeView } from '@shared/api'
+import type { ForgeStatusView } from '@shared/forge'
 
 interface RoxyStore {
   ready: boolean
@@ -45,7 +53,12 @@ interface RoxyStore {
   sendingChats: Record<string, boolean>
   /** In-progress assistant parts per chat while a reply streams in. */
   streamingChats: Record<string, MessagePart[]>
-  /** Active agent (mode) for the open session. */
+  /**
+   * The open session's mode, mirrored from its `chat.agentId` for synchronous
+   * reads (the composer + the context meter re-render on every keystroke, and
+   * a store lookup is cheaper than finding the chat each time). `selectChat`
+   * loads it from the session; `setActiveAgent` writes both back.
+   */
   activeAgentId: string
   /** Project instruction blocks (AGENTS.md etc.) cached per workspace path. */
   projectInstructions: Record<string, string[]>
@@ -60,6 +73,13 @@ interface RoxyStore {
   compactingChats: Record<string, boolean>
   /** Running background subagent tasks, keyed by parent session id (Phase 11). */
   runningTasks: Record<string, TaskUpdate[]>
+  /**
+   * Subagent sessions with a run in flight, by SUB chat id. Drives the live
+   * bubble in a subagent's own chat view and its sidebar spinner — both of which
+   * used to be impossible, since a subagent's work only ever streamed into its
+   * parent's `task` card.
+   */
+  runningSubagents: Record<string, true>
   /** Remote Workspace sharing status — mirrors the main process's RemoteState. */
   remote: RemoteState
   /** Background processes for the active session (the Services panel). */
@@ -71,6 +91,12 @@ interface RoxyStore {
    * so N sessions sharing a worktree share one poll instead of N.
    */
   gitStatus: Record<string, GitStatusView>
+  /**
+   * Remote/PR state, keyed by the same worktree path as `gitStatus` so the two
+   * always agree. Populated by the same poll - a separate one would double the
+   * git spawns for a strictly worse result.
+   */
+  forgeStatus: Record<string, ForgeStatusView>
   /** Live worktrees per project folder, for the workstream menu. */
   worktrees: Record<string, WorktreeView[]>
   /** Branches per project folder, loaded lazily when the menu opens. */
@@ -83,6 +109,21 @@ interface RoxyStore {
   refreshLoops: () => Promise<void>
   refreshQueue: () => Promise<void>
   refreshProviders: () => Promise<void>
+  /**
+   * The config the OPEN session runs with: its own pinned values, falling back
+   * to the global last-used ones. The single read path for the composer
+   * pickers and the send path - never read `settings.activeModel` directly.
+   */
+  sessionConfig: () => SessionConfig
+  /**
+   * Change part of the open session's config.
+   *
+   * Writes TWICE, on purpose: the session row (so the change is scoped to this
+   * session and survives a restart) and the matching global setting (so the
+   * next NEW session inherits it). That is the whole feature - sessions are
+   * independent, and new ones start from whatever you last picked.
+   */
+  setSessionConfig: (patch: SessionConfigPatch) => Promise<void>
   selectModel: (providerId: string, model: string) => Promise<void>
   ensureModels: (providerId: string) => Promise<void>
   setReasoningEffort: (level: ReasoningEffort) => Promise<void>
@@ -103,7 +144,7 @@ interface RoxyStore {
   createLoop: (input: CreateLoopInput) => Promise<void>
   setLoopEnabled: (id: string, enabled: boolean) => Promise<void>
   removeLoop: (id: string) => Promise<void>
-  setActiveAgent: (id: string) => void
+  setActiveAgent: (id: string) => Promise<void>
   /** Load + cache a workspace's instruction files (AGENTS.md etc.) for sizing. */
   ensureProjectInstructions: (workspacePath: string) => Promise<void>
   deleteChat: (id: string) => Promise<void>
@@ -137,6 +178,8 @@ interface RoxyStore {
    * worktrees watchers multiply, and fs.watch is unreliable on Windows.
    */
   refreshGitStatus: (chatId: string) => Promise<void>
+  /** Push this session's branch to origin, then refresh its status. */
+  pushBranch: (chatId: string) => Promise<{ ok: boolean; error?: string }>
   /** Load the worktrees + branches for a project (menu open). */
   refreshWorktrees: (workspacePath: string) => Promise<void>
   /**
@@ -159,6 +202,7 @@ let llmDeltaSubscribed = false
 let taskUpdateSubscribed = false
 let remoteStateSubscribed = false
 let remoteDeltaSubscribed = false
+let subagentDeltaSubscribed = false
 /** Routes streamed completion events to the in-flight send for a request id. */
 const deltaHandlers = new Map<string, (event: LlmEvent) => void>()
 /** The active llm request id per chat, so stop() can abort the right stream. */
@@ -173,6 +217,49 @@ const remoteMirror = { deferred: false }
  * A turn:idle frame clears the entry once the persisted reply takes over.
  */
 const remoteTurns = new Map<string, PartsFold>()
+/**
+ * Live parts for each in-flight SUBAGENT run, keyed by its own chat id — the
+ * third sibling of `parts` (local send) and `remoteTurns` (phone turn).
+ *
+ * Kept for every running subagent, not just the visible one: a delegate you
+ * aren't watching keeps folding, so switching into its session mid-run shows the
+ * whole transcript so far instead of resuming from whatever arrives next.
+ */
+const subagentTurns = new Map<string, PartsFold>()
+
+/**
+ * Record a config change as the new GLOBAL default - the template every new
+ * session is stamped from.
+ *
+ * The session itself is written separately (`api.chats.setConfig`); this half is
+ * what makes "the next session remembers what I last picked" true. Returns the
+ * refreshed settings, or null when the patch touched nothing global.
+ *
+ * Best-effort by design: a session whose config was saved must not appear to
+ * have failed because the template write did. The session row is what the
+ * turn actually runs on.
+ */
+async function persistGlobalConfig(patch: SessionConfigPatch): Promise<AppSettings | null> {
+  let latest: AppSettings | null = null
+  try {
+    if ('providerId' in patch && patch.providerId) {
+      latest = await api.settings.setActiveProvider(patch.providerId, patch.model ?? null)
+    }
+    if ('agentId' in patch && patch.agentId) {
+      latest = await api.settings.setActiveAgent(patch.agentId)
+    }
+    if ('reasoningEffort' in patch && patch.reasoningEffort) {
+      latest = await api.settings.setReasoningEffort(patch.reasoningEffort)
+    }
+    if ('contextLimit' in patch) {
+      latest = await api.settings.setContextLimit(patch.contextLimit ?? null)
+    }
+  } catch {
+    // The session keeps its own copy either way; only the inherited default
+    // for the *next* session is lost, which self-heals on the next change.
+  }
+  return latest
+}
 
 /**
  * Desktop live-mirror: reload the shared chat's transcript from disk after a
@@ -239,6 +326,111 @@ function applyRemoteDelta(payload: RemoteDelta): void {
   reflect(turn.apply(payload.event))
 }
 
+/**
+ * Fold one SUBAGENT step (or run boundary) into that subagent's own live parts
+ * and, when its session is on screen, reflect it into `streamingChats` — so
+ * opening a delegate's chat shows it working in real time, exactly like a normal
+ * session, instead of a lone prompt until the run ends.
+ *
+ * Deliberately keyed by the sub chat id rather than a requestId: a subagent run
+ * (especially a background one) routinely outlives the request that launched it,
+ * and after a window reload there is no request to key on at all.
+ *
+ * A `run: completed|error` frame drops the live parts; the subagent's persisted
+ * assistant message — written just before that frame is sent — takes over, so
+ * there's no gap between the live bubble and the saved transcript.
+ */
+function applySubagentDelta(payload: SubagentDelta): void {
+  const { subChatId } = payload
+  const reflect = (parts: MessagePart[] | null): void => {
+    if (useRoxyStore.getState().activeChatId !== subChatId) return
+    useRoxyStore.setState((s) => {
+      const next = { ...s.streamingChats }
+      if (parts === null) delete next[subChatId]
+      else next[subChatId] = parts
+      return { streamingChats: next }
+    })
+  }
+
+  if (payload.kind === 'run') {
+    if (payload.state === 'running') {
+      // Open an empty live bubble the moment the run starts, so a viewer who is
+      // already on the session gets the thinking indicator rather than a blank
+      // pane while the delegate resolves its first token.
+      subagentTurns.set(subChatId, new PartsFold())
+      useRoxyStore.setState((s) => ({
+        runningSubagents: { ...s.runningSubagents, [subChatId]: true }
+      }))
+      reflect([])
+      return
+    }
+    subagentTurns.delete(subChatId)
+    useRoxyStore.setState((s) => {
+      const runningSubagents = { ...s.runningSubagents }
+      delete runningSubagents[subChatId]
+      return { runningSubagents }
+    })
+    reflect(null)
+    // The run's transcript landed a moment ago — swap the live bubble for the
+    // persisted message, and refresh the sidebar (a finished sub may now prune).
+    void (async () => {
+      if (useRoxyStore.getState().activeChatId === subChatId) {
+        useRoxyStore.setState({ messages: await api.messages.list(subChatId) })
+      }
+      await useRoxyStore.getState().refreshChats()
+    })()
+    return
+  }
+
+  // A stream event: fold it through the SAME pure fold the main process and every
+  // other live path use, so a subagent's view can never drift from — or silently
+  // drop an event type handled by — the parent's `task` card.
+  let turn = subagentTurns.get(subChatId)
+  if (!turn) {
+    turn = new PartsFold()
+    subagentTurns.set(subChatId, turn)
+  }
+  reflect(turn.apply(payload.event))
+
+  // A subagent's `change_session_metadata` writes to its OWN session (the tool
+  // runs with the sub chat id), so its title, description, and task checklist all
+  // live on that row. Reload the chat list when one lands, or the header strip
+  // and the sidebar entry would sit stale until the run ends — and watching a
+  // delegate tick off its own checklist is most of the point of opening it.
+  const event = payload.event
+  if (event.type === 'tool-end' && event.ok) {
+    const card = turn.parts.find((p) => p.type === 'tool' && p.callId === event.callId)
+    if (card?.type === 'tool' && card.tool === 'change_session_metadata') {
+      void useRoxyStore.getState().refreshChats()
+    }
+  }
+}
+
+/**
+ * Catch up a subagent session opened mid-run: pull the parts main has folded so
+ * far and seed the local fold with them, so the live bubble starts complete and
+ * subsequent deltas append rather than replacing a half-empty transcript.
+ *
+ * Seeding (not assigning) matters — the fold rebuilds its call-id index from the
+ * snapshot, so an inherited running tool card still flips to done when its
+ * `tool-end` arrives instead of spinning forever.
+ */
+async function hydrateSubagent(subChatId: string): Promise<void> {
+  const parts = await api.subagents.snapshot(subChatId).catch(() => null)
+  // The run may have finished (or the user navigated away) during the round trip;
+  // its persisted message is then the truth and must not be overwritten.
+  if (!parts || useRoxyStore.getState().activeChatId !== subChatId) return
+  const fold = subagentTurns.get(subChatId) ?? new PartsFold()
+  // Never rewind: deltas that arrived while the snapshot was in flight are
+  // already folded locally and are strictly newer than what main sent back.
+  if (fold.parts.length === 0) fold.seed(parts)
+  subagentTurns.set(subChatId, fold)
+  useRoxyStore.setState((s) => ({
+    runningSubagents: { ...s.runningSubagents, [subChatId]: true },
+    streamingChats: { ...s.streamingChats, [subChatId]: fold.parts }
+  }))
+}
+
 export const useRoxyStore = create<RoxyStore>((set, get) => ({
   ready: false,
   settings: null,
@@ -257,10 +449,12 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   stopChats: {},
   compactingChats: {},
   runningTasks: {},
+  runningSubagents: {},
   remote: { phase: 'idle', guests: 0, rev: 0 },
   services: [],
   gitAvailable: null,
   gitStatus: {},
+  forgeStatus: {},
   worktrees: {},
   gitBranches: {},
   usageStats: null,
@@ -324,6 +518,33 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       api.tasks.onUpdate((update) => {
         void get().handleTaskUpdate(update)
       })
+    }
+
+    // A subagent's own live stream. Separate from the requestId-keyed llm:delta
+    // channel on purpose: a subagent run outlives the request that launched it
+    // (a background one by design), and after a window reload there is no
+    // request to route by — but its session id is still on screen in the sidebar.
+    if (!subagentDeltaSubscribed) {
+      subagentDeltaSubscribed = true
+      api.subagents.onDelta((payload) => applySubagentDelta(payload))
+      // A window that just (re)loaded missed every `run: running` frame, so
+      // restore the in-flight set from main — otherwise a delegate that is very
+      // much still working shows no spinner anywhere until it happens to emit.
+      void api.subagents
+        .listRunning()
+        .then((running) => {
+          if (running.length === 0) return
+          set((s) => {
+            const runningSubagents = { ...s.runningSubagents }
+            for (const r of running) runningSubagents[r.subChatId] = true
+            return { runningSubagents }
+          })
+          const active = get().activeChatId
+          if (active && running.some((r) => r.subChatId === active)) void hydrateSubagent(active)
+        })
+        .catch(() => {
+          // best-effort — a failed restore costs a spinner, never correctness
+        })
     }
 
     // Remote Workspace: keep the sharing badge live and mirror remote activity.
@@ -470,11 +691,28 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     }
     if (!get().gitAvailable) return
     try {
-      const status = await api.git.status(key)
-      set((s) => ({ gitStatus: { ...s.gitStatus, [key]: status } }))
+      // One round trip for both. `forge.status` is cheap by construction: it
+      // returns local git state immediately and refreshes pull-request data in
+      // the background, so putting it on the 5s poll costs no network traffic.
+      const [status, forge] = await Promise.all([api.git.status(key), api.forge.status(key)])
+      set((s) => ({
+        gitStatus: { ...s.gitStatus, [key]: status },
+        forgeStatus: forge ? { ...s.forgeStatus, [key]: forge } : s.forgeStatus
+      }))
     } catch {
       // Best-effort: a transient git failure leaves the last known state.
     }
+  },
+
+  pushBranch: async (chatId) => {
+    const chat = get().chats.find((c) => c.id === chatId)
+    const key = chat?.worktreePath ?? chat?.workspacePath
+    if (!key) return { ok: false, error: 'No workspace for this session.' }
+    const r = await api.forge.push(key)
+    // Refresh immediately so the chip moves off "local" the moment the push
+    // lands, rather than on the next tick.
+    if (r.ok) await get().refreshGitStatus(chatId)
+    return r
   },
 
   refreshWorktrees: async (workspacePath) => {
@@ -516,9 +754,42 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     }
   },
 
+  sessionConfig: () => {
+    const { chats, activeChatId, settings } = get()
+    return resolveSessionConfig(
+      chats.find((c) => c.id === activeChatId),
+      settings
+    )
+  },
+
+  setSessionConfig: async (patch) => {
+    const chatId = get().activeChatId
+    // Optimistic: the picker closes on click, so the trigger must already show
+    // the new value - a round-trip of visible lag reads as a dropped click.
+    // `undefined` is stripped so a partial patch can't blank a field the caller
+    // never named (the DB layer keys off `in`; null explicitly means "clear").
+    const applied = Object.fromEntries(
+      Object.entries(patch).filter(([, v]) => v !== undefined)
+    ) as SessionConfigPatch
+    if (chatId) {
+      set((s) => ({
+        chats: s.chats.map((c) => (c.id === chatId ? { ...c, ...applied } : c))
+      }))
+    }
+    // Persist to the session, and remember it globally for the next new one.
+    const [chat, settings] = await Promise.all([
+      chatId ? api.chats.setConfig(chatId, patch) : Promise.resolve(null),
+      persistGlobalConfig(patch)
+    ])
+    set((s) => ({
+      ...(settings ? { settings } : {}),
+      ...(chat ? { chats: s.chats.map((c) => (c.id === chat.id ? chat : c)) } : {})
+    }))
+  },
+
   selectModel: async (providerId, model) => {
-    const settings = await api.settings.setActiveProvider(providerId, model)
-    set({ settings })
+    // Provider + model always move together (see resolveSessionConfig).
+    await get().setSessionConfig({ providerId, model })
   },
 
   ensureModels: async (providerId) => {
@@ -529,13 +800,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   },
 
   setReasoningEffort: async (level) => {
-    const settings = await api.settings.setReasoningEffort(level)
-    set({ settings })
+    await get().setSessionConfig({ reasoningEffort: level })
   },
 
   setContextLimit: async (limit) => {
-    const settings = await api.settings.setContextLimit(limit)
-    set({ settings })
+    await get().setSessionConfig({ contextLimit: limit })
   },
 
   setAutoWorkstream: async (enabled) => {
@@ -556,9 +825,26 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   selectChat: async (id) => {
     // Per-chat send state survives switching — just swap which chat is shown.
     // Clear messages/queue first so the previous chat's content never flashes.
-    set({ activeChatId: id, messages: [], queue: [], activeAgentId: DEFAULT_AGENT_ID })
-    const workspace = get().chats.find((c) => c.id === id)?.workspacePath
+    //
+    // The mode comes from the session being opened, NOT a reset to 'build':
+    // config is per-session, so a session left in Plan mode is still in Plan
+    // mode when you come back to it. The model/effort/context pickers read the
+    // chat row directly via `resolveSessionConfig`, so they need no mirror here.
+    const chat = get().chats.find((c) => c.id === id)
+    set({
+      activeChatId: id,
+      messages: [],
+      queue: [],
+      activeAgentId: chat?.agentId ?? DEFAULT_AGENT_ID
+    })
+    const workspace = chat?.workspacePath
     if (workspace) void get().ensureProjectInstructions(workspace)
+    // Tell main which sub session is on screen so the end-of-turn prune spares
+    // it — a one-shot delegate you're reading shouldn't vanish mid-sentence.
+    void api.subagents.setViewed(chat?.kind === 'sub' ? id : null).catch(() => {})
+    // Opening a subagent mid-run: pull what it has already done so the live
+    // bubble starts from the whole transcript, not from the next delta.
+    if (chat?.kind === 'sub') void hydrateSubagent(id)
     const [messages, queue] = await Promise.all([api.messages.list(id), api.queue.list(id)])
     if (get().activeChatId === id) set({ messages, queue })
   },
@@ -571,7 +857,12 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       activeAgentId: DEFAULT_AGENT_ID
     }),
 
-  setActiveAgent: (id) => set({ activeAgentId: id }),
+  setActiveAgent: async (id) => {
+    // Mirror first so the picker updates instantly, then persist to the session
+    // (+ the global template for the next new one).
+    set({ activeAgentId: id })
+    await get().setSessionConfig({ agentId: id })
+  },
 
   ensureProjectInstructions: async (workspacePath) => {
     if (!workspacePath || get().projectInstructions[workspacePath]) return
@@ -703,7 +994,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     // "Busy" means a local send is streaming *or* a phone-driven turn is running
     // into this same session (`remoteTurns`) — so a desktop prompt lands in the
     // shared FIFO behind a phone turn instead of starting a second concurrent one.
-    if (get().sendingChats[chatId] || remoteTurns.has(chatId)) {
+    // A subagent still running in its own session counts as busy too: its turn
+    // is driven from the main process, so a prompt sent now would start a SECOND
+    // concurrent turn writing into the same transcript. Queue it instead — it
+    // drains as a normal follow-up once the delegate reports.
+    if (get().sendingChats[chatId] || remoteTurns.has(chatId) || subagentTurns.has(chatId)) {
       await api.queue.add(
         chatId,
         text,
@@ -875,8 +1170,15 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     }
 
     // Real model: a connected provider with a usable credential streams the reply.
+    // Everything below resolves from THIS SESSION's pinned config (falling back
+    // to the global last-used values), so a turn always runs on the model the
+    // session shows - even if another session changed its picker mid-reply.
+    const config = resolveSessionConfig(
+      get().chats.find((c) => c.id === chatId),
+      settings
+    )
     const provider =
-      get().providers.find((p) => p.id === settings?.activeProviderId) ?? get().providers[0] ?? null
+      get().providers.find((p) => p.id === config.providerId) ?? get().providers[0] ?? null
     if (provider && (provider.hasCredential || provider.auth === 'none')) {
       // Resolve the model's capabilities (reasoning support + context window) so
       // we only send reasoning params when valid and cut history to the budget.
@@ -885,24 +1187,24 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       // No model chosen? Take the provider's latest (tool-capable) model instead
       // of a hardcoded id that may not exist on this provider — the user never
       // has to type a model name for a connected provider to just work.
+      // Only trust the session's model when it belongs to the provider we
+      // actually resolved, so a stale pin can never cross providers.
       const model =
-        settings?.activeModel ||
+        (config.providerId === provider.id ? config.model : null) ||
         provider.defaultModel ||
         pickDefaultModel(catalog) ||
         (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
       const info = catalog.find((m) => m.id === model)
       const modelContext = info?.contextLimit ?? 128_000
-      const contextBudget = Math.min(
-        settings?.contextLimit ?? Math.min(modelContext, 200_000),
-        modelContext
-      )
+      const contextBudget = contextBudgetFor(config.contextLimit, modelContext)
+      const agentId = config.agentId
       // Auto-compact before the window overflows the model's *real* budget:
       // trigger once used tokens pass contextBudget minus the larger of the
       // reserved reply size or a safety buffer (mirrors opencode's
       // `context - max(output, buffer)` rather than a flat 80%). Compaction
       // summarizes older turns; buildChatMessages then sends summary + recent.
       if (!get().compactingChats[chatId]) {
-        const used = await estimateUsedTokens(chatId, model, get().activeAgentId)
+        const used = await estimateUsedTokens(chatId, model, agentId)
         if (isOverflow(used, contextBudget, info?.outputLimit ?? 4096)) {
           await get().compactConversation(chatId)
         }
@@ -913,7 +1215,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         contextBudget,
         info?.outputLimit ?? 4096,
         model,
-        get().activeAgentId
+        agentId
       )
       // Build parts live from the agent's event stream through the shared fold:
       // text grows the current text part, each tool call adds a card that flips
@@ -968,9 +1270,9 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         providerId: provider.id,
         model,
         messages: chatMessages,
-        agentId: get().activeAgentId,
+        agentId,
         reasoning: info?.reasoning ?? false,
-        reasoningEffort: settings?.reasoningEffort ?? 'high',
+        reasoningEffort: config.reasoningEffort,
         contextLimit: contextBudget
       })
       deltaHandlers.delete(requestId)
@@ -1063,12 +1365,17 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const chatId = targetChatId ?? get().activeChatId
     if (!chatId || get().compactingChats[chatId]) return
     const { settings, providers } = get()
-    const provider =
-      providers.find((p) => p.id === settings?.activeProviderId) ?? providers[0] ?? null
+    // Compact with the SESSION's own model: compacting must not route a
+    // session's history through whatever model another session has selected.
+    const config = resolveSessionConfig(
+      get().chats.find((c) => c.id === chatId),
+      settings
+    )
+    const provider = providers.find((p) => p.id === config.providerId) ?? providers[0] ?? null
     if (!provider || !(provider.hasCredential || provider.auth === 'none')) return
     await get().ensureModels(provider.id)
     const model =
-      settings?.activeModel ||
+      (config.providerId === provider.id ? config.model : null) ||
       provider.defaultModel ||
       pickDefaultModel(get().modelCatalog[provider.id] ?? []) ||
       (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
