@@ -12,7 +12,13 @@
  */
 import type { ChatMessage, LlmEvent } from '../../shared/api'
 import type { MessagePart, ReasoningEffort } from '../../shared/types'
-import { getAgent, DEFAULT_AGENT_ID, type AgentDef } from '../../shared/agents'
+import {
+  getAgent,
+  isReadOnlyAgent,
+  isWriteCapableSubagent,
+  DEFAULT_AGENT_ID,
+  type AgentDef
+} from '../../shared/agents'
 import {
   selectPromptName,
   buildEnvironment,
@@ -23,11 +29,12 @@ import { flattenToolHistory, sanitizeToolCallId } from '../../shared/tool-histor
 import { pruneToolMessages, KEEP_RECENT_TOKENS, messageTokens } from '../../shared/context'
 import {
   MAX_PARALLEL_SUBAGENTS,
-  mapWithConcurrency,
   parseTaskInput,
   partitionToolCalls,
+  runTasksByWriteCapability,
   renderBackgroundStarted,
   renderTaskResult,
+  type PlannedCall,
   type TaskInput
 } from '../../shared/parallel'
 import { existsSync, readFileSync } from 'node:fs'
@@ -680,7 +687,7 @@ type ToolSchema = ReturnType<typeof fn>
 /** The delegation tool — lets a primary agent spawn a focused subagent. */
 const TASK_SCHEMA = fn(
   'task',
-  'Delegate a focused, self-contained sub-task to a specialized subagent that runs on its own and reports back. Use this to parallelize or offload work (e.g. build a page, research the codebase). The subagent has NO memory of this conversation, so put ALL the context it needs into `prompt`. It returns a single report. Call task multiple times IN ONE turn to run several subagents concurrently — they execute in parallel (bounded), so batch independent work together.',
+  'Delegate a focused, self-contained sub-task to a specialized subagent that runs on its own and reports back. Use this to parallelize or offload work (e.g. research the codebase, build a page). The subagent has NO memory of this conversation, so put ALL the context it needs into `prompt`. It returns a single report. Call task multiple times IN ONE turn to batch independent work. CONCURRENCY: read-only "explore" subagents run in PARALLEL (bounded) - that is what subagents are for, and you should fan them out freely. Write-capable "general" subagents are SERIALIZED one at a time, because they share this session\'s working directory and would otherwise overwrite each other\'s edits; several of them in one turn is correct but no faster than doing the work yourself. To get genuinely parallel WRITES, the user should open separate sessions - each gets its own git worktree and therefore its own filesystem.',
   {
     description: str('A short (3-5 word) label for the task.'),
     prompt: str('The complete task for the subagent, including every bit of context it needs.'),
@@ -772,15 +779,6 @@ export interface RunTurnOptions {
   reasoningEffort?: ReasoningEffort
   /** Effective context budget (tokens). */
   contextLimit?: number
-}
-
-/**
- * An agent is read-only when it may not write or edit files (its tool allowlist
- * excludes both). Plan mode qualifies; such agents also may only delegate to
- * other read-only subagents (mirrors opencode denying `task.general` in plan).
- */
-function isReadOnlyAgent(agent: AgentDef): boolean {
-  return agent.tools !== 'all' && !agent.tools.includes('write') && !agent.tools.includes('edit')
 }
 
 /**
@@ -1030,17 +1028,30 @@ async function runLoop(o: LoopOptions): Promise<string> {
       }))
     })
 
-    // Run the turn's tool calls. `task` delegations run concurrently through a
-    // bounded pool (parallel subagents — Phase 11) and overlap with the other
+    // Run the turn's tool calls. `task` delegations overlap with the other
     // tools, which stay sequential so file-mutating calls can't race each other.
     // Every result is paired back to its call id in the ORIGINAL order, so the
-    // assistant.tool_calls ↔ role:'tool' structure the model sees stays valid.
+    // assistant.tool_calls → role:'tool' structure the model sees stays valid.
     const { tasks, others } = partitionToolCalls(toolCalls)
 
-    // Kick the subagents off first so they run while the sequential tools below
-    // execute. The pool never throws (runSubagent handles its own errors); the
-    // extra guard just turns any unexpected setup failure into a task_error.
-    const tasksSettled = mapWithConcurrency(tasks, MAX_PARALLEL_SUBAGENTS, async (tc) => {
+    // Subagents inherit their parent's cwd verbatim — they must, since their
+    // work has to land in the tree that spawned them. That makes two parallel
+    // WRITE-capable subagents a file race inside a single session, so
+    // concurrency is constrained by write capability rather than by worktree:
+    //   - readers (explore) still fan out through the bounded pool
+    //   - writers (general) run strictly one at a time
+    // Parallel writes belong in separate top-level sessions, which get their own
+    // worktrees and therefore their own filesystem.
+    //
+    // KNOWN GAP: a BACKGROUND write-capable subagent (background: true) is
+    // detached by design and is not covered by this rule, so it can still race a
+    // foreground writer. Guarding it with the same lock was considered and
+    // rejected: a background subagent can run for minutes, so a shared mutex
+    // would let detached work stall an interactive turn — head-of-line blocking
+    // that's a worse failure than the race it prevents. It's handled at the
+    // prompt level instead (see renderBackgroundStarted, which tells the model
+    // not to touch the same files as a running background task).
+    const runTask = async (tc: PlannedCall): Promise<{ id: string; content: string }> => {
       const parsed = parseTaskInput(tc.args)
       try {
         const result = await runSubagent({
@@ -1069,6 +1080,16 @@ async function runLoop(o: LoopOptions): Promise<string> {
         const msg = e instanceof Error ? e.message : String(e)
         return { id: tc.id, content: renderTaskResult(parsed.subagentType, 'error', msg) }
       }
+    }
+
+    // Started here, not awaited, so the subagents run while the sequential tools
+    // below execute. runTask never throws (runSubagent handles its own errors,
+    // and the guard inside turns any setup failure into a task_error).
+    const tasksSettled = runTasksByWriteCapability(tasks, {
+      isWriteCapable: (tc) => isWriteCapableSubagent(parseTaskInput(tc.args).subagentType),
+      limit: MAX_PARALLEL_SUBAGENTS,
+      run: runTask,
+      aborted: () => signal.aborted
     })
 
     const resultById = new Map<string, string>()
@@ -1113,9 +1134,9 @@ async function runLoop(o: LoopOptions): Promise<string> {
       liveTools = [...baseTools, ...liveMcpTools]
     }
 
-    // Join the parallel subagents, then append every tool result in the original
+    // Join the subagents, then append every tool result in the original
     // tool_calls order so the paired structure is preserved for the next stream.
-    for (const r of await tasksSettled) resultById.set(r.id, r.content)
+    for (const r of await tasksSettled) resultById.set(r.result.id, r.result.content)
     if (signal.aborted) return lastText
     for (const tc of toolCalls) {
       convo.push({

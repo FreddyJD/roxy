@@ -81,6 +81,33 @@ export function getAgent(id: string): AgentDef | undefined {
   return AGENT_BY_ID.get(id)
 }
 
+/**
+ * An agent is read-only when it may not write or edit files (its tool allowlist
+ * excludes both). Plan mode qualifies, and so does the `explore` subagent.
+ *
+ * This drives two separate rules:
+ *  - A read-only agent may only delegate to read-only subagents, so it can't
+ *    sidestep its own restriction by spawning an editing one.
+ *  - Write-capable subagents are SERIALIZED within a turn, because two of them
+ *    editing the same file would clobber each other (see harness/agent.ts).
+ */
+export function isReadOnlyAgent(agent: AgentDef): boolean {
+  return agent.tools !== 'all' && !agent.tools.includes('write') && !agent.tools.includes('edit')
+}
+
+/**
+ * Whether a `task` call names a subagent that can modify the filesystem.
+ *
+ * An unknown or malformed subagent name counts as write-capable: the default is
+ * `general` (tools: 'all'), and treating an unknown name as safe-to-parallelize
+ * would be exactly the wrong way to be wrong.
+ */
+export function isWriteCapableSubagent(subagentType: string): boolean {
+  const agent = getAgent(subagentType)
+  if (!agent) return true
+  return !isReadOnlyAgent(agent)
+}
+
 export const PRIMARY_AGENTS = AGENTS.filter((a) => a.mode === 'primary' && !a.hidden)
 export const SUBAGENTS = AGENTS.filter((a) => a.mode === 'subagent' && !a.hidden)
 export const DEFAULT_AGENT_ID = 'build'

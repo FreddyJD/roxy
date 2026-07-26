@@ -51,6 +51,81 @@ export function partitionToolCalls<T extends { name: string }>(
   return { tasks, others }
 }
 
+/**
+ * Split `task` calls into ones safe to run at once and ones that must not.
+ *
+ * Subagents inherit their parent's cwd verbatim — they have to, since their work
+ * must land in the tree that spawned them. Giving each its own worktree would
+ * only turn a file race into a merge conflict. So concurrency is constrained by
+ * WRITE CAPABILITY instead:
+ *
+ *  - readers (`explore`) keep running in parallel — the common case, already safe
+ *  - writers (`general`) run one at a time, because two of them editing the same
+ *    file inside one session clobber each other
+ *
+ * Parallel WRITES belong in separate top-level sessions, which get their own git
+ * worktrees and therefore their own filesystem.
+ *
+ * Order within each bucket is preserved so results can be zipped back to their
+ * original tool_call ids.
+ */
+export function partitionTasksByWriteCapability<T>(
+  tasks: readonly T[],
+  isWriteCapable: (task: T) => boolean
+): { readers: T[]; writers: T[] } {
+  const readers: T[] = []
+  const writers: T[] = []
+  for (const t of tasks) {
+    if (isWriteCapable(t)) writers.push(t)
+    else readers.push(t)
+  }
+  return { readers, writers }
+}
+
+/**
+ * Run a turn's `task` delegations under the write-capability rule, returning
+ * results in the SAME order as the input.
+ *
+ * Readers go through the bounded pool; writers run strictly one at a time. Both
+ * start immediately and progress concurrently with each other — the constraint
+ * is only that no two WRITERS overlap, not that writers wait for readers.
+ *
+ * The returned promise is meant to be held and awaited later, so a caller can
+ * run its other (sequential) tools while these are in flight.
+ *
+ * `aborted()` is polled between writers: once the turn is cancelled we stop
+ * LAUNCHING new ones, but results already produced are kept so the caller can
+ * still pair every tool_call with a tool result.
+ */
+export async function runTasksByWriteCapability<T, R>(
+  tasks: readonly T[],
+  opts: {
+    isWriteCapable: (task: T) => boolean
+    limit: number
+    run: (task: T) => Promise<R>
+    aborted?: () => boolean
+  }
+): Promise<{ task: T; result: R }[]> {
+  const { readers, writers } = partitionTasksByWriteCapability(tasks, opts.isWriteCapable)
+
+  const readerWork = mapWithConcurrency(readers, opts.limit, async (t) => ({
+    task: t,
+    result: await opts.run(t)
+  }))
+
+  const writerWork = (async (): Promise<{ task: T; result: R }[]> => {
+    const out: { task: T; result: R }[] = []
+    for (const t of writers) {
+      if (opts.aborted?.()) break
+      out.push({ task: t, result: await opts.run(t) })
+    }
+    return out
+  })()
+
+  const [a, b] = await Promise.all([readerWork, writerWork])
+  return [...a, ...b]
+}
+
 /** Coerce an unknown JSON value to a trimmed string, or '' when absent. */
 function asString(v: unknown): string {
   return typeof v === 'string' ? v : ''

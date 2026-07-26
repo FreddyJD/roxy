@@ -3,7 +3,15 @@
  * Run: npm run smoke:shared
  */
 import { TOOLS, getTool, resolveToolIds, TOOL_CATEGORIES } from '../src/shared/tools'
-import { AGENTS, getAgent, PRIMARY_AGENTS, SUBAGENTS, DEFAULT_AGENT_ID } from '../src/shared/agents'
+import {
+  AGENTS,
+  getAgent,
+  isReadOnlyAgent,
+  isWriteCapableSubagent,
+  PRIMARY_AGENTS,
+  SUBAGENTS,
+  DEFAULT_AGENT_ID
+} from '../src/shared/agents'
 import { SEED_PROVIDERS, resolveSeed, isConnectableNow } from '../src/shared/providers'
 import { randomSlug, uniqueSlug } from '../src/shared/slugs'
 import { formatInterval } from '../src/shared/format'
@@ -66,6 +74,8 @@ import {
   MAX_PARALLEL_SUBAGENTS,
   mapWithConcurrency,
   parseTaskInput,
+  partitionTasksByWriteCapability,
+  runTasksByWriteCapability,
   partitionToolCalls,
   renderBackgroundStarted,
   renderTaskResult
@@ -1696,6 +1706,114 @@ async function main(): Promise<void> {
   check('portable: safe path rejects absolute', !isSafeSkillFilePath('/etc/passwd'))
   check('portable: safe path rejects a drive letter', !isSafeSkillFilePath('C:/x'))
   check('portable: safe path rejects backslashes', !isSafeSkillFilePath('a\\b'))
+
+  // ---- subagent concurrency: readers parallel, writers serialized ----
+  // Two write-capable subagents share their parent's cwd, so running them at
+  // once is a file race inside one session. These assert real OVERLAP, not a
+  // reimplementation of the rule.
+  {
+    check('explore is not write-capable', isWriteCapableSubagent('explore') === false)
+    check('general IS write-capable', isWriteCapableSubagent('general') === true)
+    // Fail closed: the default subagent is `general`, so an unknown name must
+    // never be optimistically treated as safe to parallelize.
+    check('an unknown subagent is treated as write-capable', isWriteCapableSubagent('nope') === true)
+    check('an empty subagent name is write-capable', isWriteCapableSubagent('') === true)
+
+    const part = partitionTasksByWriteCapability(
+      ['explore', 'general', 'explore', 'general'],
+      (t) => isWriteCapableSubagent(t)
+    )
+    check('partition splits readers from writers',
+      part.readers.length === 2 && part.writers.length === 2)
+
+    /**
+     * Run tasks, recording the max number of the SAME KIND in flight at once.
+     * Per-kind matters: the rule is "no two writers overlap", not "a writer
+     * never overlaps anything" — writers are expected to run alongside readers.
+     */
+    const trace = async (kinds: string[]) => {
+      const live = new Map<string, number>()
+      const peak = new Map<string, number>()
+      const order: string[] = []
+      const results = await runTasksByWriteCapability(kinds, {
+        isWriteCapable: (t) => isWriteCapableSubagent(t),
+        limit: 4,
+        run: async (t) => {
+          const now = (live.get(t) ?? 0) + 1
+          live.set(t, now)
+          peak.set(t, Math.max(peak.get(t) ?? 0, now))
+          order.push(t)
+          await new Promise((r) => setTimeout(r, 20))
+          live.set(t, now - 1)
+          return `done:${t}`
+        }
+      })
+      return { peak, order, results }
+    }
+
+    // Writers must never overlap...
+    const w = await trace(['general', 'general', 'general'])
+    check('two write-capable subagents never overlap', (w.peak.get('general') ?? 0) === 1,
+      String(w.peak.get('general')))
+    check('...and all of them still run', w.results.length === 3)
+    check('...in their original order', w.order.join(',') === 'general,general,general')
+
+    // ...while readers still do.
+    const r = await trace(['explore', 'explore', 'explore'])
+    check('read-only subagents DO overlap', (r.peak.get('explore') ?? 0) > 1,
+      String(r.peak.get('explore')))
+    check('...and all of them run', r.results.length === 3)
+
+    // Mixed: readers fan out, the single writer is unaffected.
+    const m = await trace(['explore', 'general', 'explore', 'general'])
+    check('mixed turn: readers still overlap', (m.peak.get('explore') ?? 0) > 1)
+    check('mixed turn: writers still do not', (m.peak.get('general') ?? 0) === 1)
+    // Writers are not blocked BY readers — serialization is writer-vs-writer
+    // only, so a slow explore never stalls the editing work.
+    {
+      let liveReaders = 0
+      let sawOverlap = false
+      await runTasksByWriteCapability(['explore', 'explore', 'general', 'general'], {
+        isWriteCapable: (t) => isWriteCapableSubagent(t),
+        limit: 4,
+        run: async (t) => {
+          const reader = t === 'explore'
+          if (reader) liveReaders++
+          else if (liveReaders > 0) sawOverlap = true
+          await new Promise((r) => setTimeout(r, 20))
+          if (reader) liveReaders--
+          return t
+        }
+      })
+      check('mixed turn: a writer runs while readers are still in flight', sawOverlap)
+    }
+    check('mixed turn: every task returns a result', m.results.length === 4)
+    check('mixed turn: results carry their task back',
+      m.results.every((x) => x.result === `done:${x.task}`))
+
+    // Abort stops LAUNCHING more writers, but keeps what already finished so the
+    // caller can still pair every tool_call with a tool result.
+    {
+      let ran = 0
+      let abort = false
+      const out = await runTasksByWriteCapability(['general', 'general', 'general'], {
+        isWriteCapable: () => true,
+        limit: 4,
+        aborted: () => abort,
+        run: async () => {
+          ran++
+          abort = true // cancel the turn after the first one
+          return ran
+        }
+      })
+      check('abort stops launching further writers', ran === 1, String(ran))
+      check('...but keeps the result that already completed', out.length === 1)
+    }
+
+    check('no tasks -> no results',
+      (await runTasksByWriteCapability([], { isWriteCapable: () => true, limit: 4, run: async () => 1 }))
+        .length === 0)
+  }
 
   // ---- workstream strip visibility rules ----
   // Every rule here is a visible bug when it's wrong: a strip that flashes and
