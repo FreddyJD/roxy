@@ -24,6 +24,13 @@ import { spawn } from 'node:child_process'
 import { promises as fs, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
+import {
+  DEFAULT_BRANCH_PREFIX,
+  isPlaceholderBranch,
+  normalizeBranchPrefix,
+  placeholderBranchName
+} from '../../shared/branch'
+import * as repo from '../db/repo'
 
 /** How long any single git command may run before it's killed. */
 const GIT_TIMEOUT_MS = 30_000
@@ -32,10 +39,23 @@ const FETCH_TIMEOUT_MS = 60_000
 /** Cap git's stdout so a pathological repo can't balloon memory. */
 const MAX_GIT_OUTPUT = 2_000_000
 
-/** Branch prefix for the placeholder name a new workstream starts with. */
-export const WORKTREE_BRANCH_PREFIX = 'roxy'
-/** Exactly `roxy/` + 8 lowercase hex chars — nothing else counts as temporary. */
-const TEMPORARY_BRANCH_RE = new RegExp(`^${WORKTREE_BRANCH_PREFIX}/[0-9a-f]{8}$`)
+/** Fallback prefix when settings haven't been read (tests, early startup). */
+export const WORKTREE_BRANCH_PREFIX = DEFAULT_BRANCH_PREFIX
+
+/**
+ * The user's configured branch prefix, normalized.
+ *
+ * Read per call rather than cached: changing it in Settings has to affect the
+ * very next workstream, and this is one indexed row.
+ */
+function branchPrefix(): string {
+  try {
+    return normalizeBranchPrefix(repo.getSettings().branchPrefix)
+  } catch {
+    // No settings yet (early startup, or a test without a DB) - fall back.
+    return DEFAULT_BRANCH_PREFIX
+  }
+}
 /** The git config key that remembers which branch a workstream should merge into. */
 const BASE_CONFIG_SUFFIX = 'roxy-base'
 
@@ -407,22 +427,56 @@ export async function status(cwd: string): Promise<GitStatus | null> {
 // Branch naming
 // ---------------------------------------------------------------------------
 
-/** A fresh placeholder branch name, e.g. `roxy/a1b2c3d4`. */
-export function temporaryBranchName(): string {
+/**
+ * A fresh placeholder branch name, e.g. `roxy/a1b2c3d4`.
+ *
+ * The prefix is a user setting (some people want `wip/`, their initials, or
+ * nothing at all), so it is read here rather than baked in as a constant.
+ */
+export function temporaryBranchName(prefix?: string): string {
   const hex = Array.from({ length: 8 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
-  return `${WORKTREE_BRANCH_PREFIX}/${hex}`
+  return placeholderBranchName(prefix ?? branchPrefix(), hex)
 }
 
 /**
  * Whether a branch is still an auto-generated placeholder.
  *
- * A later step renames a workstream's branch from the user's first message.
- * That rename MUST only ever touch placeholders — clobbering a name the user
- * chose (or one that came from origin) would be data loss, so this pattern is
- * deliberately exact rather than a `roxy/` prefix check.
+ * Renaming a workstream's branch MUST only ever touch placeholders — clobbering
+ * a name the user chose (or one that came from origin) would be data loss, so
+ * this is an exact shape rather than a prefix check.
  */
-export function isTemporaryBranch(name: string | null | undefined): boolean {
-  return !!name && TEMPORARY_BRANCH_RE.test(name)
+export function isTemporaryBranch(name: string | null | undefined, prefix?: string): boolean {
+  return isPlaceholderBranch(name, prefix ?? branchPrefix())
+}
+
+/**
+ * Rename a branch, and move the workstream's recorded PR base with it.
+ *
+ * Safe while the branch is checked out in a worktree: git rewrites the
+ * worktree's HEAD in place, so the directory and any uncommitted work are
+ * untouched. Run from the MAIN repo — a worktree can rename its own branch, but
+ * the main tree is the one caller we always have a path to.
+ */
+export async function renameBranch(
+  repoRoot: string,
+  from: string,
+  to: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!repoRoot || !from || !to) return { ok: false, error: 'renameBranch: missing argument' }
+  if (from === to) return { ok: true }
+
+  const valid = await git(['check-ref-format', '--branch', to], repoRoot)
+  if (!valid.ok) return { ok: false, error: `"${to}" is not a valid branch name.` }
+
+  const exists = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${to}`], repoRoot)
+  if (exists.ok && exists.stdout.trim()) {
+    return { ok: false, error: `A branch named "${to}" already exists.` }
+  }
+
+  // -m, never -M: forcing would clobber a branch that a race just created.
+  const r = await git(['branch', '-m', from, to], repoRoot)
+  if (!r.ok) return { ok: false, error: cleanGitError(r, `Could not rename "${from}"`) }
+  return { ok: true }
 }
 
 /** Filesystem-safe directory segment for a branch (`feat/x` -> `feat-x`). */

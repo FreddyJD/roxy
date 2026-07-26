@@ -56,6 +56,14 @@ import {
 } from '../src/shared/web'
 import { resolveWorktreeCwd } from '../src/shared/workspace'
 import {
+  DEFAULT_BRANCH_PREFIX,
+  branchNameError,
+  branchPrefixError,
+  isPlaceholderBranch,
+  normalizeBranchPrefix,
+  placeholderBranchName
+} from '../src/shared/branch'
+import {
   workstreamStripView,
   statusKeyForSession,
   shouldAutoWorkstream,
@@ -2288,6 +2296,80 @@ async function main(): Promise<void> {
       statusKeyForSession(mk({ worktreePath: '/wt/auth' })) === '/wt/auth'
     )
     check('poll key: a sub-session never polls', statusKeyForSession(sub) === null)
+  }
+
+  // ---- branch naming (prefix + rename validation) ----
+  // These rules gate a git call, so they must agree with what git actually
+  // accepts: too loose and the user gets a raw `fatal:`, too strict and a
+  // legal name is refused for no reason.
+  {
+    check('prefix: default is roxy', DEFAULT_BRANCH_PREFIX === 'roxy')
+    check('prefix: normalize trims whitespace', normalizeBranchPrefix('  wip  ') === 'wip')
+    check('prefix: normalize strips slashes', normalizeBranchPrefix('/feat/') === 'feat')
+    check('prefix: normalize keeps inner slashes', normalizeBranchPrefix('me/wip') === 'me/wip')
+    check('prefix: empty is allowed (means no prefix)', branchPrefixError('') === null)
+    check('prefix: whitespace-only is empty, not invalid', normalizeBranchPrefix('   ') === '')
+    check('prefix: a plain word is valid', branchPrefixError('wip') === null)
+    check('prefix: rejects spaces', branchPrefixError('my prefix') !== null)
+    check('prefix: rejects a double slash', branchPrefixError('a//b') !== null)
+    check('prefix: rejects ..', branchPrefixError('a..b') !== null)
+    check('prefix: rejects a leading dot', branchPrefixError('.hidden') !== null)
+    check('prefix: rejects a segment starting with -', branchPrefixError('a/-b') !== null)
+    check('prefix: rejects .lock', branchPrefixError('a.lock') !== null)
+
+    check(
+      'placeholder: prefix + hex',
+      placeholderBranchName('roxy', 'a1b2c3d4') === 'roxy/a1b2c3d4'
+    )
+    check(
+      'placeholder: no prefix means a bare name',
+      placeholderBranchName('', 'a1b2c3d4') === 'a1b2c3d4'
+    )
+    check(
+      'placeholder: a slashy prefix is normalized',
+      placeholderBranchName('/me/', 'a1b2c3d4') === 'me/a1b2c3d4'
+    )
+
+    // isPlaceholderBranch guards a RENAME, so a false positive is data loss:
+    // a name the user chose must never look auto-generated.
+    check('placeholder: recognizes its own output', isPlaceholderBranch('roxy/a1b2c3d4', 'roxy'))
+    check(
+      'placeholder: rejects a human name under the same prefix',
+      !isPlaceholderBranch('roxy/fix-auth', 'roxy')
+    )
+    check('placeholder: rejects the wrong prefix', !isPlaceholderBranch('roxy/a1b2c3d4', 'wip'))
+    check('placeholder: matches a custom prefix', isPlaceholderBranch('wip/deadbeef', 'wip'))
+    check('placeholder: bare hex with an empty prefix', isPlaceholderBranch('a1b2c3d4', ''))
+    check('placeholder: rejects wrong-length hex', !isPlaceholderBranch('roxy/a1b2c3', 'roxy'))
+    check('placeholder: rejects uppercase hex', !isPlaceholderBranch('roxy/A1B2C3D4', 'roxy'))
+    check('placeholder: rejects null', !isPlaceholderBranch(null, 'roxy'))
+    // A prefix containing regex metacharacters must not corrupt the pattern.
+    check(
+      'placeholder: a dotted prefix is escaped, not treated as a wildcard',
+      isPlaceholderBranch('a.b/a1b2c3d4', 'a.b') && !isPlaceholderBranch('axb/a1b2c3d4', 'a.b')
+    )
+
+    check('branch name: a normal name is fine', branchNameError('feat/login') === null)
+    check('branch name: empty is rejected', branchNameError('') !== null)
+    check('branch name: whitespace-only is rejected', branchNameError('   ') !== null)
+    check('branch name: rejects spaces', branchNameError('my branch') !== null)
+    check(
+      'branch name: rejects ~ ^ : ? * [ and backslash',
+      ['a~b', 'a^b', 'a:b', 'a?b', 'a*b', 'a[b', 'a\\\\b'].every((n) => branchNameError(n) !== null)
+    )
+    check('branch name: rejects a leading dash', branchNameError('-x') !== null)
+    check('branch name: rejects a trailing slash', branchNameError('feat/') !== null)
+    check('branch name: rejects a leading slash', branchNameError('/feat') !== null)
+    check('branch name: rejects ..', branchNameError('a..b') !== null)
+    check('branch name: rejects a trailing dot', branchNameError('feat.') !== null)
+    check('branch name: rejects .lock', branchNameError('feat.lock') !== null)
+    check('branch name: rejects a dot-leading segment', branchNameError('feat/.x') !== null)
+    check('branch name: rejects @{', branchNameError('a@{b') !== null)
+    check('branch name: rejects a bare @', branchNameError('@') !== null)
+    check(
+      'branch name: allows dots, dashes and underscores',
+      branchNameError('feat/my-thing_v2.1') === null
+    )
   }
 
   // ---- auto-workstream (the default for new sessions) ----

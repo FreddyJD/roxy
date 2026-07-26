@@ -89,6 +89,7 @@ interface RoxyStore {
   setContextLimit: (limit: number | null) => Promise<void>
   setWebSearchApiKey: (key: string | null) => Promise<void>
   setAutoWorkstream: (enabled: boolean) => Promise<void>
+  setBranchPrefix: (prefix: string) => Promise<void>
   selectChat: (id: string) => Promise<void>
   clearActive: () => void
   newSession: () => Promise<void>
@@ -539,6 +540,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
 
   setAutoWorkstream: async (enabled) => {
     const settings = await api.settings.setAutoWorkstream(enabled)
+    set({ settings })
+  },
+
+  setBranchPrefix: async (prefix) => {
+    const settings = await api.settings.setBranchPrefix(prefix)
     set({ settings })
   },
 

@@ -3,6 +3,7 @@ import { Check, ChevronDown, GitBranch, Plus, SquareStack } from 'lucide-react'
 import type { Chat } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
 import { workstreamStripView, statusKeyForSession } from '@shared/workstream'
+import { branchNameError } from '@shared/branch'
 import { cn } from '../lib/cn'
 
 /**
@@ -76,36 +77,21 @@ export function WorkstreamStrip(): JSX.Element | null {
 
         <Divider />
 
-        {/* Segment 2 — output, not a control. Switching a branch in place is a
-            different (and riskier) action than opening a workstream; the
-            workstream menu above is the branch picker. */}
-        <span
-          className={cn(
-            'flex min-w-0 items-center gap-1.5 px-1.5 py-1',
-            pending ? 'text-text-subtle' : 'text-text-muted'
-          )}
-          title={
-            pending
-              ? branch
-                ? `Will check out ${branch} when this session starts`
-                : 'Branch is chosen when this session starts'
-              : branch
-                ? `On branch ${branch}`
-                : undefined
-          }
-        >
-          <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
-          {/* A pending 'new' workstream has no branch yet — its name is
-              generated at materialization. Showing the CURRENT branch here
-              would name the one thing this workstream exists to stay off. */}
-          <span className="truncate">{branch ?? (pending ? 'branch pending' : 'detached')}</span>
-          {dirty && (
-            <span
-              className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"
-              title={`${changed} uncommitted change${changed === 1 ? '' : 's'}`}
-            />
-          )}
-        </span>
+        {/* Segment 2 — the branch, renameable in place. Generated names
+            (`roxy/6fdc60b8`) say nothing about the work, and the name is what
+            ends up on the PR, so renaming has to be reachable from where you
+            read it rather than from a terminal. Switching branches is still
+            NOT offered here: that is the workstream menu's job, and doing it in
+            the default workstream would mutate the checkout every other session
+            and the user's editor share. */}
+        <BranchSegment
+          sessionId={owner.id}
+          branch={branch}
+          pending={pending}
+          dirty={dirty}
+          changed={changed}
+          readOnly={readOnly}
+        />
 
         <Divider />
 
@@ -128,6 +114,152 @@ export function WorkstreamStrip(): JSX.Element | null {
 
 function Divider(): JSX.Element {
   return <span className="h-3.5 w-px shrink-0 bg-border" />
+}
+
+/**
+ * Segment 2 — the branch name, editable in place.
+ *
+ * Click to edit, Enter to save, Escape to cancel. Deliberately not a modal: the
+ * name is short, the edit is reversible, and a dialog for a nine-character
+ * string is ceremony. The input is validated as you type against the same rules
+ * the main process uses (`shared/branch`), so the failure mode is a disabled
+ * button with a reason rather than a git `fatal:` after the fact.
+ *
+ * Renaming is safe while the branch is checked out — git rewrites the
+ * worktree's HEAD in place and leaves uncommitted work alone.
+ */
+function BranchSegment({
+  sessionId,
+  branch,
+  pending,
+  dirty,
+  changed,
+  readOnly
+}: {
+  sessionId: string
+  branch: string | null
+  pending: boolean
+  dirty: boolean
+  changed: number
+  readOnly: boolean
+}): JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const refreshChats = useRoxyStore((s) => s.refreshChats)
+
+  // A pending workstream has no branch to rename yet, and a sub-session must
+  // not move its parent's branch.
+  const canRename = !!branch && !pending && !readOnly
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select()
+  }, [editing])
+
+  const start = (): void => {
+    if (!canRename) return
+    setDraft(branch ?? '')
+    setError(null)
+    setEditing(true)
+  }
+
+  const cancel = (): void => {
+    setEditing(false)
+    setError(null)
+  }
+
+  const save = async (): Promise<void> => {
+    const next = draft.trim()
+    if (!next || next === branch) return cancel()
+    const problem = branchNameError(next)
+    if (problem) return setError(problem)
+
+    setSaving(true)
+    const res = await window.roxy.git.renameBranch(sessionId, next)
+    setSaving(false)
+    if (!res.ok) return setError(res.error ?? 'Could not rename the branch.')
+    // The branch lives on the chat row, so the strip re-reads it from there.
+    await refreshChats()
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <span className="relative flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-text">
+        <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
+        <input
+          ref={inputRef}
+          value={draft}
+          autoFocus
+          disabled={saving}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            setError(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void save()
+            if (e.key === 'Escape') cancel()
+          }}
+          // Blur saves rather than discards: losing a rename to a stray click
+          // is the more annoying of the two failure modes, and Escape is
+          // right there for the other one.
+          onBlur={() => void save()}
+          spellCheck={false}
+          className={cn(
+            'min-w-0 flex-1 rounded border bg-surface px-1 py-0.5 text-xs outline-none',
+            error ? 'border-danger' : 'border-border-strong'
+          )}
+          style={{ width: `${Math.max(draft.length + 2, 12)}ch` }}
+        />
+        {error && (
+          <span
+            role="alert"
+            className="absolute bottom-full left-0 mb-1 whitespace-nowrap rounded-md border border-danger/40 bg-elevated px-2 py-1 text-[11px] text-danger shadow-lg"
+          >
+            {error}
+          </span>
+        )}
+      </span>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={start}
+      disabled={!canRename}
+      title={
+        pending
+          ? branch
+            ? `Will check out ${branch} when this session starts`
+            : 'Branch is chosen when this session starts'
+          : canRename
+            ? `On branch ${branch} — click to rename`
+            : branch
+              ? `On branch ${branch}`
+              : undefined
+      }
+      className={cn(
+        'flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 transition',
+        pending ? 'text-text-subtle' : 'text-text-muted',
+        canRename && 'hover:bg-white/5 hover:text-text'
+      )}
+    >
+      <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
+      {/* A pending 'new' workstream has no branch yet — its name is generated
+          at materialization. Showing the CURRENT branch here would name the one
+          thing this workstream exists to stay off. */}
+      <span className="truncate">{branch ?? (pending ? 'branch pending' : 'detached')}</span>
+      {dirty && (
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"
+          title={`${changed} uncommitted change${changed === 1 ? '' : 's'}`}
+        />
+      )}
+    </button>
+  )
 }
 
 /**

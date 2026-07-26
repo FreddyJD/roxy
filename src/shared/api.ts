@@ -438,6 +438,7 @@ export interface RoxyApi {
     setContextLimit(limit: number | null): Promise<AppSettings>
     setWebSearchApiKey(key: string | null): Promise<AppSettings>
     setAutoWorkstream(enabled: boolean): Promise<AppSettings>
+    setBranchPrefix(prefix: string): Promise<AppSettings>
     completeOnboarding(): Promise<AppSettings>
     reset(): Promise<void>
   }
@@ -623,6 +624,11 @@ export interface RoxyApi {
     createWorktree(input: CreateWorktreeInput): Promise<CreateWorktreeResult>
     /** Remove a worktree directory and prune git's record of it. */
     removeWorktree(path: string, force?: boolean): Promise<{ ok: boolean; error?: string }>
+    /**
+     * Rename a session's workstream branch. Safe while checked out — git
+     * rewrites the worktree's HEAD in place, leaving uncommitted work alone.
+     */
+    renameBranch(sessionId: string, to: string): Promise<{ ok: boolean; error?: string }>
     /**
      * Find worktrees no session points at. Reports by default; pass
      * `dryRun:false` to actually delete them.

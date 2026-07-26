@@ -6,6 +6,13 @@ import type { UpdateInfo } from '@shared/api'
 import { AUTH_LABELS } from '@shared/providers'
 import { api } from '../lib/api'
 import { Button, Switch } from '../components/ui'
+import { cn } from '../lib/cn'
+import {
+  DEFAULT_BRANCH_PREFIX,
+  branchPrefixError,
+  normalizeBranchPrefix,
+  placeholderBranchName
+} from '@shared/branch'
 import { PageShell } from '../components/PageShell'
 import { McpServers } from '../components/McpServers'
 import { ConfigBackup } from '../components/ConfigBackup'
@@ -20,6 +27,9 @@ export default function Settings(): JSX.Element {
   const refreshProviders = useRoxyStore((s) => s.refreshProviders)
   const setWebSearchApiKey = useRoxyStore((s) => s.setWebSearchApiKey)
   const setAutoWorkstream = useRoxyStore((s) => s.setAutoWorkstream)
+  const setBranchPrefix = useRoxyStore((s) => s.setBranchPrefix)
+  const [prefix, setPrefix] = useState('')
+  const prefixError = branchPrefixError(prefix)
   const bootstrap = useRoxyStore((s) => s.bootstrap)
   const clearActive = useRoxyStore((s) => s.clearActive)
   const [versions, setVersions] = useState<AppVersions | null>(null)
@@ -32,6 +42,10 @@ export default function Settings(): JSX.Element {
   useEffect(() => {
     setSearchKey(settings?.webSearchApiKey ?? '')
   }, [settings?.webSearchApiKey])
+
+  useEffect(() => {
+    setPrefix(settings?.branchPrefix ?? DEFAULT_BRANCH_PREFIX)
+  }, [settings?.branchPrefix])
 
   useEffect(() => {
     refreshProviders()
@@ -128,6 +142,50 @@ export default function Settings(): JSX.Element {
             checked={settings?.autoWorkstream ?? true}
             onChange={(v) => void setAutoWorkstream(v)}
           />
+        </div>
+
+        <div className="mt-3 rounded-xl border border-border bg-surface p-4">
+          <div className="text-sm font-medium text-text">Branch prefix</div>
+          <p className="mt-0.5 text-xs text-text-muted">
+            New workstreams start on a generated branch. This is what goes in front of it — use your
+            initials, <code className="text-text-subtle">wip</code>, or clear it for no prefix at
+            all.
+          </p>
+          <div className="mt-3 flex items-center gap-2">
+            <input
+              value={prefix}
+              onChange={(e) => setPrefix(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !prefixError) void setBranchPrefix(prefix)
+              }}
+              spellCheck={false}
+              placeholder="no prefix"
+              aria-label="Branch prefix"
+              className={cn(
+                'w-48 rounded-lg border bg-surface-2 px-3 py-1.5 text-sm text-text outline-none placeholder:text-text-subtle',
+                prefixError ? 'border-danger' : 'border-border focus:border-border-strong'
+              )}
+            />
+            {/* The example is the point: "roxy" in a box means nothing until you
+                see roxy/a1b2c3d4 next to it. */}
+            <span className="min-w-0 truncate font-mono text-xs text-text-subtle">
+              {placeholderBranchName(prefix, 'a1b2c3d4')}
+            </span>
+            <Button
+              onClick={() => void setBranchPrefix(prefix)}
+              disabled={
+                !!prefixError ||
+                normalizeBranchPrefix(prefix) === (settings?.branchPrefix ?? DEFAULT_BRANCH_PREFIX)
+              }
+            >
+              Save
+            </Button>
+          </div>
+          {prefixError && <p className="mt-2 text-xs text-danger">{prefixError}</p>}
+          <p className="mt-2 text-xs text-text-subtle">
+            Only affects new workstreams. Existing branches keep their names — rename one from the
+            bar under the composer.
+          </p>
         </div>
       </section>
 

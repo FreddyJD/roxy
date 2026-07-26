@@ -6,6 +6,7 @@ export const CHANNELS = {
   settingsSetContextLimit: 'settings:setContextLimit',
   settingsSetWebSearchApiKey: 'settings:setWebSearchApiKey',
   settingsSetAutoWorkstream: 'settings:setAutoWorkstream',
+  settingsSetBranchPrefix: 'settings:setBranchPrefix',
   settingsCompleteOnboarding: 'settings:completeOnboarding',
   settingsReset: 'settings:reset',
 
@@ -129,6 +130,7 @@ export const CHANNELS = {
   gitCreateWorktree: 'git:create-worktree',
   gitRemoveWorktree: 'git:remove-worktree',
   gitPruneWorktrees: 'git:prune-worktrees',
+  gitRenameBranch: 'git:rename-branch',
 
   remoteStart: 'remote:start',
   remoteStop: 'remote:stop',

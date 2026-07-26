@@ -9,6 +9,7 @@
  * missing git binary, a locked index or an offline fetch degrades to "run in the
  * project folder", never to a turn that won't start.
  */
+import { branchNameError } from '../../shared/branch'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import * as repo from '../db/repo'
@@ -237,6 +238,44 @@ export async function pruneWorktrees(
     else failed.push({ path: c.path, error: r.error ?? 'Unknown error' })
   }
   return { ok: true, candidates, removed, failed }
+}
+
+/**
+ * Rename the branch a session's workstream sits on.
+ *
+ * Renaming is safe while the branch is checked out: git rewrites the worktree's
+ * HEAD in place, so the directory, its node_modules and any uncommitted work
+ * are untouched. The DB pointer is updated to match; the worktree PATH is
+ * deliberately left alone, because moving a live directory would invalidate
+ * every running dev server and open file handle in it for a cosmetic gain.
+ */
+export async function renameWorkstreamBranch(
+  chatId: string,
+  to: string
+): Promise<{ ok: boolean; branch?: string; error?: string }> {
+  const chat = repo.getChat(chatId)
+  if (!chat) return { ok: false, error: 'Session not found.' }
+
+  // A sub-session shares its parent's tree; renaming from there would move the
+  // parent's branch out from under it.
+  const owner = chat.kind === 'sub' && chat.parentId ? repo.getChat(chat.parentId) : chat
+  if (!owner?.worktreePath) return { ok: false, error: 'This session has no workstream.' }
+
+  const next = to.trim()
+  const problem = branchNameError(next)
+  if (problem) return { ok: false, error: problem }
+
+  const from = owner.branch ?? (await git.currentBranch(owner.worktreePath))
+  if (!from) return { ok: false, error: 'Could not determine the current branch.' }
+  if (from === next) return { ok: true, branch: next }
+
+  // Run from the worktree itself: it is the path we are certain exists, and git
+  // resolves the common repo from there.
+  const r = await git.renameBranch(owner.worktreePath, from, next)
+  if (!r.ok) return { ok: false, error: r.error }
+
+  repo.setChatWorktree(owner.id, { branch: next })
+  return { ok: true, branch: next }
 }
 
 /**

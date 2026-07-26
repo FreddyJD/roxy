@@ -338,6 +338,12 @@ export interface AppSettings {
    * there is nothing to branch from.
    */
   autoWorkstream: boolean
+  /**
+   * Prefix for the branch a new workstream generates, e.g. `roxy` ->
+   * `roxy/a1b2c3d4`. Empty means no prefix at all (`a1b2c3d4`), which some
+   * people prefer; it is a real choice, not a reason to reimpose the default.
+   */
+  branchPrefix: string
 }
 
 export interface AppVersions {

@@ -30,6 +30,7 @@ import {
   materializePendingWorktree,
   pruneWorktrees,
   removeWorktreeForChat,
+  renameWorkstreamBranch,
   loadWorktreeConfig
 } from '../src/main/services/worktree'
 import { allocateDevPort, ensureDevPort } from '../src/main/services/ports'
@@ -1146,6 +1147,73 @@ async function main(): Promise<void> {
         wrote.ok && existsSync(path.join(wtPath, 'from-agent.txt'))
       )
       check('...and NOT in the main checkout', !existsSync(path.join(gitRepo, 'from-agent.txt')))
+
+      // ---- renaming a workstream's branch ----
+      // The generated name (roxy/6fdc60b8) says nothing about the work and is
+      // what lands on the PR, so renaming has to work from the UI -- WHILE the
+      // branch is checked out in a live worktree, without disturbing it.
+      {
+        const before = repo.getChat(wtChat.id)?.branch
+        check('the session starts on its generated branch', before === tmpBranch, before ?? '')
+
+        // Uncommitted work must survive: this is the whole risk of the feature.
+        await fs.writeFile(path.join(wtPath, 'in-progress.txt'), 'do not lose me\n')
+
+        const renamed = await renameWorkstreamBranch(wtChat.id, 'feat/nice-name')
+        check('renameWorkstreamBranch succeeds on a live worktree', renamed.ok, renamed.error ?? '')
+        check('...and reports the new name', renamed.branch === 'feat/nice-name')
+        check(
+          '...git agrees the worktree is on it',
+          (await git.currentBranch(wtPath)) === 'feat/nice-name'
+        )
+        check('...the DB pointer follows', repo.getChat(wtChat.id)?.branch === 'feat/nice-name')
+        check('...the worktree directory is untouched', existsSync(wtPath))
+        check('...and uncommitted work survives', existsSync(path.join(wtPath, 'in-progress.txt')))
+        // The PR base is stored under the branch's config section, which git
+        // moves with the rename -- losing it would break `gh pr create --base`.
+        check(
+          '...the recorded PR base moves with the branch',
+          (await git.baseBranchFor(gitRepo, 'feat/nice-name')) === 'main'
+        )
+
+        check(
+          'renaming to the SAME name is a no-op, not an error',
+          (await renameWorkstreamBranch(wtChat.id, 'feat/nice-name')).ok
+        )
+        const clash = await renameWorkstreamBranch(wtChat.id, 'main')
+        check('renaming onto an existing branch is refused', !clash.ok)
+        check(
+          '...with a readable reason',
+          /already exists/i.test(clash.error ?? ''),
+          clash.error ?? ''
+        )
+        check(
+          '...and the branch is unchanged',
+          (await git.currentBranch(wtPath)) === 'feat/nice-name'
+        )
+
+        const bad = await renameWorkstreamBranch(wtChat.id, 'not a valid name')
+        check('an invalid branch name is refused before git runs', !bad.ok)
+        check(
+          '...without touching the branch',
+          (await git.currentBranch(wtPath)) === 'feat/nice-name'
+        )
+        check('an empty rename is refused', !(await renameWorkstreamBranch(wtChat.id, '   ')).ok)
+
+        // A session with no workstream has no branch to rename.
+        const plainChat = repo.createChat({ title: 'no wt', kind: 'main', workspacePath: gitRepo })
+        check(
+          'a session without a workstream cannot rename',
+          !(await renameWorkstreamBranch(plainChat.id, 'x')).ok
+        )
+        repo.removeChat(plainChat.id)
+        check('an unknown session is refused', !(await renameWorkstreamBranch('nope', 'x')).ok)
+
+        // Put it back so the removal checks below still line up.
+        await fs.rm(path.join(wtPath, 'in-progress.txt'))
+        const back = await renameWorkstreamBranch(wtChat.id, tmpBranch)
+        check('renamed back for the remaining checks', back.ok, back.error ?? '')
+      }
 
       // ---- lazy materialization ----
       const lazy = repo.createChat({

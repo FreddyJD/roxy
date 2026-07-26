@@ -25,6 +25,7 @@ const roxy: RoxyApi = {
     setContextLimit: (limit) => ipcRenderer.invoke(CHANNELS.settingsSetContextLimit, limit),
     setWebSearchApiKey: (key) => ipcRenderer.invoke(CHANNELS.settingsSetWebSearchApiKey, key),
     setAutoWorkstream: (enabled) => ipcRenderer.invoke(CHANNELS.settingsSetAutoWorkstream, enabled),
+    setBranchPrefix: (prefix) => ipcRenderer.invoke(CHANNELS.settingsSetBranchPrefix, prefix),
     completeOnboarding: () => ipcRenderer.invoke(CHANNELS.settingsCompleteOnboarding),
     reset: () => ipcRenderer.invoke(CHANNELS.settingsReset)
   },
@@ -187,6 +188,7 @@ const roxy: RoxyApi = {
     worktrees: (cwd) => ipcRenderer.invoke(CHANNELS.gitWorktrees, cwd),
     createWorktree: (input) => ipcRenderer.invoke(CHANNELS.gitCreateWorktree, input),
     removeWorktree: (path, force) => ipcRenderer.invoke(CHANNELS.gitRemoveWorktree, path, force),
+    renameBranch: (sessionId, to) => ipcRenderer.invoke(CHANNELS.gitRenameBranch, sessionId, to),
     pruneWorktrees: (cwd, dryRun) => ipcRenderer.invoke(CHANNELS.gitPruneWorktrees, cwd, dryRun)
   },
   remote: {

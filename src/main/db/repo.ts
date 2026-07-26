@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { resolveSeed } from '../../shared/providers'
 import { normalizeServerConfig, type McpServerConfig, type McpServerRecord } from '../../shared/mcp'
+import { DEFAULT_BRANCH_PREFIX, normalizeBranchPrefix } from '../../shared/branch'
 import type {
   AddMessageInput,
   AppSettings,
@@ -102,7 +103,10 @@ export function getSettings(): AppSettings {
     // Defaults ON, so the absence of a row means enabled. Written only when
     // someone turns it OFF ('0'), which keeps existing installs opted in
     // without a migration.
-    autoWorkstream: map.get('auto_workstream') !== '0'
+    autoWorkstream: map.get('auto_workstream') !== '0',
+    // `?? DEFAULT` and not `|| DEFAULT`: an EMPTY string is a deliberate
+    // "no prefix", and must survive a round trip through settings.
+    branchPrefix: map.get('branch_prefix') ?? DEFAULT_BRANCH_PREFIX
   }
 }
 
@@ -131,6 +135,12 @@ export function setReasoningEffort(level: ReasoningEffort): AppSettings {
 
 export function setContextLimit(limit: number | null): AppSettings {
   setSetting('context_limit', limit === null ? null : String(limit))
+  return getSettings()
+}
+
+export function setBranchPrefix(prefix: string): AppSettings {
+  // Store even the empty string, so "no prefix" is distinguishable from unset.
+  setSetting('branch_prefix', normalizeBranchPrefix(prefix))
   return getSettings()
 }
 
