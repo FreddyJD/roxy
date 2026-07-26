@@ -135,14 +135,19 @@ export function Composer({
           className="block max-h-44 w-full resize-none bg-transparent px-4 pt-3 text-sm text-text outline-none placeholder:text-text-subtle"
         />
         <div className="flex items-center justify-between gap-2 px-2.5 pb-2 pt-1.5">
-          <div className="flex items-center gap-1.5">
+          {/* Chrome-less controls, matching the workstream strip below. Two
+              things do the work the borders used to: gap-1 (further apart and
+              five bare labels just scatter across the row) and px-1.5 on every
+              control, which against the row's px-2.5 puts each label's first
+              glyph exactly on the textarea's px-4 text column. */}
+          <div className="flex items-center gap-1">
             <button
               type="button"
               onClick={() => fileRef.current?.click()}
               title="Attach images"
-              className="press-scale flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-text-muted hover:border-border-strong hover:text-text"
+              className="press-scale flex h-6 shrink-0 items-center justify-center rounded-md px-1.5 text-text-muted hover:bg-white/5 hover:text-text"
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-3.5 w-3.5" />
             </button>
             <ModelPicker />
             <AgentPicker />
