@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { app } from 'electron'
 import Database from 'better-sqlite3'
-import { MIGRATIONS } from './migrations'
+import { MIGRATIONS, repairSchema } from './migrations'
 
 let instance: Database.Database | null = null
 
@@ -14,6 +14,13 @@ export function getDb(): Database.Database {
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
   migrate(db)
+  // Then re-assert the schema, unconditionally. `user_version` counts the steps
+  // that RAN, not what the database contains: a counter that ran ahead of
+  // reality (two branches numbering a migration the same, a partial upgrade, a
+  // restored backup) leaves a DB that skips the whole ladder while missing a
+  // table or column, and only crashes later at runtime. This is idempotent, so
+  // it costs nothing when everything is already correct.
+  repairSchema(db)
 
   instance = db
   return instance

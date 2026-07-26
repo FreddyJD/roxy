@@ -24,7 +24,7 @@ import {
 } from '../src/main/harness'
 import { sessionCwd } from '../src/main/services/workspace'
 import Database from 'better-sqlite3'
-import { MIGRATIONS } from '../src/main/db/migrations'
+import { MIGRATIONS, repairSchema } from '../src/main/db/migrations'
 import * as git from '../src/main/services/git'
 import {
   materializePendingWorktree,
@@ -682,7 +682,7 @@ async function main(): Promise<void> {
   // directions leave a DB that looks fully migrated with a schema object missing.
   // The reconcile step must repair either, be idempotent, and lose no data.
   {
-    /** Run the real ladder the way database.ts does. */
+    /** Open a database the way database.ts does: migrate, then repair. */
     const runLadder = (db: InstanceType<typeof Database>): void => {
       for (let v = db.pragma('user_version', { simple: true }) as number; v < MIGRATIONS.length; v++) {
         const step = MIGRATIONS[v]
@@ -690,6 +690,9 @@ async function main(): Promise<void> {
         else step(db)
         db.pragma(`user_version = ${v + 1}`)
       }
+      // Unconditional: the version counter alone can't tell us the schema is
+      // actually complete.
+      repairSchema(db)
     }
     const colsOf = (db: InstanceType<typeof Database>): string[] =>
       (db.prepare('PRAGMA table_info(chats)').all() as { name: string }[]).map((c) => c.name)
@@ -744,12 +747,9 @@ async function main(): Promise<void> {
       check('migration repair (usage-first): existing rows survive', row.title === 'pre-existing')
       check('migration repair (usage-first): usage table intact', tablesOf(db).includes('usage'))
 
-      // Idempotent — the reconcile step also runs on healthy databases.
-      const reconcile = MIGRATIONS[MIGRATIONS.length - 1]
-      if (typeof reconcile !== 'string') {
-        reconcile(db)
-        reconcile(db)
-      }
+      // Idempotent — it runs on every open, including healthy databases.
+      repairSchema(db)
+      repairSchema(db)
       check('migration repair: re-running changes nothing',
         (db.prepare('SELECT worktree_path AS w FROM chats WHERE id = ?').get('mig1') as { w: string }).w ===
           '/wt')
@@ -784,6 +784,111 @@ async function main(): Promise<void> {
       for (const col of ['provider_id', 'model', 'cost', 'estimated']) {
         check(`migration repair (worktree-first): usage.${col} exists`, usageCols.includes(col))
       }
+      db.close()
+    }
+  }
+
+  // ---- schema self-heal ----
+  // `user_version` counts the steps that RAN, not what the database contains.
+  // When the counter runs ahead of reality — two branches numbering a migration
+  // the same, a partial upgrade, a restored backup — the ladder has "nothing to
+  // do" while a table or column is missing, and it only surfaces much later as a
+  // runtime crash ("no such table: projects"). repairSchema runs unconditionally
+  // on every open to close that hole.
+  {
+    const healDir = path.join(tmp, 'heal')
+    await fs.mkdir(healDir, { recursive: true })
+    let n = 0
+    /** A fully migrated DB with one session, as a healthy install would look. */
+    const healthy = (): InstanceType<typeof Database> => {
+      const db = new Database(path.join(healDir, `h${++n}.db`))
+      for (const step of MIGRATIONS) {
+        if (typeof step === 'string') db.exec(step)
+        else step(db)
+      }
+      db.pragma(`user_version = ${MIGRATIONS.length}`)
+      repairSchema(db)
+      db.prepare(
+        `INSERT INTO chats(id, title, kind, workspace_path, created_at, updated_at, sort_order)
+         VALUES('h1','seeded','main','/proj',1,1,1)`
+      ).run()
+      return db
+    }
+    const tablesOf = (db: InstanceType<typeof Database>): string[] =>
+      (
+        db
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+          .all() as { name: string }[]
+      ).map((t) => t.name)
+
+    // Every table the app depends on must come back, not just the ones a
+    // previously-reported bug happened to name.
+    for (const table of ['projects', 'usage', 'queue', 'mcp_servers', 'settings']) {
+      const db = healthy()
+      db.exec(`DROP TABLE ${table}`)
+      check(`self-heal: ${table} is missing before repair`, !tablesOf(db).includes(table))
+      repairSchema(db)
+      check(`self-heal: ${table} is restored`, tablesOf(db).includes(table))
+      check(
+        `self-heal: data survives the ${table} repair`,
+        (db.prepare('SELECT title AS t FROM chats WHERE id = ?').get('h1') as { t: string }).t === 'seeded'
+      )
+      db.close()
+    }
+
+    // The reported crash, end to end.
+    {
+      const db = healthy()
+      db.exec('DROP TABLE projects')
+      let before = ''
+      try {
+        db.prepare('SELECT path FROM projects ORDER BY sort_order ASC').all()
+      } catch (e) {
+        before = e instanceof Error ? e.message : String(e)
+      }
+      check('self-heal: reproduces "no such table: projects"', /no such table: projects/.test(before), before)
+      repairSchema(db)
+      let after = ''
+      try {
+        db.prepare('SELECT path FROM projects ORDER BY sort_order ASC').all()
+      } catch (e) {
+        after = e instanceof Error ? e.message : String(e)
+      }
+      check('self-heal: projects:listOrder works again', after === '', after)
+      // projects is derived state, so it can be rebuilt from the sessions.
+      check(
+        'self-heal: projects is re-seeded from existing sessions',
+        (db.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number }).n === 1
+      )
+      db.close()
+    }
+
+    // A hand-ordered project list must never be clobbered by that re-seed.
+    {
+      const db = healthy()
+      db.prepare('INSERT INTO projects(path, sort_order, created_at) VALUES(?,?,?)').run('/proj', 7, 1)
+      repairSchema(db)
+      check(
+        'self-heal: an existing project order is preserved',
+        (db.prepare('SELECT sort_order AS s FROM projects WHERE path = ?').get('/proj') as { s: number })
+          .s === 7
+      )
+      db.close()
+    }
+
+    // Idempotent: it runs on every open, so it must cost nothing when healthy.
+    {
+      const db = healthy()
+      const before = tablesOf(db).length
+      repairSchema(db)
+      repairSchema(db)
+      check('self-heal: repeating it on a healthy DB is a no-op', tablesOf(db).length === before)
+      check(
+        'self-heal: no duplicate columns after repeats',
+        (db.prepare('PRAGMA table_info(chats)').all() as { name: string }[]).filter(
+          (c) => c.name === 'worktree_path'
+        ).length === 1
+      )
       db.close()
     }
   }

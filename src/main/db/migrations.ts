@@ -26,6 +26,111 @@ export function addColumnIfMissing(
 }
 
 /**
+ * The full current schema as idempotent DDL, used ONLY by the repair step at the
+ * end of the ladder.
+ *
+ * Generated from a database migrated through every step above, so it can't drift
+ * into describing a schema that never existed — transcribing it by hand got the
+ * `credentials` and `mcp_servers` column names wrong on the first attempt.
+ * Regenerate it when adding a table; a table missing from here simply won't be
+ * self-healed.
+ *
+ * This does NOT replace the migrations: they still carry ordering and data
+ * transformations. This is a safety net for databases whose version counter ran
+ * ahead of what they actually contain.
+ */
+const REPAIR_SCHEMA_SQL = /* sql */ `
+  CREATE TABLE IF NOT EXISTS chats (
+        id          TEXT PRIMARY KEY,
+        title       TEXT NOT NULL,
+        provider_id TEXT,
+        model       TEXT,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+      , workspace_path TEXT, kind TEXT NOT NULL DEFAULT 'session', context_summary TEXT, context_summary_at INTEGER, parent_id TEXT, description TEXT, tasks TEXT, sort_order INTEGER NOT NULL DEFAULT 0, worktree_path TEXT, branch TEXT, dev_port INTEGER, worktree_pending TEXT);
+  CREATE TABLE IF NOT EXISTS credentials (
+        provider_id TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,
+        type        TEXT NOT NULL,
+        data        TEXT NOT NULL,
+        encrypted   INTEGER NOT NULL DEFAULT 0,
+        created_at  INTEGER NOT NULL
+      );
+  CREATE TABLE IF NOT EXISTS integrations (
+        id         TEXT PRIMARY KEY,
+        enabled    INTEGER NOT NULL DEFAULT 0,
+        config     TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL
+      );
+  CREATE TABLE IF NOT EXISTS loops (
+        id               TEXT PRIMARY KEY,
+        name             TEXT NOT NULL,
+        prompt           TEXT NOT NULL,
+        interval_minutes INTEGER NOT NULL,
+        enabled          INTEGER NOT NULL DEFAULT 1,
+        chat_id          TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        last_run_at      INTEGER,
+        next_run_at      INTEGER NOT NULL,
+        created_at       INTEGER NOT NULL
+      );
+  CREATE TABLE IF NOT EXISTS mcp_servers (
+        id         TEXT PRIMARY KEY,
+        config     TEXT NOT NULL DEFAULT '{}',
+        enabled    INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL
+      );
+  CREATE TABLE IF NOT EXISTS messages (
+        id         TEXT PRIMARY KEY,
+        chat_id    TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        role       TEXT NOT NULL,
+        content    TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      , parts TEXT);
+  CREATE TABLE IF NOT EXISTS projects (
+        path       TEXT PRIMARY KEY,
+        sort_order INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+  CREATE TABLE IF NOT EXISTS providers (
+        id            TEXT PRIMARY KEY,
+        name          TEXT NOT NULL,
+        wire          TEXT NOT NULL,
+        auth          TEXT NOT NULL,
+        base_url      TEXT,
+        default_model TEXT,
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        created_at    INTEGER NOT NULL
+      );
+  CREATE TABLE IF NOT EXISTS queue (
+        id         TEXT PRIMARY KEY,
+        chat_id    TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        content    TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      , images TEXT);
+  CREATE TABLE IF NOT EXISTS settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+  CREATE TABLE IF NOT EXISTS usage (
+        id          TEXT PRIMARY KEY,
+        chat_id     TEXT REFERENCES chats(id) ON DELETE SET NULL,
+        provider_id TEXT NOT NULL,
+        model       TEXT NOT NULL,
+        input       INTEGER NOT NULL DEFAULT 0,
+        output      INTEGER NOT NULL DEFAULT 0,
+        cache_read  INTEGER NOT NULL DEFAULT 0,
+        cache_write INTEGER NOT NULL DEFAULT 0,
+        reasoning   INTEGER NOT NULL DEFAULT 0,
+        cost        REAL NOT NULL DEFAULT 0,
+        estimated   INTEGER NOT NULL DEFAULT 0,
+        created_at  INTEGER NOT NULL
+      );
+  CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_queue_chat ON queue(chat_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_usage_created ON usage(created_at);
+  CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage(provider_id, created_at);
+`
+
+/**
  * Migrations, applied in order. The array index + 1 is the schema version
  * tracked via SQLite's `PRAGMA user_version`. Append new migrations; never edit
  * an existing one once shipped.
@@ -242,43 +347,52 @@ export const MIGRATIONS: Migration[] = [
   // folder). Idempotent for the same reason as v15.
   (db) => {
     addColumnIfMissing(db, 'chats', 'worktree_pending', 'TEXT')
-  },
-
-  // ---- v17: reconcile everything the v14 collision could have skipped ----
-  // Two branches each shipped a migration numbered v14 — the usage dashboard and
-  // the worktree columns. Because the version is an ARRAY POSITION, a database
-  // that applied one of them advanced past the other and would never run it:
-  //
-  //   ran usage v14     -> reached 14+, never got the worktree columns
-  //   ran worktree v14  -> reached 14+, never got the usage table
-  //
-  // Both leave a database that looks fully migrated and is missing a schema
-  // object, which surfaces as "no such column: worktree_path" or a crash in the
-  // usage dashboard. This step re-asserts every affected object, does nothing on
-  // a healthy database, and is safe to run repeatedly.
-  (db) => {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS usage (
-        id          TEXT PRIMARY KEY,
-        chat_id     TEXT REFERENCES chats(id) ON DELETE SET NULL,
-        provider_id TEXT NOT NULL,
-        model       TEXT NOT NULL,
-        input       INTEGER NOT NULL DEFAULT 0,
-        output      INTEGER NOT NULL DEFAULT 0,
-        cache_read  INTEGER NOT NULL DEFAULT 0,
-        cache_write INTEGER NOT NULL DEFAULT 0,
-        reasoning   INTEGER NOT NULL DEFAULT 0,
-        cost        REAL NOT NULL DEFAULT 0,
-        estimated   INTEGER NOT NULL DEFAULT 0,
-        created_at  INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_usage_created ON usage(created_at);
-      CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage(provider_id, created_at);
-    `)
-    addColumnIfMissing(db, 'chats', 'worktree_path', 'TEXT')
-    addColumnIfMissing(db, 'chats', 'branch', 'TEXT')
-    addColumnIfMissing(db, 'chats', 'dev_port', 'INTEGER')
-    addColumnIfMissing(db, 'chats', 'worktree_pending', 'TEXT')
   }
-
 ]
+
+/**
+ * Re-assert the entire schema, repairing anything an earlier version skipped.
+ *
+ * This is deliberately NOT a migration. `user_version` is only a COUNTER of how
+ * many steps have run — it says nothing about what the database actually
+ * contains, and a database whose counter is already final skips every step in
+ * the ladder, including any repair placed there. So this runs unconditionally on
+ * every open, after the migrations.
+ *
+ * Databases end up in that state whenever the counter runs ahead of reality:
+ * two branches shipping a migration under the same number (the usage dashboard
+ * and the worktree columns were both "v14"), a partially-applied upgrade, a
+ * restored backup. Each surfaces much later as a runtime crash — "no such
+ * column: worktree_path", "no such table: projects" — that the migration system
+ * can never fix, because it believes there is nothing left to do.
+ *
+ * Every statement is idempotent (CREATE IF NOT EXISTS, add-column-if-absent), so
+ * on a healthy database this does nothing measurable. It restores STRUCTURE
+ * only and never invents data, with one exception called out below where the
+ * data is purely derived and can be rebuilt exactly.
+ */
+export function repairSchema(db: Database): void {
+  db.exec(REPAIR_SCHEMA_SQL)
+  // Columns added by later migrations: CREATE TABLE IF NOT EXISTS won't add
+  // them to a table that already exists.
+  addColumnIfMissing(db, 'chats', 'worktree_path', 'TEXT')
+  addColumnIfMissing(db, 'chats', 'branch', 'TEXT')
+  addColumnIfMissing(db, 'chats', 'dev_port', 'INTEGER')
+  addColumnIfMissing(db, 'chats', 'worktree_pending', 'TEXT')
+  // `projects` is derived state — one row per workspace folder its sessions use
+  // — so a restored table can be rebuilt from the chats themselves, exactly as
+  // v13 did on first upgrade. Only when empty, so a hand-ordered project list is
+  // never clobbered.
+  const rows = db.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number }
+  if (rows.n === 0) {
+    db.exec(`
+      INSERT OR IGNORE INTO projects(path, sort_order, created_at)
+        SELECT workspace_path,
+               ROW_NUMBER() OVER (ORDER BY MAX(sort_order) DESC) - 1,
+               MIN(created_at)
+        FROM chats
+        WHERE workspace_path IS NOT NULL
+        GROUP BY workspace_path;
+    `)
+  }
+}
