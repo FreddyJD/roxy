@@ -23,6 +23,7 @@ import * as git from './git'
 import { ensureDevPort } from './ports'
 import { startBackground, killSessionBackground } from '../harness'
 import { activeBackgroundSubChatIds, hasActiveBackgroundJobs } from './background-tasks'
+import { emitSessionsUpdated } from './session-events'
 import type { WorktreeIntent } from '../../shared/types'
 
 /**
@@ -143,6 +144,18 @@ export async function materializePendingWorktree(chatId: string): Promise<Materi
   // install that builds against a port sees the right one. Allocation failure
   // (range exhausted) is not fatal — the session just has no reserved port.
   const devPort = await ensureDevPort(chatId)
+
+  // The session just moved: it has a worktree, a branch and a port it did not
+  // have a moment ago, and every one of those is on screen. Announce it BEFORE
+  // the setup script (fire-and-forget, and often minutes long) so the strip
+  // stops saying "(pending) / branch pending" the instant that becomes untrue,
+  // rather than whenever the renderer next happens to refetch — which, on a
+  // first turn, is not until the whole turn ends.
+  emitSessionsUpdated({
+    reason: 'worktree',
+    sessionIds: [chatId],
+    statusKey: result.worktreePath
+  })
 
   // Fire-and-forget: installs take minutes, and the turn starts now.
   runSetupScript({
@@ -336,6 +349,10 @@ export async function syncBranchToTitle(
     if (!r.ok) return { renamed: false }
 
     repo.setChatWorktree(chat.id, { branch: next })
+    // The agent renamed its own session's branch. The renderer refreshes chats
+    // on this tool's `tool-end`, but that races the DB write and only reaches
+    // the window that ran the turn — a phone-driven or loop turn has none.
+    emitSessionsUpdated({ reason: 'branch', sessionIds: [chat.id], statusKey: chat.worktreePath })
     return { renamed: true, branch: next }
   } catch {
     // A metadata update must never fail because a branch rename did.

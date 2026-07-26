@@ -36,6 +36,7 @@ import {
   loadWorktreeConfig
 } from '../src/main/services/worktree'
 import { allocateDevPort, ensureDevPort } from '../src/main/services/ports'
+import { emitSessionsUpdated } from '../src/main/services/session-events'
 import { spawn } from 'node:child_process'
 import * as browser from '../src/main/services/browser'
 import {
@@ -1534,6 +1535,28 @@ async function main(): Promise<void> {
         'a materialized worktree gets a dev port',
         typeof repo.getChat(lazy.id)?.devPort === 'number',
         String(repo.getChat(lazy.id)?.devPort)
+      )
+
+      // Materialization announces itself to the renderer (chats:updated) so the
+      // workstream strip stops claiming "(pending) / branch pending" mid-turn.
+      // This smoke run has NO BrowserWindow at all, which is exactly the case
+      // the broadcast has to survive silently: it rides on the turn path, and
+      // throwing here would take the turn down with it. That the emit is wired
+      // to materialization at all is asserted statically in smoke:shared.
+      check(
+        'emitSessionsUpdated is safe with no windows open',
+        (() => {
+          try {
+            emitSessionsUpdated({
+              reason: 'worktree',
+              sessionIds: [lazy.id],
+              statusKey: mat.worktreePath
+            })
+            return true
+          } catch {
+            return false
+          }
+        })()
       )
 
       // The setup script runs in the NEW worktree, through the background path,

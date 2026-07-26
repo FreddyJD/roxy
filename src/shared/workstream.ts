@@ -60,7 +60,8 @@ export interface StripView {
  * Hidden (not greyed out) when there's no session, no workspace, no git binary,
  * or the folder isn't a repository — most folders aren't repos, and a permanent
  * disabled row would just be a nag. Also hidden until the first status arrives,
- * so it doesn't flash on and back off.
+ * so it doesn't flash on and back off — except for a session that already has a
+ * worktree, whose very existence is proof of a repo (see below).
  *
  * NOTE: the strip also hosts the Services segment, which is NOT git-scoped —
  * a dev server runs in any folder. So the row itself can outlive a null view;
@@ -86,7 +87,17 @@ export function workstreamStripView(input: {
   // Only real sessions get the dropdown: a sub inherits, and a loop has no
   // workstream of its own to change.
   const readOnly = chat.kind !== 'main'
-  if (!status?.isRepo) return null
+
+  // `worktreePath` counts as proof of a repo when no status has arrived yet:
+  // git only ever creates a worktree INSIDE a repository. That matters at
+  // exactly one moment, and it is the moment this screen exists for - a worktree
+  // materializing mid-turn moves the session onto a path the status map has
+  // never been keyed by, and reading that absent entry as "not a repo" would
+  // blank the row for a whole poll interval, right after it finally had
+  // something true to say. It does NOT outrank a status that actually arrived
+  // saying `isRepo: false`: that means the worktree went away underneath us, and
+  // the strip should go quiet.
+  if (status ? !status.isRepo : !owner.worktreePath) return null
 
   // A session that has ASKED for a workstream is not in the default one. Saying
   // "default workstream" there is not merely vague, it is wrong in the direction
@@ -102,8 +113,12 @@ export function workstreamStripView(input: {
     // Same trap on the branch: until the worktree exists the session has no
     // branch of its own, and falling back to the CURRENT branch would display
     // the very branch this workstream is meant to avoid.
-    branch: pending ? pendingBranch(owner.worktreePending) : (owner.branch ?? status.branch),
-    dirty: pending ? false : status.dirty,
+    branch: pending
+      ? pendingBranch(owner.worktreePending)
+      : (owner.branch ?? status?.branch ?? null),
+    // Unknown dirtiness reads as clean: the dot is a warning, and inventing one
+    // from a status we do not have yet would cry wolf on a fresh worktree.
+    dirty: pending ? false : (status?.dirty ?? false),
     readOnly,
     inWorktree: !!owner.worktreePath,
     pending

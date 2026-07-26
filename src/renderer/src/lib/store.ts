@@ -18,6 +18,7 @@ import type {
   ModelInfo,
   RemoteDelta,
   RemoteState,
+  SessionsUpdated,
   SubagentDelta,
   TaskUpdate
 } from '@shared/api'
@@ -203,6 +204,7 @@ let taskUpdateSubscribed = false
 let remoteStateSubscribed = false
 let remoteDeltaSubscribed = false
 let subagentDeltaSubscribed = false
+let chatsUpdatedSubscribed = false
 /** Routes streamed completion events to the in-flight send for a request id. */
 const deltaHandlers = new Map<string, (event: LlmEvent) => void>()
 /** The active llm request id per chat, so stop() can abort the right stream. */
@@ -324,6 +326,42 @@ function applyRemoteDelta(payload: RemoteDelta): void {
     remoteTurns.set(sessionId, turn)
   }
   reflect(turn.apply(payload.event))
+}
+
+/**
+ * Apply a main-process session change: refetch the rows, and — when a worktree
+ * just came into existence — prime the git status for its brand-new path.
+ *
+ * The priming is the non-obvious half. `gitStatus` is keyed by PATH, and until
+ * now the session was keyed by its project folder; the worktree path has never
+ * been polled, so it has no entry. `workstreamStripView` renders NOTHING without
+ * a status, so a plain refetch would swap "(pending)" for an empty row that pops
+ * back a few seconds later on the next poll tick — trading a stale strip for a
+ * flickering one. Fetching the status for the new key first means the row goes
+ * straight from pending to live, with no blank frame in between.
+ */
+async function applySessionsUpdated(payload: SessionsUpdated): Promise<void> {
+  const store = useRoxyStore.getState()
+  if (payload.reason === 'worktree' && payload.statusKey) {
+    const key = payload.statusKey
+    if (!store.gitStatus[key]) {
+      try {
+        const [status, forge] = await Promise.all([api.git.status(key), api.forge.status(key)])
+        useRoxyStore.setState((s) => ({
+          gitStatus: { ...s.gitStatus, [key]: status },
+          forgeStatus: forge ? { ...s.forgeStatus, [key]: forge } : s.forgeStatus
+        }))
+      } catch {
+        // Best-effort: the 5s poll picks it up. Must never block the refresh
+        // below, which is what actually clears the stale "pending" label.
+      }
+    }
+    // A new worktree is also a new row in the project's worktree list, which the
+    // workstream menu reads. Cheap, and only on this rare event.
+    const workspace = store.chats.find((c) => c.id === payload.sessionIds[0])?.workspacePath
+    if (workspace) void store.refreshWorktrees(workspace)
+  }
+  await useRoxyStore.getState().refreshChats()
 }
 
 /**
@@ -506,6 +544,16 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     if (!llmDeltaSubscribed) {
       llmDeltaSubscribed = true
       api.llm.onDelta(({ requestId, event }) => deltaHandlers.get(requestId)?.(event))
+    }
+
+    // Session rows the MAIN process changed on its own. The big one is lazy
+    // worktree materialization: a session's worktree, branch and dev port are
+    // all written by main on the first turn, so without this push the strip
+    // below the composer keeps insisting "(pending) / branch pending" for the
+    // whole turn — minutes of the UI contradicting what is already on disk.
+    if (!chatsUpdatedSubscribed) {
+      chatsUpdatedSubscribed = true
+      api.chats.onUpdated((payload) => void applySessionsUpdated(payload))
     }
 
     // Background subagent tasks (Phase 11) report state out-of-band — they can
