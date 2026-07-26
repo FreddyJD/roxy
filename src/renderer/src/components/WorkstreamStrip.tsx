@@ -15,6 +15,7 @@ import type { Chat } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
 import { workstreamStripView, statusKeyForSession } from '@shared/workstream'
 import { branchNameError } from '@shared/branch'
+import { worktreeSlug } from '@shared/format'
 import { ServicesSegment, useServices } from './ServicesSegment'
 import { useMenuAnchor } from '../lib/useMenuAnchor'
 import { cn } from '../lib/cn'
@@ -22,6 +23,7 @@ import { cn } from '../lib/cn'
 // would drift, and a `merged` PR that is green in one place and grey in the
 // other teaches the user that the colour means nothing.
 import { TONE_BG, TONE_TEXT } from '../lib/lifecycle'
+import { Scroller } from './Scroller'
 
 /**
  * The workstream strip — one quiet row under the composer answering "where does
@@ -267,7 +269,7 @@ function UnknownHostChip({ host }: { host: string }): JSX.Element {
     <div className="relative" ref={ref}>
       {open && (
         <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={anchor}>
-          <div className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+          <Scroller className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
             <div className="px-3 py-1.5 text-[11px] text-text-subtle">
               What does <span className="text-text-muted">{host}</span> run?
             </div>
@@ -281,7 +283,7 @@ function UnknownHostChip({ host }: { host: string }): JSX.Element {
                 {FORGE_NAMES[k]}
               </button>
             ))}
-          </div>
+          </Scroller>
         </div>
       )}
       <button
@@ -743,6 +745,30 @@ function BranchSegment({
 }
 
 /**
+ * Tooltip for anything that names a workstream.
+ *
+ * The point is the FOLDER. A workstream's directory is named once, from the
+ * session's opening title, and never renamed; the branch then drifts away from
+ * it as `syncBranchToTitle` retitles the branch to match what the session turned
+ * out to be about. That is good for stable paths (open editors and dev servers
+ * keep working) but it means the sidebar, the branch and the directory on disk
+ * can all read differently, with no way to tell which folder a session owns.
+ * Surfacing the slug on hover makes that answerable without leaving the app.
+ *
+ * Only shown for real worktrees: a session in the default workstream has no
+ * folder of its own, and a pending one has no folder yet.
+ */
+function workstreamTitle(chat: Chat, pending: boolean, base?: string): string {
+  const fallback =
+    base ??
+    (pending
+      ? 'This workstream is created when the session starts'
+      : 'Workstreams — isolated checkouts you can run in parallel')
+  const slug = worktreeSlug(chat.worktreePath)
+  return slug ? `${fallback}\nFolder: ${slug}` : fallback
+}
+
+/**
  * Segment 1 — the workstream picker. This IS the branch picker: every workstream
  * is a branch, so a separate branch dropdown would be a second way to do the
  * same thing with worse semantics (switching a branch in the DEFAULT workstream
@@ -786,7 +812,7 @@ function WorkstreamSegment({
     return (
       <span
         className="flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-text-subtle"
-        title="Subagents run in the workstream that spawned them"
+        title={workstreamTitle(chat, false, 'Subagents run in the workstream that spawned them')}
       >
         <SquareStack className="h-3.5 w-3.5 shrink-0 opacity-70" />
         <span className="truncate">{label}</span>
@@ -800,11 +826,7 @@ function WorkstreamSegment({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        title={
-          pending
-            ? 'This workstream is created when the session starts'
-            : 'Workstreams — isolated checkouts you can run in parallel'
-        }
+        title={workstreamTitle(chat, pending)}
         className={cn(
           'flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 transition hover:bg-white/5',
           open ? 'text-text' : 'text-text-muted hover:text-text'
@@ -887,7 +909,7 @@ function WorkstreamMenu({
       {/* The whole menu scrolls, not just the branch list: a project with a
           dozen sessions makes the workstream list itself taller than the window,
           and `maxHeight` without `overflow` would only clip it differently. */}
-      <div className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+      <Scroller className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
         <MenuLabel>Workstreams</MenuLabel>
 
         {/* The default workstream is the project folder itself — always present,
@@ -922,6 +944,10 @@ function WorkstreamMenu({
             icon={<GitBranch className="h-3.5 w-3.5 opacity-70" />}
             trailing={s.id === chat.id ? <Check className="h-3.5 w-3.5 text-accent" /> : undefined}
             hint={s.branch ?? undefined}
+            // The row already shows title + branch; the folder is the third
+            // identity a workstream has, and the only one you need when
+            // matching a session against what is actually on disk.
+            title={workstreamTitle(s, false)}
           >
             {s.title}
           </MenuItem>
@@ -960,7 +986,7 @@ function WorkstreamMenu({
                 ← branches
               </button>
             </MenuLabel>
-            <div className="max-h-56 overflow-y-auto">
+            <Scroller className="max-h-56 overflow-y-auto">
               {projectBranches.length === 0 && (
                 <div className="px-3 py-1.5 text-[11px] text-text-subtle">No branches found.</div>
               )}
@@ -989,10 +1015,10 @@ function WorkstreamMenu({
                   </MenuItem>
                 )
               })}
-            </div>
+            </Scroller>
           </>
         )}
-      </div>
+      </Scroller>
     </div>
   )
 }
@@ -1006,18 +1032,21 @@ function MenuItem({
   onClick,
   icon,
   hint,
-  trailing
+  trailing,
+  title
 }: {
   children: React.ReactNode
   onClick: () => void
   icon?: React.ReactNode
   hint?: string
   trailing?: React.ReactNode
+  title?: string
 }): JSX.Element {
   return (
     <button
       type="button"
       onClick={onClick}
+      title={title}
       className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-text-muted transition hover:bg-white/5 hover:text-text"
     >
       {icon}

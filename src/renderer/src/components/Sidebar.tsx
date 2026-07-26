@@ -13,7 +13,6 @@ import {
   GitBranch,
   Hammer,
   Lightbulb,
-  MessageSquarePlus,
   MonitorSmartphone,
   PanelLeftClose,
   PanelLeftOpen,
@@ -36,6 +35,7 @@ import { HeartbeatDot, NewLoopDialog } from './LoopsSection'
 import { RemoteWorkspaceDialog } from './RemoteWorkspaceDialog'
 import { BrailleSpinner } from './ThinkingIndicator'
 import { UpdateCard } from './UpdateCard'
+import { Scroller } from './Scroller'
 import roxy from '../assets/roxy.png'
 
 const MIN_WIDTH = 220
@@ -107,8 +107,6 @@ export function Sidebar(): JSX.Element {
   })
   const [railed, setRailed] = useState<boolean>(() => localStorage.getItem(COLLAPSED_KEY) === '1')
   const [loopDialogFor, setLoopDialogFor] = useState<{ path: string; name: string } | null>(null)
-  // Which project's "+" (new Session / Loop) menu is open, keyed by path.
-  const [addMenuFor, setAddMenuFor] = useState<string | null>(null)
   const [remoteOpen, setRemoteOpen] = useState(false)
   const remotePhase = useRoxyStore((s) => s.remote.phase)
   // Green only when truly live; amber while spinning up or reconnecting.
@@ -125,23 +123,6 @@ export function Sidebar(): JSX.Element {
   useEffect(() => {
     localStorage.setItem(COLLAPSED_KEY, railed ? '1' : '0')
   }, [railed])
-
-  // Close the per-project "+" menu on any outside click or Escape.
-  useEffect(() => {
-    if (!addMenuFor) return
-    const onDown = (e: MouseEvent): void => {
-      if (!(e.target as HTMLElement).closest('[data-add-menu]')) setAddMenuFor(null)
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setAddMenuFor(null)
-    }
-    window.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [addMenuFor])
 
   // Double-click a session name to rename it inline. Enter / click-away saves,
   // Escape cancels. `cancelRef` lets the shared blur handler tell the two apart.
@@ -495,7 +476,7 @@ export function Sidebar(): JSX.Element {
         </button>
       </div>
 
-      <div className="mt-4 flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3">
+      <Scroller className="mt-4 flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3">
         <section className="flex min-h-0 flex-1 flex-col">
           <div className="mb-2 flex items-center px-1">
             <span className="text-xs font-medium text-text-muted">Projects</span>
@@ -539,7 +520,7 @@ export function Sidebar(): JSX.Element {
                   >
                     <div
                       className={cn(
-                        'flex items-center gap-1 px-1',
+                        'group/project flex items-center gap-1 px-1',
                         projectDrag && 'cursor-grabbing'
                       )}
                       draggable={canDragProject}
@@ -570,54 +551,27 @@ export function Sidebar(): JSX.Element {
                           {project.name}
                         </span>
                       </button>
-                      {project.path !== '(no folder)' ? (
-                        <div className="relative shrink-0" data-add-menu>
-                          <button
-                            onClick={() =>
-                              setAddMenuFor((cur) => (cur === project.path ? null : project.path))
-                            }
-                            title="New session or loop"
-                            className={cn(
-                              'flex h-5 w-5 items-center justify-center rounded text-text-subtle transition-colors hover:bg-white/5 hover:text-text',
-                              addMenuFor === project.path && 'bg-white/5 text-text'
-                            )}
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </button>
-                          {addMenuFor === project.path && (
-                            <div className="animate-pop-in absolute right-0 top-6 z-30 w-36 origin-top-right overflow-hidden rounded-lg border border-border bg-elevated py-1 shadow-lg">
-                              <button
-                                onClick={() => {
-                                  setAddMenuFor(null)
-                                  void newSessionInProject(project.path)
-                                }}
-                                className="press-scale flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-text-muted hover:bg-white/5 hover:text-text"
-                              >
-                                <MessageSquarePlus className="h-3.5 w-3.5 shrink-0" />
-                                Session
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setAddMenuFor(null)
-                                  setLoopDialogFor({ path: project.path, name: project.name })
-                                }}
-                                className="press-scale flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-text-muted hover:bg-white/5 hover:text-text"
-                              >
-                                <Repeat className="h-3.5 w-3.5 shrink-0" />
-                                Loop
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
+                      {/* Loops are the rarer action, so they hide until the
+                          row is hovered -- that leaves "+" to mean exactly one
+                          thing: new session. */}
+                      {project.path !== '(no folder)' && (
                         <button
-                          onClick={() => void newSessionInProject(project.path)}
-                          title="New session in this project"
-                          className="press-scale flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle hover:bg-white/5 hover:text-text"
+                          onClick={() =>
+                            setLoopDialogFor({ path: project.path, name: project.name })
+                          }
+                          title="New loop in this project"
+                          className="press-scale flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-text focus-visible:opacity-100 group-hover/project:opacity-100"
                         >
-                          <Plus className="h-3.5 w-3.5" />
+                          <Repeat className="h-3.5 w-3.5" />
                         </button>
                       )}
+                      <button
+                        onClick={() => void newSessionInProject(project.path)}
+                        title="New session in this project"
+                        className="press-scale flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle hover:bg-white/5 hover:text-text"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                     {!isCollapsed && (
                       <>
@@ -725,7 +679,16 @@ export function Sidebar(): JSX.Element {
                                   {sending ? (
                                     <BrailleSpinner className="shrink-0 text-sm text-accent" />
                                   ) : (
-                                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-text-subtle/50" />
+                                    <span
+                                      className={cn(
+                                        'h-1.5 w-1.5 shrink-0 rounded-full transition-colors',
+                                        // A BACKGROUND delegate runs while its parent sits idle,
+                                        // so without this the row would look asleep now that the
+                                        // count pill is hover-only. Tinting the dot the row
+                                        // already has keeps that signal at zero layout cost.
+                                        liveSubs > 0 ? 'bg-accent' : 'bg-text-subtle/50'
+                                      )}
+                                    />
                                   )}
                                   {editingId === chat.id ? (
                                     <input
@@ -808,12 +771,13 @@ export function Sidebar(): JSX.Element {
                                         liveSubs > 0
                                           ? 'bg-accent/10 text-accent'
                                           : 'bg-surface-2 text-text-subtle hover:text-text',
-                                        // Idle and collapsed, this pill is just noise parked on
-                                        // every row - so reveal it on hover, like the delete button
-                                        // beside it. It stays pinned only when it carries state:
-                                        // a subagent is working, or the list is expanded.
+                                        // This pill is a disclosure control, not a status light,
+                                        // so it earns space only while the row is hovered or the
+                                        // list it toggles is actually open. Live subagents used to
+                                        // pin it too, which parked a badge on the row for the whole
+                                        // run - the dot above carries that signal instead.
                                         // Fading opacity (not unmounting) keeps the row stable.
-                                        liveSubs > 0 || subsOpen
+                                        subsOpen
                                           ? 'opacity-100'
                                           : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100'
                                       )}
@@ -891,7 +855,7 @@ export function Sidebar(): JSX.Element {
             </div>
           )}
         </section>
-      </div>
+      </Scroller>
 
       {loopDialogFor && (
         <NewLoopDialog

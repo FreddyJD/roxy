@@ -18,6 +18,7 @@ import {
 import { ChevronRight } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { HOVERABLE_THUMB, ImagePreview } from './ImagePreview'
+import { Scroller } from './Scroller'
 
 // ---- Collapsible section context --------------------------------------------
 
@@ -137,7 +138,13 @@ export function QueueSectionContent({
 // ---- List + items ------------------------------------------------------------
 
 export function QueueList({ className, ...props }: HTMLAttributes<HTMLUListElement>): JSX.Element {
-  return <ul className={cn('flex max-h-52 flex-col gap-1 overflow-y-auto', className)} {...props} />
+  return (
+    <Scroller
+      as="ul"
+      className={cn('flex max-h-52 flex-col gap-1 overflow-y-auto', className)}
+      {...props}
+    />
+  )
 }
 
 export function QueueItem({ className, ...props }: LiHTMLAttributes<HTMLLIElement>): JSX.Element {

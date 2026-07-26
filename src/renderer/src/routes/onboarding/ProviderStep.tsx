@@ -1,5 +1,14 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, Check, ChevronRight, Copy, ExternalLink, Loader2, Search } from 'lucide-react'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  ChevronRight,
+  Copy,
+  ExternalLink,
+  Loader2,
+  Search
+} from 'lucide-react'
 import { AUTH_LABELS, SEED_PROVIDERS, isConnectableNow, resolveSeed } from '@shared/providers'
 import { pickDefaultModel } from '@shared/models'
 import type { DeviceFlowStart, SeedProvider } from '@shared/types'
@@ -7,6 +16,7 @@ import { api } from '../../lib/api'
 import { useRoxyStore } from '../../lib/store'
 import { Button, Input } from '../../components/ui'
 import { ProviderLogo } from '../../lib/providerLogos'
+import { Scroller } from '../../components/Scroller'
 
 // The searchable list leads with Roxy too — a fallback for anyone who breezes
 // past the featured hero card above — followed by every other provider. (Roxy
@@ -29,8 +39,8 @@ export function ProviderStep(): JSX.Element {
     <div>
       <h1 className="text-2xl font-semibold tracking-tight">Connect a provider</h1>
       <p className="mt-2 text-sm text-text-muted">
-        Start with Roxy&rsquo;s own inference — one key for 300+ models — or bring your own provider.
-        Add more anytime in Settings.
+        Start with Roxy&rsquo;s own inference — one key for 300+ models — or bring your own
+        provider. Add more anytime in Settings.
       </p>
 
       {providers.length > 0 && (
@@ -64,7 +74,7 @@ export function ProviderStep(): JSX.Element {
         />
       </div>
 
-      <div className="mt-3 max-h-[320px] overflow-y-auto rounded-xl border border-border bg-surface">
+      <Scroller className="mt-3 max-h-[320px] overflow-y-auto rounded-xl border border-border bg-surface">
         {filtered.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-text-subtle">
             No providers match “{query}”.
@@ -81,7 +91,7 @@ export function ProviderStep(): JSX.Element {
             ))}
           </div>
         )}
-      </div>
+      </Scroller>
 
       {setupId && <ProviderSetup seed={resolveSeed(setupId)} onClose={() => setSetupId(null)} />}
     </div>
@@ -161,7 +171,13 @@ function ProviderRow({
   )
 }
 
-function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => void }): JSX.Element {
+function ProviderSetup({
+  seed,
+  onClose
+}: {
+  seed: SeedProvider
+  onClose: () => void
+}): JSX.Element {
   const refreshProviders = useRoxyStore((s) => s.refreshProviders)
   const [apiKey, setApiKey] = useState('')
   const [baseURL, setBaseURL] = useState(seed.baseURL ?? '')
@@ -231,7 +247,7 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <Scroller className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-md px-6 py-10">
           {isCopilot ? (
             <CopilotSetup onConnected={onConnected} />
@@ -302,7 +318,7 @@ function ProviderSetup({ seed, onClose }: { seed: SeedProvider; onClose: () => v
             </div>
           )}
         </div>
-      </div>
+      </Scroller>
     </div>
   )
 }
@@ -381,8 +397,13 @@ function CopilotSetup({ onConnected }: { onConnected: () => void }): JSX.Element
         </span>
         <Copy className="h-4 w-4 text-text-subtle transition-colors group-hover:text-text" />
       </button>
-      <span className="text-xs text-text-subtle">{copied ? 'Copied!' : 'Click the code to copy'}</span>
-      <Button variant="secondary" onClick={() => flow && api.system.openExternal(flow.verificationUri)}>
+      <span className="text-xs text-text-subtle">
+        {copied ? 'Copied!' : 'Click the code to copy'}
+      </span>
+      <Button
+        variant="secondary"
+        onClick={() => flow && api.system.openExternal(flow.verificationUri)}
+      >
         <ExternalLink className="h-4 w-4" /> Open GitHub
       </Button>
       <div className="mt-1 flex items-center gap-2 text-sm text-text-muted">

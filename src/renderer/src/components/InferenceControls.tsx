@@ -12,6 +12,7 @@ import {
 } from '@shared/session-config'
 import { useMenuAnchor } from '../lib/useMenuAnchor'
 import { cn } from '../lib/cn'
+import { Scroller } from './Scroller'
 
 /**
  * Close-on-outside-click / Escape for a small popover, plus the geometry that
@@ -111,7 +112,8 @@ const popoverClass =
   'animate-pop-in absolute bottom-full z-50 mb-2 flex flex-col overflow-y-auto rounded-xl border border-border bg-elevated shadow-2xl origin-bottom-left'
 /** Menu widths in px, matching what each picker renders. */
 const POPOVER_W = 288
-const AGENT_POPOVER_W = 256
+/** Just wide enough for "Build"/"Plan" + the check, now that blurbs are gone. */
+const AGENT_POPOVER_W = 160
 
 // ---- Thinking effort ---------------------------------------------------------
 
@@ -145,7 +147,7 @@ export function ThinkingPicker(): JSX.Element | null {
         <span>{currentLabel}</span>
       </button>
       {open && (
-        <div className={popoverClass} style={anchor}>
+        <Scroller className={popoverClass} style={anchor}>
           <div className="shrink-0 border-b border-border px-3 py-2 text-[11px] font-medium text-text-subtle">
             Thinking Effort
           </div>
@@ -179,19 +181,13 @@ export function ThinkingPicker(): JSX.Element | null {
           <div className="shrink-0 border-t border-border px-3 py-1.5 text-[11px] text-text-subtle">
             Higher levels of thinking may increase cost.
           </div>
-        </div>
+        </Scroller>
       )}
     </div>
   )
 }
 
 // ---- Agent (Build vs Plan) ---------------------------------------------------
-
-/** One-line taglines for the picker — the full `description`s are for the model. */
-const AGENT_TAGLINE: Record<string, string> = {
-  build: 'Reads, edits, and runs commands',
-  plan: 'Read-only — explores and proposes'
-}
 
 /**
  * Primary-agent selector. Switching to Plan makes the next turn read-only: the
@@ -217,7 +213,7 @@ export function AgentPicker(): JSX.Element {
         <span>{active.name}</span>
       </button>
       {open && (
-        <div className={popoverClass} style={anchor}>
+        <Scroller className={popoverClass} style={anchor}>
           <div className="p-1">
             {PRIMARY_AGENTS.map((a) => {
               const selected = a.id === active.id
@@ -230,26 +226,24 @@ export function AgentPicker(): JSX.Element {
                     setOpen(false)
                   }}
                   className={cn(
-                    'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition',
+                    'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition',
                     selected ? 'bg-accent/15' : 'hover:bg-white/5'
                   )}
+                  title={a.description}
                 >
                   <span
                     className="h-2 w-2 shrink-0 rounded-full"
                     style={{ backgroundColor: a.color }}
                   />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-xs font-medium text-text">{a.name}</span>
-                    <span className="block truncate text-[11px] text-text-subtle">
-                      {AGENT_TAGLINE[a.id] ?? a.description}
-                    </span>
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-text">
+                    {a.name}
                   </span>
                   {selected && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
                 </button>
               )
             })}
           </div>
-        </div>
+        </Scroller>
       )}
     </div>
   )
@@ -294,7 +288,7 @@ export function ContextPicker(): JSX.Element | null {
         <span>{formatTokens(current)}</span>
       </button>
       {open && (
-        <div className={popoverClass} style={anchor}>
+        <Scroller className={popoverClass} style={anchor}>
           <div className="shrink-0 border-b border-border px-3 py-2 text-[11px] font-medium text-text-subtle">
             Context Size
           </div>
@@ -332,7 +326,7 @@ export function ContextPicker(): JSX.Element | null {
           <div className="shrink-0 border-t border-border px-3 py-1.5 text-[11px] text-text-subtle">
             Larger context may increase cost.
           </div>
-        </div>
+        </Scroller>
       )}
     </div>
   )

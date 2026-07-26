@@ -36,3 +36,23 @@ export function formatInterval(minutes: number): string {
   const head = `${days} day${days === 1 ? '' : 's'}`
   return hrs ? `${head} ${hrs}hr${hrs === 1 ? '' : 's'}` : head
 }
+
+/**
+ * The folder name a worktree lives in — its "slug".
+ *
+ * Worth its own helper because this name DRIFTS from the branch. A workstream's
+ * directory is created once from the session's opening title and then never
+ * moved, while `syncBranchToTitle` renames the branch as the session's real
+ * subject emerges. So a session showing branch `fred/fix-auth-refresh` can be
+ * running in a folder called `fred-legacy-sylphie-compiler`, and nothing in the
+ * UI used to connect the two — which is exactly what makes a stray worktree on
+ * disk hard to identify.
+ *
+ * Handles both separators because worktree paths are stored as the platform
+ * produced them, and drops a trailing slash so `/a/b/` still yields `b`.
+ */
+export function worktreeSlug(path: string | null | undefined): string | null {
+  if (!path) return null
+  const segment = path.split(/[\\/]/).filter(Boolean).pop()
+  return segment || null
+}

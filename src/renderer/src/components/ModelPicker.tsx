@@ -6,6 +6,7 @@ import { ProviderLogo } from '../lib/providerLogos'
 import { triggerClass } from './InferenceControls'
 import { useMenuAnchor } from '../lib/useMenuAnchor'
 import { cn } from '../lib/cn'
+import { Scroller } from './Scroller'
 
 /**
  * A cute, searchable model picker: the active provider's logo + model on the
@@ -110,7 +111,7 @@ export function ModelPicker(): JSX.Element {
               className="w-full bg-transparent text-xs text-text outline-none placeholder:text-text-subtle"
             />
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto py-1">
+          <Scroller className="min-h-0 flex-1 overflow-y-auto py-1">
             {loading && <div className="px-3 py-3 text-xs text-text-subtle">Loading models…</div>}
             {!loading &&
               providers.map((p) => {
@@ -154,7 +155,7 @@ export function ModelPicker(): JSX.Element {
                 model.
               </div>
             )}
-          </div>
+          </Scroller>
         </div>
       )}
     </div>

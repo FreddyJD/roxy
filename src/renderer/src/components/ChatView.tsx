@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  Check,
   ChevronRight,
   CornerUpLeft,
   FolderOpen,
@@ -9,7 +10,9 @@ import {
   Repeat,
   Settings
 } from 'lucide-react'
+import type { Chat } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
+import { useOverlayScroll } from '../lib/overlayScroll'
 import { formatInterval } from '@shared/format'
 import { cn } from '../lib/cn'
 import { MessageBubble } from './MessageBubble'
@@ -69,6 +72,10 @@ export function ChatView(): JSX.Element {
   // Show only the latest N; scrolling up loads older ones a page at a time.
   const [visibleCount, setVisibleCount] = useState(VISIBLE_MESSAGES)
   const restoreHeight = useRef<number | null>(null)
+  // Overlay scrollbars for the transcript. Because the element is initialized
+  // as its own viewport, every read below (scrollTop / scrollHeight /
+  // clientHeight / scrollTo) and the onScroll prop keep working unchanged.
+  useOverlayScroll(scrollRef)
 
   const onScroll = (): void => {
     const el = scrollRef.current
@@ -162,25 +169,20 @@ export function ChatView(): JSX.Element {
             <span className="shrink-0 text-sm font-medium">{activeChat.title}</span>
             {/* A delegate's session is only legible in context — who sent it, and
                 a way back. The folder path is the parent's business. */}
-            {isSub
-              ? parentChat && (
-                  <button
-                    onClick={() => void selectChat(parentChat.id)}
-                    title={`Back to ${parentChat.title}`}
-                    className="flex min-w-0 items-center gap-1 truncate text-xs text-text-subtle transition-colors hover:text-text"
-                  >
-                    <CornerUpLeft className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{parentChat.title}</span>
-                  </button>
-                )
-              : activeChat.workspacePath && (
-                  <span
-                    className="truncate text-xs text-text-subtle"
-                    title={activeChat.workspacePath}
-                  >
-                    {activeChat.workspacePath}
-                  </span>
-                )}
+            {isSub ? (
+              parentChat && (
+                <button
+                  onClick={() => void selectChat(parentChat.id)}
+                  title={`Back to ${parentChat.title}`}
+                  className="flex min-w-0 items-center gap-1 truncate text-xs text-text-subtle transition-colors hover:text-text"
+                >
+                  <CornerUpLeft className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{parentChat.title}</span>
+                </button>
+              )
+            ) : (
+              <WorkspacePath chat={activeChat} />
+            )}
             {subagentRunning && (
               <span
                 title="This subagent is working"
@@ -321,5 +323,78 @@ export function ChatView(): JSX.Element {
         />
       )}
     </div>
+  )
+}
+
+/**
+ * The folder this session's agent actually runs in, click to copy.
+ *
+ * Shows `worktreePath` in preference to `workspacePath`. Those differ for every
+ * workstream: the project folder is the repo you opened, but the agent's cwd is
+ * an isolated checkout under `worktrees/`. Showing the project path meant the
+ * header named a directory the session was NOT editing — actively misleading
+ * when several workstreams are open and you are trying to work out which
+ * checkout a dev server or an editor tab belongs to.
+ *
+ * Copying is the point: these paths are long, truncated by the header, and
+ * mostly wanted for pasting into a terminal. Selecting truncated text by hand
+ * is fiddly, so the whole thing is one click.
+ */
+function WorkspacePath({ chat }: { chat: Chat }): JSX.Element | null {
+  const path = chat.worktreePath ?? chat.workspacePath
+  const [copied, setCopied] = useState(0)
+
+  // Keyed on the click COUNT, not a boolean: clicking again while the
+  // confirmation is still up restarts the window, instead of the first click's
+  // timer cutting the second one short.
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(0), 1200)
+    return () => clearTimeout(t)
+  }, [copied])
+
+  if (!path) return null
+
+  const copy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(path)
+      setCopied((n) => n + 1)
+    } catch {
+      // Clipboard can be denied; the path stays readable in the tooltip.
+    }
+  }
+
+  return (
+    <button
+      onClick={() => void copy()}
+      // The label is truncated, so the tooltip carries the full path.
+      title={`${path}\nClick to copy`}
+      className="press-scale relative flex min-w-0 items-center rounded-md px-1 py-0.5 text-xs text-text-subtle hover:bg-white/5 hover:text-text-muted"
+    >
+      {/* The path fades rather than unmounting, so the button keeps its width
+          and nothing in the header shifts while the confirmation shows. */}
+      <span
+        className={cn(
+          'truncate transition-opacity duration-150 ease-out-quart',
+          copied && 'opacity-0'
+        )}
+      >
+        {path}
+      </span>
+      {/* Confirmation sits ON TOP of the path, left-aligned to it, so it reads
+          as the same object changing state. Fires often enough that a moving
+          toast would be noise -- this is the smallest thing that still answers
+          "did that work?". */}
+      <span
+        aria-live="polite"
+        className={cn(
+          'absolute inset-y-0 left-1 flex items-center gap-1 text-success transition-[opacity,transform] duration-150 ease-out-quart',
+          copied ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-0.5 opacity-0'
+        )}
+      >
+        <Check className="h-3 w-3 shrink-0" />
+        Copied
+      </span>
+    </button>
   )
 }

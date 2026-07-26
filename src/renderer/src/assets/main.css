@@ -207,23 +207,77 @@ body {
   background: color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 
-/* Thin, Cursor-like scrollbars */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+/* Scrollbars.
+ *
+ * Every scroller in the app runs OverlayScrollbars (see lib/overlayScroll.ts),
+ * which draws its own handle and needs the native one gone. Hiding it here
+ * rather than per-component also covers the scrollers we don't render
+ * ourselves -- Streamdown's code blocks and tables inside every markdown
+ * message -- which would otherwise still show a 10px platform bar.
+ *
+ * SCOPED TO #root ON PURPOSE. OverlayScrollbars decides at startup whether this
+ * platform already draws overlay scrollbars natively (macOS trackpad) by
+ * measuring a probe element it appends to <body>. A global
+ * `* { scrollbar-width: none }` makes that probe measure 0, so the library
+ * concludes "already overlaid" and CANCELS every initialization -- silently,
+ * leaving the app with no scrollbars at all. Keeping the rule inside #root lets
+ * the probe see a real native scrollbar while still hiding every scrollbar the
+ * user can actually look at.
+ *
+ * `scrollbar-width: none` is the standard property; the ::-webkit rule is what
+ * Chromium actually obeys today. Both are needed. */
+#root * {
+  scrollbar-width: none;
 }
-::-webkit-scrollbar-thumb {
-  background: var(--color-border-strong);
-  border-radius: 9999px;
-  border: 2px solid transparent;
-  background-clip: content-box;
+#root *::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: #3d3d43;
-  background-clip: content-box;
+
+/* The overlay handle itself: a translucent capsule with nothing behind it, so
+ * it reads as floating over the content instead of sitting in a gutter. Sized
+ * 10px like the old native bar, but since it's an overlay it costs no layout
+ * width -- content no longer reflows when a pane starts overflowing. */
+.os-theme-roxy {
+  --os-size: 10px;
+  --os-padding-perpendicular: 2px;
+  --os-padding-axis: 2px;
+  --os-track-bg: transparent;
+  --os-track-bg-hover: transparent;
+  --os-track-bg-active: transparent;
+  --os-track-border-radius: 9999px;
+  --os-handle-border-radius: 9999px;
+  --os-handle-bg: var(--color-border-strong);
+  --os-handle-bg-hover: #3d3d43;
+  --os-handle-bg-active: #4a4a52;
+  --os-handle-min-size: 28px;
+  /* Widen the grab target past the visible capsule: a 6px handle is painful to
+   * hit deliberately, and this costs nothing visually. */
+  --os-handle-interactive-area-offset: 4px;
 }
-::-webkit-scrollbar-track {
-  background: transparent;
+/* Idle handles sit back; they come up to full strength once you're aiming at
+ * them. The transition is on the SCROLLBAR (not the handle) because that's the
+ * element OverlayScrollbars toggles `os-visible` on when it auto-hides. */
+.os-theme-roxy .os-scrollbar-handle {
+  opacity: 0.75;
+  transition: opacity 120ms var(--ease-out-quart);
+}
+.os-theme-roxy:is(:hover, :active) .os-scrollbar-handle {
+  opacity: 1;
+}
+/* The auto-hide fade. OverlayScrollbars' own transition is a hard 0.3s linear;
+ * matching the app's easing keeps it from feeling like a different toolkit. */
+.os-theme-roxy.os-scrollbar {
+  transition:
+    opacity 220ms var(--ease-out-quart),
+    visibility 220ms var(--ease-out-quart);
+}
+@media (prefers-reduced-motion: reduce) {
+  .os-theme-roxy.os-scrollbar,
+  .os-theme-roxy .os-scrollbar-handle {
+    transition: none;
+  }
 }
 
 /* Electron custom title bar: make a region draggable, keep controls clickable. */

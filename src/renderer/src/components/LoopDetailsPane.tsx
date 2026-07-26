@@ -2,6 +2,7 @@ import { Repeat, X } from 'lucide-react'
 import type { Chat, Loop } from '@shared/types'
 import { formatInterval } from '@shared/format'
 import { cn } from '../lib/cn'
+import { Scroller } from './Scroller'
 
 function fmtTime(ts: number | null): string {
   return ts ? new Date(ts).toLocaleString() : '—'
@@ -35,7 +36,9 @@ function Row({
       <span className="text-[10px] font-semibold uppercase tracking-wider text-text-subtle">
         {label}
       </span>
-      <div className={cn('break-words text-sm text-text', mono && 'font-mono text-xs text-text-muted')}>
+      <div
+        className={cn('break-words text-sm text-text', mono && 'font-mono text-xs text-text-muted')}
+      >
         {children}
       </div>
     </div>
@@ -72,16 +75,13 @@ export function LoopDetailsPane({
         </button>
       </div>
 
-      <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
+      <Scroller className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
         <Row label="Name">{loop.name}</Row>
 
         <Row label="Status">
           <span className="flex items-center gap-2">
             <span
-              className={cn(
-                'h-2 w-2 rounded-full',
-                loop.enabled ? 'bg-success' : 'bg-text-subtle'
-              )}
+              className={cn('h-2 w-2 rounded-full', loop.enabled ? 'bg-success' : 'bg-text-subtle')}
             />
             {loop.enabled ? 'Running' : 'Paused'} · every {formatInterval(loop.intervalMinutes)}
           </span>
@@ -95,7 +95,9 @@ export function LoopDetailsPane({
 
         <Row label="Next run">
           {fmtTime(loop.nextRunAt)}
-          {rel(loop.nextRunAt) && <span className="text-text-subtle"> · {rel(loop.nextRunAt)}</span>}
+          {rel(loop.nextRunAt) && (
+            <span className="text-text-subtle"> · {rel(loop.nextRunAt)}</span>
+          )}
         </Row>
 
         <Row label="Last run">
@@ -125,7 +127,7 @@ export function LoopDetailsPane({
           Read-only. Ask Roxy to change a loop with the loop tools (e.g. “pause the {loop.name}
           loop”).
         </p>
-      </div>
+      </Scroller>
     </aside>
   )
 }
