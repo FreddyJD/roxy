@@ -70,6 +70,24 @@
   animation: var(--animate-fade-in);
 }
 
+/* A live status line advancing to its next value — the new label rises into
+   place as the old one is replaced. Small travel (3px) on purpose: this fires
+   once per agent step, so anything larger reads as thrashing rather than
+   progress. Keyed remounts drive it (see ActivityLine in ToolCall). */
+@keyframes ticker-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-ticker-in {
+  animation: ticker-in 180ms var(--ease-out-quart) both;
+}
+
 /* Modal entrances. Unlike popovers, modals aren't anchored to a trigger, so they
    scale from center. The scrim fades; the panel scales+fades in together. */
 @keyframes modal-scrim-in {
@@ -125,6 +143,9 @@
   }
   .press-scale:active:not(:disabled) {
     transform: none;
+  }
+  .animate-ticker-in {
+    animation: fade-in 120ms ease both;
   }
 }
 

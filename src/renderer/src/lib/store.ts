@@ -23,6 +23,7 @@ import type {
 import { selectPromptName, buildEnvironment, assembleSystemPrompt } from '@shared/prompt'
 import { PROMPT_TEXT, AGENT_PROMPT_TEXT } from '@shared/prompt-text'
 import { reconstructTurn, REPLAY_OUTPUT_CAP } from '@shared/tool-history'
+import { PartsFold, partsToContent } from '@shared/parts'
 import { isOverflow, pruneToolMessages, KEEP_RECENT_TOKENS } from '@shared/context'
 import { pickDefaultModel } from '@shared/models'
 import { uniqueSlug } from '@shared/slugs'
@@ -162,7 +163,7 @@ const remoteMirror = { deferred: false }
  * mirrors a remote reply token-by-token (the twin of a local send's `parts`).
  * A turn:idle frame clears the entry once the persisted reply takes over.
  */
-const remoteTurns = new Map<string, { parts: MessagePart[]; callIndex: Map<string, number> }>()
+const remoteTurns = new Map<string, PartsFold>()
 
 /**
  * Desktop live-mirror: reload the shared chat's transcript from disk after a
@@ -209,7 +210,7 @@ function applyRemoteDelta(payload: RemoteDelta): void {
     if (payload.state === 'running') {
       // Open an empty live bubble (a "thinking" indicator) the moment the turn
       // starts, so the desktop isn't blank while the first token is resolved.
-      remoteTurns.set(sessionId, { parts: [], callIndex: new Map() })
+      remoteTurns.set(sessionId, new PartsFold())
       reflect([])
     } else {
       remoteTurns.delete(sessionId)
@@ -218,68 +219,15 @@ function applyRemoteDelta(payload: RemoteDelta): void {
     return
   }
 
-  // A stream event: fold it into this session's live parts (mirrors the main
-  // process's PartsAccumulator and the local send's delta handler).
-  const turn = remoteTurns.get(sessionId) ?? { parts: [], callIndex: new Map() }
-  remoteTurns.set(sessionId, turn)
-  const { event } = payload
-  let { parts } = turn
-  if (event.type === 'text') {
-    const last = parts[parts.length - 1]
-    if (last && last.type === 'text') {
-      parts = parts.map((p, i) =>
-        i === parts.length - 1 ? { type: 'text', text: last.text + event.delta } : p
-      )
-    } else {
-      parts = [...parts, { type: 'text', text: event.delta }]
-    }
-  } else if (event.type === 'reasoning') {
-    const last = parts[parts.length - 1]
-    if (last && last.type === 'reasoning') {
-      parts = parts.map((p, i) =>
-        i === parts.length - 1 ? { type: 'reasoning', text: last.text + event.delta } : p
-      )
-    } else {
-      parts = [...parts, { type: 'reasoning', text: event.delta }]
-    }
-  } else if (event.type === 'tool-start') {
-    turn.callIndex.set(event.callId, parts.length)
-    parts = [
-      ...parts,
-      {
-        type: 'tool',
-        tool: event.tool,
-        state: 'running',
-        title: event.title,
-        callId: event.callId,
-        input: event.input
-      }
-    ]
-  } else if (event.type === 'tool-delta') {
-    const idx = turn.callIndex.get(event.callId)
-    if (idx !== undefined) {
-      parts = parts.map((p, i) =>
-        i === idx && p.type === 'tool' ? { ...p, output: (p.output ?? '') + event.chunk } : p
-      )
-    }
-  } else if (event.type === 'tool-end') {
-    const idx = turn.callIndex.get(event.callId)
-    if (idx !== undefined) {
-      parts = parts.map((p, i) =>
-        i === idx && p.type === 'tool'
-          ? {
-              ...p,
-              state: event.ok ? 'done' : 'error',
-              output: event.output,
-              image: event.image,
-              diff: event.diff
-            }
-          : p
-      )
-    }
+  // A stream event: fold it into this session's live parts through the SAME pure
+  // fold the local send and the main process use, so remote mirroring can never
+  // drift from — or silently drop an event type handled by — the local path.
+  let turn = remoteTurns.get(sessionId)
+  if (!turn) {
+    turn = new PartsFold()
+    remoteTurns.set(sessionId, turn)
   }
-  turn.parts = parts
-  reflect(parts)
+  reflect(turn.apply(payload.event))
 }
 
 export const useRoxyStore = create<RoxyStore>((set, get) => ({
@@ -904,91 +852,48 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         model,
         get().activeAgentId
       )
-      // Build parts live from the agent's event stream: text grows the current
-      // text part; each tool call adds a card that flips running→done/error.
-      const callIndex = new Map<string, number>()
+      // Build parts live from the agent's event stream through the shared fold:
+      // text grows the current text part, each tool call adds a card that flips
+      // running→done/error, and a subagent's steps nest inside its `task` card.
+      // Seeded with whatever the turn already rendered (a `!verb` card).
+      const fold = new PartsFold()
+      fold.parts = parts
+      // Side effects that must fire when a specific tool starts/ends live here
+      // rather than inside the fold, which stays pure.
+      const findByCallId = (callId: string): MessagePart | undefined =>
+        fold.parts.find((p) => p.type === 'tool' && p.callId === callId)
       deltaHandlers.set(requestId, (event) => {
         if (!chatExists()) return
-        if (event.type === 'text') {
-          const last = parts[parts.length - 1]
-          if (last && last.type === 'text') {
-            const text = last.text + event.delta
-            parts = parts.map((p, i) => (i === parts.length - 1 ? { type: 'text', text } : p))
-          } else {
-            parts = [...parts, { type: 'text', text: event.delta }]
-          }
-        } else if (event.type === 'reasoning') {
-          // The model's live thinking tokens — grow the current reasoning part so
-          // the "Thinking…" block fills in instead of just spinning.
-          const last = parts[parts.length - 1]
-          if (last && last.type === 'reasoning') {
-            const text = last.text + event.delta
-            parts = parts.map((p, i) => (i === parts.length - 1 ? { type: 'reasoning', text } : p))
-          } else {
-            parts = [...parts, { type: 'reasoning', text: event.delta }]
-          }
-        } else if (event.type === 'tool-start') {
-          callIndex.set(event.callId, parts.length)
-          parts = [
-            ...parts,
-            {
-              type: 'tool',
-              tool: event.tool,
-              state: 'running',
-              title: event.title,
-              callId: event.callId,
-              input: event.input
-            }
-          ]
+        parts = fold.apply(event)
+        if (event.type === 'tool-start') {
           // A `task` just spawned a subagent (its own `sub` session was created
           // in main) — surface it under the parent in the sidebar immediately.
           if (event.tool === 'task') void get().refreshChats()
-        } else if (event.type === 'tool-delta') {
-          const idx = callIndex.get(event.callId)
-          if (idx !== undefined) {
-            parts = parts.map((p, i) =>
-              i === idx && p.type === 'tool' ? { ...p, output: (p.output ?? '') + event.chunk } : p
-            )
-          }
         } else if (event.type === 'tool-end') {
-          const idx = callIndex.get(event.callId)
-          if (idx !== undefined) {
-            const ended = parts[idx]
-            parts = parts.map((p, i) =>
-              i === idx && p.type === 'tool'
-                ? {
-                    ...p,
-                    state: event.ok ? 'done' : 'error',
-                    output: event.output,
-                    image: event.image,
-                    diff: event.diff
-                  }
-                : p
-            )
+          const ended = findByCallId(event.callId)
+          if (event.ok && ended?.type === 'tool' && ended.tool.startsWith('loop_')) {
             // A loop_* tool just created/removed/toggled a loop — reflect it in
             // the sidebar right away instead of waiting for a manual refresh.
-            if (event.ok && ended?.type === 'tool' && ended.tool.startsWith('loop_')) {
-              void get().refreshLoops()
-              void get().refreshChats()
-            } else if (ended?.type === 'tool' && ended.tool === 'task') {
-              // A subagent finished — its `sub` session now has its reply; refresh
-              // the sidebar and reload it if the user is tapped into it.
-              void (async () => {
-                await get().refreshChats()
-                const active = get().activeChatId
-                if (active && get().chats.find((c) => c.id === active)?.kind === 'sub') {
-                  set({ messages: await api.messages.list(active) })
-                }
-              })()
-            } else if (
-              event.ok &&
-              ended?.type === 'tool' &&
-              ended.tool === 'change_session_metadata'
-            ) {
-              // The agent renamed / described / re-tasked its own session —
-              // refresh so the sidebar title + the SessionInfo strip update live.
-              void get().refreshChats()
-            }
+            void get().refreshLoops()
+            void get().refreshChats()
+          } else if (ended?.type === 'tool' && ended.tool === 'task') {
+            // A subagent finished — its `sub` session now has its reply; refresh
+            // the sidebar and reload it if the user is tapped into it.
+            void (async () => {
+              await get().refreshChats()
+              const active = get().activeChatId
+              if (active && get().chats.find((c) => c.id === active)?.kind === 'sub') {
+                set({ messages: await api.messages.list(active) })
+              }
+            })()
+          } else if (
+            event.ok &&
+            ended?.type === 'tool' &&
+            ended.tool === 'change_session_metadata'
+          ) {
+            // The agent renamed / described / re-tasked its own session —
+            // refresh so the sidebar title + the SessionInfo strip update live.
+            void get().refreshChats()
           }
         }
         setStreaming(parts)
@@ -1301,19 +1206,6 @@ function buildReasoning(prompt: string): string {
     `No live model is wired in yet, so I'll stream a placeholder through the parts ` +
     `pipeline — reasoning first, then prose, with tool calls as inline cards.`
   )
-}
-
-/** Collapse a turn's parts into a plain-text preview for the `content` column. */
-function partsToContent(parts: MessagePart[]): string {
-  let text = ''
-  let reasoning = ''
-  let toolOutput = ''
-  for (const part of parts) {
-    if (part.type === 'text') text += part.text
-    else if (part.type === 'reasoning') reasoning += part.text
-    else if (part.type === 'tool' && part.output) toolOutput = part.output
-  }
-  return (text.trim() || reasoning.trim() || toolOutput).trim()
 }
 
 /**

@@ -52,6 +52,12 @@ const REPLAY_MARKER = '…[tool output truncated to fit context — full result 
  * matching `role:'tool'` result messages. Text that arrives after a tool call
  * opens a new assistant step (OpenAI multi-step form). Reasoning/image parts are
  * display-only here and skipped.
+ *
+ * A `task` part's `children` (its subagent's transcript) are display-only too and
+ * are deliberately NOT walked: the parent model never made those calls, and
+ * replaying them as its own `tool_calls` would invent history it never saw. All
+ * it ever received was the subagent's final report — which is this part's
+ * `output`, and is replayed normally below.
  */
 export function reconstructAssistant(parts: MessagePart[]): ChatMessage[] {
   const out: ChatMessage[] = []
@@ -60,7 +66,11 @@ export function reconstructAssistant(parts: MessagePart[]): ChatMessage[] {
   let results: ChatMessage[] = []
   const commit = (): void => {
     if (!text.trim() && calls.length === 0 && results.length === 0) return
-    out.push({ role: 'assistant', content: text.trim(), ...(calls.length ? { toolCalls: calls } : {}) })
+    out.push({
+      role: 'assistant',
+      content: text.trim(),
+      ...(calls.length ? { toolCalls: calls } : {})
+    })
     out.push(...results)
     text = ''
     calls = []
@@ -135,7 +145,12 @@ export function flattenToolHistory(messages: ChatMessage[]): ChatMessage[] {
       // Merge consecutive assistant messages (a multi-step tool turn is one bubble).
       const last = out[out.length - 1]
       if (last && last.role === 'assistant') appendToLastAssistant(m.content)
-      else out.push({ role: 'assistant', content: m.content, ...(m.images ? { images: m.images } : {}) })
+      else
+        out.push({
+          role: 'assistant',
+          content: m.content,
+          ...(m.images ? { images: m.images } : {})
+        })
       continue
     }
     out.push({ ...m })

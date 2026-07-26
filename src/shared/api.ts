@@ -241,6 +241,20 @@ export type LlmEvent =
       image?: string
       diff?: ToolDiff
     }
+  /**
+   * One step of a SUBAGENT's turn, addressed to the `task` card that spawned it.
+   * `callId` is the parent `task` call; `event` is the child's own event, folded
+   * into that card's `children` instead of the top-level parts list.
+   *
+   * Wrapping (rather than prefixing child call ids and emitting them flat) keeps
+   * the nesting explicit end-to-end: the fold knows a child event is a child, so
+   * it can never be mistaken for a call the parent model made and replayed as
+   * bogus tool history on the next turn.
+   */
+  | { type: 'tool-child'; callId: string; event: LlmChildEvent }
+
+/** The subset of `LlmEvent` a subagent can emit — everything except further nesting. */
+export type LlmChildEvent = Exclude<LlmEvent, { type: 'tool-child' }>
 
 export interface LlmDelta {
   requestId: string

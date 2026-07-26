@@ -31,6 +31,14 @@ import {
   REPLAY_OUTPUT_CAP
 } from '../src/shared/tool-history'
 import {
+  PartsFold,
+  partsToContent,
+  streamSignature,
+  countStreamedChars,
+  CHILD_OUTPUT_CAP,
+  MAX_CHILD_PARTS
+} from '../src/shared/parts'
+import {
   normalizeFetchUrl,
   acceptHeader,
   mimeFromContentType,
@@ -917,6 +925,237 @@ const started = renderBackgroundStarted('general', 'crunch data')
 check('renderBackgroundStarted names the task', started.includes('crunch data'))
 check('renderBackgroundStarted warns against polling', /DO NOT poll/i.test(started))
 
+// ---- PartsFold: one fold for local / remote / main, incl. nested subagents ----
+{
+  const fold = new PartsFold()
+  fold.apply({ type: 'reasoning', delta: 'hmm' })
+  fold.apply({ type: 'reasoning', delta: '…' })
+  fold.apply({ type: 'text', delta: 'Hello' })
+  fold.apply({ type: 'text', delta: ' world' })
+  check(
+    'fold: consecutive deltas grow one part per kind',
+    fold.parts.length === 2 &&
+      fold.parts[0].type === 'reasoning' &&
+      fold.parts[0].text === 'hmm…' &&
+      fold.parts[1].type === 'text' &&
+      fold.parts[1].text === 'Hello world'
+  )
+
+  const before = fold.parts
+  fold.apply({ type: 'text', delta: '!' })
+  check('fold: returns a NEW array so React re-renders', fold.parts !== before)
+
+  fold.apply({
+    type: 'tool-start',
+    callId: 'c1',
+    tool: 'bash',
+    title: 'ls',
+    input: { command: 'ls' }
+  })
+  fold.apply({ type: 'tool-delta', callId: 'c1', chunk: 'a.txt\n' })
+  fold.apply({ type: 'tool-end', callId: 'c1', output: 'a.txt\nb.txt', ok: true })
+  const tool = fold.parts[2]
+  check(
+    'fold: tool card runs then resolves with its id + input kept',
+    tool.type === 'tool' &&
+      tool.state === 'done' &&
+      tool.callId === 'c1' &&
+      tool.output === 'a.txt\nb.txt' &&
+      (tool.input as { command?: string }).command === 'ls'
+  )
+
+  fold.apply({ type: 'tool-end', callId: 'nope', output: 'x', ok: true })
+  check('fold: an unknown callId is ignored, not appended', fold.parts.length === 3)
+}
+
+{
+  // The point of the feature: a subagent's steps nest INSIDE its task card and
+  // never leak into the parent's top-level parts.
+  const fold = new PartsFold()
+  fold.apply({ type: 'tool-start', callId: 't1', tool: 'task', title: 'Explore: map it' })
+  fold.apply({ type: 'tool-child', callId: 't1', event: { type: 'reasoning', delta: 'plan' } })
+  fold.apply({
+    type: 'tool-child',
+    callId: 't1',
+    event: { type: 'tool-start', callId: 'c1', tool: 'grep', title: 'foo' }
+  })
+  fold.apply({
+    type: 'tool-child',
+    callId: 't1',
+    event: { type: 'tool-end', callId: 'c1', output: 'hit', ok: true }
+  })
+  fold.apply({ type: 'tool-child', callId: 't1', event: { type: 'text', delta: 'Found it.' } })
+
+  check('fold/nested: parent keeps exactly one top-level card', fold.parts.length === 1)
+  const task = fold.parts[0]
+  check(
+    'fold/nested: subagent steps land in children, in order',
+    task.type === 'tool' &&
+      task.children?.length === 3 &&
+      task.children[0].type === 'reasoning' &&
+      task.children[1].type === 'tool' &&
+      task.children[1].tool === 'grep' &&
+      task.children[1].state === 'done' &&
+      task.children[2].type === 'text' &&
+      task.children[2].text === 'Found it.'
+  )
+  check(
+    'fold/nested: the task card itself is still running until its own tool-end',
+    task.type === 'tool' && task.state === 'running'
+  )
+
+  fold.apply({ type: 'tool-end', callId: 't1', output: 'The report.', ok: true })
+  const done = fold.parts[0]
+  check(
+    'fold/nested: the report resolves the card without losing the transcript',
+    done.type === 'tool' &&
+      done.state === 'done' &&
+      done.output === 'The report.' &&
+      done.children?.length === 3
+  )
+
+  // A child event for a task card that was never announced must be dropped, not
+  // mis-attributed to some other card.
+  const stray = fold.parts
+  fold.apply({ type: 'tool-child', callId: 'ghost', event: { type: 'text', delta: 'x' } })
+  check('fold/nested: a child with no parent card is dropped', fold.parts === stray)
+}
+
+{
+  // Two concurrent subagents must not cross transcripts — they share child call
+  // ids (each subagent numbers its own calls), so the fold keys by parent card.
+  const fold = new PartsFold()
+  fold.apply({ type: 'tool-start', callId: 'A', tool: 'task', title: 'one' })
+  fold.apply({ type: 'tool-start', callId: 'B', tool: 'task', title: 'two' })
+  fold.apply({
+    type: 'tool-child',
+    callId: 'A',
+    event: { type: 'tool-start', callId: 'c1', tool: 'read', title: 'a.ts' }
+  })
+  fold.apply({
+    type: 'tool-child',
+    callId: 'B',
+    event: { type: 'tool-start', callId: 'c1', tool: 'read', title: 'b.ts' }
+  })
+  fold.apply({
+    type: 'tool-child',
+    callId: 'B',
+    event: { type: 'tool-end', callId: 'c1', output: 'B!', ok: true }
+  })
+  const [a, b] = fold.parts
+  check(
+    'fold/nested: colliding child ids stay in their own parent',
+    a.type === 'tool' &&
+      b.type === 'tool' &&
+      a.children?.length === 1 &&
+      b.children?.length === 1 &&
+      a.children[0].type === 'tool' &&
+      a.children[0].title === 'a.ts' &&
+      a.children[0].state === 'running' &&
+      b.children[0].type === 'tool' &&
+      b.children[0].output === 'B!' &&
+      b.children[0].state === 'done'
+  )
+}
+
+{
+  // Nested output is a summary view: the sub session holds the full thing, so the
+  // parent row must not balloon with a subagent's megabyte of tool output.
+  const fold = new PartsFold()
+  fold.apply({ type: 'tool-start', callId: 't1', tool: 'task', title: 'big' })
+  fold.apply({
+    type: 'tool-child',
+    callId: 't1',
+    event: { type: 'tool-start', callId: 'c1', tool: 'bash', title: 'noise' }
+  })
+  fold.apply({
+    type: 'tool-child',
+    callId: 't1',
+    event: { type: 'tool-end', callId: 'c1', output: 'x\n'.repeat(50_000), ok: true }
+  })
+  const task = fold.parts[0]
+  const childOut =
+    task.type === 'tool' && task.children?.[0].type === 'tool'
+      ? (task.children[0].output ?? '')
+      : ''
+  check(
+    'fold/nested: a huge child output is capped for the parent row',
+    childOut.length > 0 && childOut.length <= CHILD_OUTPUT_CAP + 200,
+    `len=${childOut.length}`
+  )
+
+  // And a runaway step count can't grow the row without bound either.
+  for (let i = 0; i < MAX_CHILD_PARTS + 50; i++) {
+    fold.apply({
+      type: 'tool-child',
+      callId: 't1',
+      event: { type: 'tool-start', callId: `x${i}`, tool: 'read', title: `f${i}` }
+    })
+  }
+  const capped = fold.parts[0]
+  check(
+    'fold/nested: nested parts stop appending at the cap',
+    capped.type === 'tool' && (capped.children?.length ?? 0) === MAX_CHILD_PARTS
+  )
+}
+
+{
+  // The liveness signal must see nested activity, or the "thinking" indicator
+  // flips on while a subagent is visibly streaming inside its card.
+  const fold = new PartsFold()
+  fold.apply({ type: 'tool-start', callId: 't1', tool: 'task', title: 'x' })
+  const quietSig = streamSignature(fold.parts)
+  fold.apply({ type: 'tool-child', callId: 't1', event: { type: 'text', delta: 'working' } })
+  check(
+    'fold: streamSignature changes on nested activity',
+    streamSignature(fold.parts) !== quietSig
+  )
+  check(
+    'fold: countStreamedChars counts nested text',
+    countStreamedChars(fold.parts) === 'working'.length
+  )
+
+  check(
+    'partsToContent prefers prose over tool output',
+    partsToContent([
+      { type: 'tool', tool: 'bash', state: 'done', output: 'raw' },
+      { type: 'text', text: '  done  ' }
+    ]) === 'done'
+  )
+}
+
+{
+  // A subagent's steps are display-only: replaying them as the parent's own
+  // tool_calls would feed the model calls it never made.
+  const replayed = reconstructAssistant([
+    {
+      type: 'tool',
+      tool: 'task',
+      state: 'done',
+      callId: 't1',
+      input: { description: 'go' },
+      output: 'The report.',
+      children: [
+        { type: 'text', text: 'internal chatter' },
+        { type: 'tool', tool: 'grep', state: 'done', callId: 'c1', output: 'hit' }
+      ]
+    }
+  ])
+  const calls = replayed.flatMap((m) => (m.role === 'assistant' ? (m.toolCalls ?? []) : []))
+  check(
+    'reconstructAssistant replays the task call ONLY, never its children',
+    calls.length === 1 && calls[0].id === 't1' && calls[0].name === 'task'
+  )
+  check(
+    'reconstructAssistant gives the model the report as the task result',
+    replayed.some((m) => m.role === 'tool' && m.toolCallId === 't1' && m.content === 'The report.')
+  )
+  check(
+    'reconstructAssistant never leaks nested output into the transcript',
+    !replayed.some((m) => m.content.includes('internal chatter') || m.content.includes('hit'))
+  )
+}
+
 // ---- LSP: framing + registry + uri + rendering (Phase 12) ----
 
 // JSON-RPC Content-Length framing round-trips through the incremental decoder.
@@ -1778,15 +2017,20 @@ async function main(): Promise<void> {
     check('general IS write-capable', isWriteCapableSubagent('general') === true)
     // Fail closed: the default subagent is `general`, so an unknown name must
     // never be optimistically treated as safe to parallelize.
-    check('an unknown subagent is treated as write-capable', isWriteCapableSubagent('nope') === true)
+    check(
+      'an unknown subagent is treated as write-capable',
+      isWriteCapableSubagent('nope') === true
+    )
     check('an empty subagent name is write-capable', isWriteCapableSubagent('') === true)
 
     const part = partitionTasksByWriteCapability(
       ['explore', 'general', 'explore', 'general'],
       (t) => isWriteCapableSubagent(t)
     )
-    check('partition splits readers from writers',
-      part.readers.length === 2 && part.writers.length === 2)
+    check(
+      'partition splits readers from writers',
+      part.readers.length === 2 && part.writers.length === 2
+    )
 
     /**
      * Run tasks, recording the max number of the SAME KIND in flight at once.
@@ -1815,15 +2059,21 @@ async function main(): Promise<void> {
 
     // Writers must never overlap...
     const w = await trace(['general', 'general', 'general'])
-    check('two write-capable subagents never overlap', (w.peak.get('general') ?? 0) === 1,
-      String(w.peak.get('general')))
+    check(
+      'two write-capable subagents never overlap',
+      (w.peak.get('general') ?? 0) === 1,
+      String(w.peak.get('general'))
+    )
     check('...and all of them still run', w.results.length === 3)
     check('...in their original order', w.order.join(',') === 'general,general,general')
 
     // ...while readers still do.
     const r = await trace(['explore', 'explore', 'explore'])
-    check('read-only subagents DO overlap', (r.peak.get('explore') ?? 0) > 1,
-      String(r.peak.get('explore')))
+    check(
+      'read-only subagents DO overlap',
+      (r.peak.get('explore') ?? 0) > 1,
+      String(r.peak.get('explore'))
+    )
     check('...and all of them run', r.results.length === 3)
 
     // Mixed: readers fan out, the single writer is unaffected.
@@ -1850,8 +2100,10 @@ async function main(): Promise<void> {
       check('mixed turn: a writer runs while readers are still in flight', sawOverlap)
     }
     check('mixed turn: every task returns a result', m.results.length === 4)
-    check('mixed turn: results carry their task back',
-      m.results.every((x) => x.result === `done:${x.task}`))
+    check(
+      'mixed turn: results carry their task back',
+      m.results.every((x) => x.result === `done:${x.task}`)
+    )
 
     // Abort stops LAUNCHING more writers, but keeps what already finished so the
     // caller can still pair every tool_call with a tool result.
@@ -1872,9 +2124,16 @@ async function main(): Promise<void> {
       check('...but keeps the result that already completed', out.length === 1)
     }
 
-    check('no tasks -> no results',
-      (await runTasksByWriteCapability([], { isWriteCapable: () => true, limit: 4, run: async () => 1 }))
-        .length === 0)
+    check(
+      'no tasks -> no results',
+      (
+        await runTasksByWriteCapability([], {
+          isWriteCapable: () => true,
+          limit: 4,
+          run: async () => 1
+        })
+      ).length === 0
+    )
   }
 
   // ---- workstream strip visibility rules ----
@@ -1909,14 +2168,20 @@ async function main(): Promise<void> {
 
     check('strip: hidden with no session', view(null) === null)
     check('strip: hidden when git is unavailable', view(mk(), repoStatus, false) === null)
-    check('strip: hidden when the folder has no workspace', view(mk({ workspacePath: null })) === null)
+    check(
+      'strip: hidden when the folder has no workspace',
+      view(mk({ workspacePath: null })) === null
+    )
     check('strip: hidden before the first status lands', view(mk(), NO_STATUS) === null)
     check(
       'strip: hidden when the folder is not a repo',
       view(mk(), { isRepo: false, branch: null, dirty: false, changed: 0 }) === null
     )
     // Probing (null) must not hide it permanently once status says it's a repo.
-    check('strip: shows while git availability is still unknown', view(mk(), repoStatus, null) !== null)
+    check(
+      'strip: shows while git availability is still unknown',
+      view(mk(), repoStatus, null) !== null
+    )
 
     const plain = view(mk())
     check('strip: default workstream is labelled as such', plain?.label === 'default workstream')
@@ -1957,7 +2222,11 @@ async function main(): Promise<void> {
   // ---- <env> dev port (parallel sessions must not fight over :3000) ----
   {
     const withPort = buildEnvironment({ cwd: '/w', devPort: 3101 })
-    check('buildEnvironment states the dev port', withPort.includes('Dev server port: 3101'), withPort)
+    check(
+      'buildEnvironment states the dev port',
+      withPort.includes('Dev server port: 3101'),
+      withPort
+    )
     check(
       'the port line tells the model other sessions own others',
       /other sessions own other ports/.test(withPort)
@@ -1965,16 +2234,16 @@ async function main(): Promise<void> {
     // PORT alone is not enough (vite.config.ts etc. hardcode a port), but a
     // session WITHOUT one must not get a misleading line.
     check('no port -> no port line', !buildEnvironment({ cwd: '/w' }).includes('Dev server port'))
-    check('port 0 is not emitted', !buildEnvironment({ cwd: '/w', devPort: 0 }).includes('Dev server port'))
+    check(
+      'port 0 is not emitted',
+      !buildEnvironment({ cwd: '/w', devPort: 0 }).includes('Dev server port')
+    )
   }
 
   // ---- resolveWorktreeCwd (worktree path math) ----
   // Exercised against BOTH path flavours: Roxy ships on Windows and posix, and
   // the repo-subfolder case is where a naive join breaks.
-  for (const [label, p] of [
-    ['posix', posixPath] as const,
-    ['win32', win32Path] as const
-  ]) {
+  for (const [label, p] of [['posix', posixPath] as const, ['win32', win32Path] as const]) {
     const sep = label === 'win32' ? '\\' : '/'
     const root = label === 'win32' ? 'C:\\repo' : '/repo'
     const wt = label === 'win32' ? 'C:\\wt\\fix' : '/wt/fix'
@@ -1993,13 +2262,11 @@ async function main(): Promise<void> {
     )
     check(
       `resolveWorktreeCwd (${label}): project is a SUBFOLDER -> same subpath inside`,
-      resolveWorktreeCwd(`${root}${sep}apps${sep}web`, wt, root, p) ===
-        `${wt}${sep}apps${sep}web`
+      resolveWorktreeCwd(`${root}${sep}apps${sep}web`, wt, root, p) === `${wt}${sep}apps${sep}web`
     )
     check(
       `resolveWorktreeCwd (${label}): no repo root -> the project folder`,
-      resolveWorktreeCwd(`${root}${sep}apps${sep}web`, wt, null, p) ===
-        `${root}${sep}apps${sep}web`
+      resolveWorktreeCwd(`${root}${sep}apps${sep}web`, wt, null, p) === `${root}${sep}apps${sep}web`
     )
     check(
       `resolveWorktreeCwd (${label}): workspace outside the repo -> the project folder`,

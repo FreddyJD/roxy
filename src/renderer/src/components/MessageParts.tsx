@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Streamdown } from 'streamdown'
 import { Brain, ChevronRight } from 'lucide-react'
 import type { MessagePart } from '@shared/types'
+import { streamSignature } from '@shared/parts'
 import { ToolCall } from './ToolCall'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { cn } from '../lib/cn'
@@ -15,22 +16,6 @@ const STREAM_ANIMATION = {
   easing: 'ease',
   stagger: 0
 } as const
-
-/**
- * A signature that changes on every streamed delta: total streamed characters +
- * part count + the last tool's state. When it stops changing, the turn has gone
- * "quiet" even though it's still live (the model is building a tool call whose
- * args stream in the main process, emitting nothing here).
- */
-function streamSignature(parts: MessagePart[]): string {
-  let chars = 0
-  for (const p of parts) {
-    if (p.type === 'text' || p.type === 'reasoning') chars += p.text.length
-    else if (p.type === 'tool') chars += p.output?.length ?? 0
-  }
-  const last = parts[parts.length - 1]
-  return `${parts.length}:${chars}:${last?.type === 'tool' ? last.state : ''}`
-}
 
 /**
  * True once a streaming turn has emitted nothing for `delayMs`. Resets on every
@@ -95,6 +80,18 @@ export function MessageParts({
               output={part.output}
               image={part.image}
               diff={part.diff}
+              nested={part.children}
+              // A subagent's transcript renders through this same component, so a
+              // nested tool card looks and behaves exactly like a top-level one.
+              // Passed as a callback (not a self-import) to keep the recursion
+              // explicit and one-directional: ToolCall never reaches back up.
+              //
+              // `streaming` is gated on the CARD's state, not the turn's: once a
+              // subagent has reported, its transcript is history and must stop
+              // animating even while the parent turn keeps going.
+              renderNested={(children) => (
+                <MessageParts parts={children} streaming={streaming && part.state === 'running'} />
+              )}
             />
           )
         }

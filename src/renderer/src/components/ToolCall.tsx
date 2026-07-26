@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
   Camera,
   Check,
@@ -17,9 +18,10 @@ import {
   Wrench
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import type { ToolDiff } from '@shared/types'
+import type { MessagePart, ToolDiff } from '@shared/types'
 import { cn } from '../lib/cn'
 import { TerminalOutput } from './TerminalOutput'
+import { BrailleSpinner } from './ThinkingIndicator'
 
 const FileDiffView = lazy(() => import('./FileDiffView'))
 const FileView = lazy(() => import('./FileView'))
@@ -58,8 +60,77 @@ const TOOL_ICON: Record<string, LucideIcon> = {
 }
 
 /**
+ * How many steps a subagent has taken — tool calls only. Its reasoning and prose
+ * are how it narrates the work, not work itself, and counting them would inflate
+ * "12 steps" for a delegate that only thought out loud.
+ */
+const countSteps = (parts: MessagePart[]): number =>
+  parts.reduce((n, p) => (p.type === 'tool' ? n + 1 : n), 0)
+
+/**
+ * What a subagent is doing RIGHT NOW, from the last part of its live transcript.
+ * Shown on the collapsed `task` card so a delegation reads as visible progress
+ * instead of an opaque spinner.
+ *
+ * Returns the label AND the index of the part it came from. The index is the
+ * animation key: it changes once per STEP, whereas the label changes on every
+ * token while the delegate writes prose. Keying on the text would restart the
+ * entrance animation on each token — a flicker, not a transition.
+ */
+function activity(parts: MessagePart[]): { label: string; step: number } {
+  const step = parts.length - 1
+  const last = parts[step]
+  if (!last) return { label: 'starting…', step: -1 }
+  if (last.type === 'tool') {
+    return { label: [last.tool, last.title].filter(Boolean).join(' '), step }
+  }
+  if (last.type === 'reasoning') return { label: 'thinking…', step }
+  if (last.type === 'image') return { label: 'captured an image', step }
+  // Prose: the delegate is writing its report — show its last line so you can
+  // watch the conclusion form rather than a static "writing…".
+  const line = last.text.trim().split('\n').filter(Boolean).pop()
+  return { label: line ? line.slice(0, 120) : 'writing…', step }
+}
+
+/**
+ * The live one-liner under a running `task` header: what the subagent is doing
+ * and how far it has got. Both halves animate on step boundaries only.
+ */
+function ActivityLine({ parts }: { parts: MessagePart[] }): JSX.Element {
+  const { label, step } = activity(parts)
+  const steps = countSteps(parts)
+  return (
+    // pl-8 aligns the spinner with the header's tool icon (px-2.5 + chevron + gap),
+    // so the strip reads as a continuation of the card rather than a new row.
+    <div className="flex items-center gap-2 border-t border-border/60 py-1 pl-8 pr-2.5">
+      <BrailleSpinner className="shrink-0 text-xs text-accent" />
+      {/* Keys are prefixed: they're siblings, and a bare index would collide with
+          the counter's whenever the two numbers happen to match. */}
+      <span
+        key={`at-${step}`}
+        className="animate-ticker-in truncate font-mono text-[11px] text-text-subtle"
+      >
+        {label}
+      </span>
+      {steps > 0 && (
+        <span
+          key={`n-${steps}`}
+          className="animate-ticker-in ml-auto shrink-0 font-mono text-[10px] tabular-nums text-text-subtle"
+        >
+          {steps} {steps === 1 ? 'step' : 'steps'}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/**
  * Renders a single tool call as an inline, expandable card — the way an agent
  * step shows up between reasoning and prose. Click to reveal the output.
+ *
+ * A `task` card is special: it owns a subagent's whole transcript. Its steps
+ * stream into `children` and render nested inside this card (via `renderNested`,
+ * a callback rather than a direct import so the recursion stays one-directional).
  */
 export function ToolCall({
   tool,
@@ -67,7 +138,9 @@ export function ToolCall({
   title,
   output,
   image,
-  diff
+  diff,
+  nested: nestedParts,
+  renderNested
 }: {
   tool: string
   state: 'running' | 'done' | 'error'
@@ -75,10 +148,19 @@ export function ToolCall({
   output?: string
   image?: string
   diff?: ToolDiff
+  /** A subagent's live transcript, for a `task` card. */
+  nested?: MessagePart[]
+  /** Renders that transcript — supplied by MessageParts so this file needn't import it. */
+  renderNested?: (parts: MessagePart[]) => ReactNode
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const Icon = TOOL_ICON[tool] ?? Wrench
   const body = output?.trimEnd() ?? ''
+  const nested = nestedParts && nestedParts.length > 0 ? nestedParts : undefined
+  const live = state === 'running'
+  // A finished subagent's transcript stays available but collapses to its report;
+  // reopening replays the steps. While running, the activity strip is the summary.
+  const showNested = Boolean(nested && renderNested)
 
   // Auto-open a running bash command so you can watch its logs stream in live,
   // then collapse it again once it finishes -- completed calls shouldn't leave a
@@ -86,6 +168,16 @@ export function ToolCall({
   useEffect(() => {
     if (tool === 'bash') setOpen(state === 'running')
   }, [tool, state])
+
+  // A `task` card deliberately does NOT auto-expand while running: a subagent
+  // emits dozens of steps, and dumping them inline would bury the parent turn.
+  // The collapsed activity strip is the live view; expanding is opt-in.
+  // Once expanded during a run, keep the newest step in sight.
+  const tailRef = useRef<HTMLDivElement>(null)
+  const stepCount = nested ? countSteps(nested) : 0
+  useEffect(() => {
+    if (open && live && showNested) tailRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [open, live, showNested, stepCount])
 
   // Warm the heavy syntax-highlight chunk as soon as a code card appears, so the
   // FIRST expand renders immediately instead of suspending on a lazy import
@@ -109,19 +201,33 @@ export function ToolCall({
             open && 'rotate-90'
           )}
         />
-        <Icon className="h-4 w-4 shrink-0 text-text-muted" />
+        <Icon
+          className={cn(
+            'h-4 w-4 shrink-0 text-text-muted',
+            live && tool === 'task' && 'text-accent'
+          )}
+        />
         <span className="shrink-0 text-xs font-medium text-text">{tool}</span>
         {title && (
           <span className="truncate font-mono text-xs text-text-muted" title={title}>
             {title}
           </span>
         )}
-        <span className="ml-auto shrink-0">
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {/* Once finished, the card collapses to "how much work did it do" — the
+              same count the live strip was showing, so it doesn't appear to jump. */}
+          {showNested && !live && stepCount > 0 && (
+            <span className="font-mono text-[10px] tabular-nums text-text-subtle">
+              {stepCount} {stepCount === 1 ? 'step' : 'steps'}
+            </span>
+          )}
           {state === 'running' && <Loader2 className="h-3.5 w-3.5 animate-spin text-text-subtle" />}
           {state === 'done' && <Check className="h-3.5 w-3.5 text-success" />}
           {state === 'error' && <TriangleAlert className="h-3.5 w-3.5 text-danger" />}
         </span>
       </button>
+      {/* Collapsed + running: a live one-liner of what the delegate is doing now. */}
+      {showNested && live && !open && <ActivityLine parts={nested!} />}
       {open && diff ? (
         <div className="animate-fade-in max-h-96 overflow-auto border-t border-border bg-surface">
           <Suspense
@@ -142,6 +248,25 @@ export function ToolCall({
         </div>
       ) : open && (tool === 'bash' || tool === 'bash_output') ? (
         <TerminalOutput text={body} state={state} />
+      ) : open && showNested ? (
+        <div className="animate-fade-in border-t border-border bg-surface">
+          {/* The subagent's own transcript, indented under a rail so it reads as a
+              separate agent's work rather than more of the parent's. */}
+          <div className="max-h-[28rem] overflow-auto px-3 py-2">
+            <div className="border-l-2 border-border pl-3">{renderNested!(nested!)}</div>
+            <div ref={tailRef} />
+          </div>
+          {body && !live && (
+            <div className="border-t border-border">
+              <div className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-text-subtle">
+                Report
+              </div>
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 pb-2 font-mono text-xs leading-relaxed text-text-muted">
+                {body}
+              </pre>
+            </div>
+          )}
+        </div>
       ) : open ? (
         <pre className="animate-fade-in max-h-72 overflow-auto border-t border-border bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
           {body || (state === 'running' ? 'Running…' : '(no output)')}

@@ -28,8 +28,9 @@ import type {
   RemoteState,
   RemoteStartInput
 } from '../../shared/api'
-import type { MessagePart, Message } from '../../shared/types'
+import type { Message } from '../../shared/types'
 import { reconstructTurn } from '../../shared/tool-history'
+import { PartsFold, partsToContent } from '../../shared/parts'
 import { pruneToolMessages, KEEP_RECENT_TOKENS } from '../../shared/context'
 import { DEFAULT_AGENT_ID } from '../../shared/agents'
 import * as repo from '../db/repo'
@@ -37,7 +38,12 @@ import { listModels } from './models'
 import { pickDefaultModel } from '../../shared/models'
 import { runSessionTurn } from './session-turn'
 import { sessionCwd } from './workspace'
-import { MAX_FRAME_BYTES, parseFrame, type HostFrame, type RemoteSessionInfo } from './remote-protocol'
+import {
+  MAX_FRAME_BYTES,
+  parseFrame,
+  type HostFrame,
+  type RemoteSessionInfo
+} from './remote-protocol'
 /**
  * Relay base. Prod dials roxy.gg; a dev build defaults to the local roxy.gg
  * (localhost:3000). Override with `ROXY_REMOTE_BASE` (e.g. a staging URL).
@@ -86,7 +92,7 @@ interface Share {
   localTurns: Set<string>
   /** Live parts accumulators for in-flight turns, so a guest that joins/switches
    *  mid-turn can be seeded with the reply-so-far (keyed by sessionId). */
-  liveTurns: Map<string, PartsAccumulator>
+  liveTurns: Map<string, PartsFold>
   reconnectAttempts: number
   reconnectTimer: ReturnType<typeof setTimeout> | null
   /** True once we intentionally tear down, so `close` doesn't try to reconnect. */
@@ -355,64 +361,6 @@ function buildRemoteMessages(
   return flat
 }
 
-/**
- * Fold a turn's streamed events into ordered message parts — the main-process
- * twin of the renderer's live parts builder — so the assistant reply can be
- * persisted (and thus show on the desktop + survive into the next turn).
- */
-class PartsAccumulator {
-  readonly parts: MessagePart[] = []
-  private readonly callIndex = new Map<string, number>()
-
-  apply(event: LlmEvent): void {
-    if (event.type === 'text') {
-      const last = this.parts[this.parts.length - 1]
-      if (last && last.type === 'text') last.text += event.delta
-      else this.parts.push({ type: 'text', text: event.delta })
-    } else if (event.type === 'reasoning') {
-      const last = this.parts[this.parts.length - 1]
-      if (last && last.type === 'reasoning') last.text += event.delta
-      else this.parts.push({ type: 'reasoning', text: event.delta })
-    } else if (event.type === 'tool-start') {
-      this.callIndex.set(event.callId, this.parts.length)
-      this.parts.push({
-        type: 'tool',
-        tool: event.tool,
-        state: 'running',
-        title: event.title,
-        callId: event.callId,
-        input: event.input
-      })
-    } else if (event.type === 'tool-delta') {
-      const idx = this.callIndex.get(event.callId)
-      const part = idx !== undefined ? this.parts[idx] : undefined
-      if (part?.type === 'tool') part.output = (part.output ?? '') + event.chunk
-    } else if (event.type === 'tool-end') {
-      const idx = this.callIndex.get(event.callId)
-      const part = idx !== undefined ? this.parts[idx] : undefined
-      if (part?.type === 'tool') {
-        part.state = event.ok ? 'done' : 'error'
-        part.output = event.output
-        part.image = event.image
-        part.diff = event.diff
-      }
-    }
-  }
-}
-
-/** Collapse parts into a plain-text preview for the message `content` column. */
-function partsToContent(parts: MessagePart[]): string {
-  let text = ''
-  let reasoning = ''
-  let toolOutput = ''
-  for (const part of parts) {
-    if (part.type === 'text') text += part.text
-    else if (part.type === 'reasoning') reasoning += part.text
-    else if (part.type === 'tool' && part.output) toolOutput = part.output
-  }
-  return (text.trim() || reasoning.trim() || toolOutput).trim()
-}
-
 // --- The crux: run a guest's prompt exactly like a local one ---------------
 
 /**
@@ -464,7 +412,12 @@ async function handlePrompt(sessionId: string, text: string): Promise<void> {
  * for the phone to show its bubble. A direct phone send echoes locally, so it's
  * false there to avoid a double bubble.
  */
-async function runTurn(active: Share, sessionId: string, text: string, announce: boolean): Promise<void> {
+async function runTurn(
+  active: Share,
+  sessionId: string,
+  text: string,
+  announce: boolean
+): Promise<void> {
   // Serialize turns *per session*: claim the slot synchronously so two quick
   // prompts can't start concurrent turns on the same session (mirrors the
   // renderer's guard). Different sessions can still run independently. Also
@@ -480,7 +433,7 @@ async function runTurn(active: Share, sessionId: string, text: string, announce:
   active.turns.set(sessionId, controller)
   // Register the live accumulator up-front so a guest that joins/switches during
   // this turn (even mid provider-resolution) is seeded with the reply-so-far.
-  const acc = new PartsAccumulator()
+  const acc = new PartsFold()
   active.liveTurns.set(sessionId, acc)
 
   try {
@@ -490,7 +443,12 @@ async function runTurn(active: Share, sessionId: string, text: string, announce:
     // Announce the prompt text for a drained queue item so the phone shows its
     // bubble (a direct send already echoed it locally). `sendQueue` above already
     // removed it from the pending list, so it moves cleanly from queue → turn.
-    sendFrameFor(active, { t: 'turn', sessionId, state: 'running', userText: announce ? text : undefined })
+    sendFrameFor(active, {
+      t: 'turn',
+      sessionId,
+      state: 'running',
+      userText: announce ? text : undefined
+    })
     // Mirror the turn start to the desktop so it opens a live bubble now (the
     // user message was just persisted + bumped above; the reply streams next).
     broadcastDeltaFor(active, { sessionId, kind: 'turn', state: 'running' })
@@ -555,7 +513,12 @@ async function runTurn(active: Share, sessionId: string, text: string, announce:
       parts.push({ type: 'text', text: `_\u26a0 ${result.error ?? 'Model request failed.'}_` })
     }
     if (parts.length) {
-      repo.addMessage({ chatId: sessionId, role: 'assistant', content: partsToContent(parts), parts })
+      repo.addMessage({
+        chatId: sessionId,
+        role: 'assistant',
+        content: partsToContent(parts),
+        parts
+      })
     }
     bumpFor(active)
   } finally {
@@ -609,7 +572,7 @@ export function notifyQueueChanged(): void {
 export interface LocalTurnRelay {
   active: Share
   sessionId: string
-  acc: PartsAccumulator
+  acc: PartsFold
 }
 
 /**
@@ -630,7 +593,7 @@ export function relayLocalTurnStart(sessionId: string, userText?: string): Local
   // Mark the session busy so a phone prompt queues behind this desktop turn
   // instead of starting a second concurrent one (the shared busy gate).
   active.localTurns.add(sessionId)
-  const acc = new PartsAccumulator()
+  const acc = new PartsFold()
   active.liveTurns.set(sessionId, acc)
   // `userText` mirrors the drained-queue announce path: the phone never echoed a
   // desktop-typed prompt, so it shows the bubble now and opens the streaming spinner.
@@ -674,7 +637,9 @@ export function relayLocalTurnEnd(relay: LocalTurnRelay): void {
 function connect(): void {
   const active = share
   if (!active) return
-  const socket = new WebSocket(`${WS_BASE}/api/remote/ws?token=${encodeURIComponent(active.hostToken)}`)
+  const socket = new WebSocket(
+    `${WS_BASE}/api/remote/ws?token=${encodeURIComponent(active.hostToken)}`
+  )
   active.socket = socket
 
   socket.on('open', () => {
@@ -871,7 +836,11 @@ async function startInternal(input: RemoteStartInput): Promise<RemoteState> {
   if (!sessionId || !repo.getChat(sessionId)) {
     const fallback = repo.listChats().find((c) => c.kind === 'main')
     if (!fallback) {
-      return { ...IDLE_STATE, phase: 'error', error: 'Open a session first, then share your workspace.' }
+      return {
+        ...IDLE_STATE,
+        phase: 'error',
+        error: 'Open a session first, then share your workspace.'
+      }
     }
     sessionId = fallback.id
   }
