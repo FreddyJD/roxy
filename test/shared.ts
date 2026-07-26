@@ -14,7 +14,7 @@ import {
 } from '../src/shared/agents'
 import { SEED_PROVIDERS, resolveSeed, isConnectableNow } from '../src/shared/providers'
 import { pickDefaultModel } from '../src/shared/models'
-import { randomSlug, uniqueSlug } from '../src/shared/slugs'
+import { randomSlug, uniqueSlug, slugToBranchSegment, isGeneratedSlug } from '../src/shared/slugs'
 import { formatInterval } from '../src/shared/format'
 import {
   selectPromptName,
@@ -2296,6 +2296,106 @@ async function main(): Promise<void> {
       statusKeyForSession(mk({ worktreePath: '/wt/auth' })) === '/wt/auth'
     )
     check('poll key: a sub-session never polls', statusKeyForSession(sub) === null)
+  }
+
+  // ---- session slug -> branch segment ----
+  // The branch is named after the session ("Legacy Ogre Apprentice" ->
+  // roxy/legacy-ogre-apprentice), so this conversion sits between free text
+  // and something git will accept.
+  {
+    check(
+      'slug->branch: lowercases and hyphenates',
+      slugToBranchSegment('Legacy Ogre Apprentice') === 'legacy-ogre-apprentice'
+    )
+    check(
+      'slug->branch: collapses runs of separators',
+      slugToBranchSegment('Fix   the   thing') === 'fix-the-thing'
+    )
+    check(
+      'slug->branch: drops apostrophes rather than splitting on them',
+      slugToBranchSegment("Roxy's Plan") === 'roxys-plan'
+    )
+    check(
+      'slug->branch: strips punctuation',
+      slugToBranchSegment('Fix: the #1 bug!') === 'fix-the-1-bug'
+    )
+    check(
+      'slug->branch: trims leading/trailing separators',
+      slugToBranchSegment('  --hello--  ') === 'hello'
+    )
+    // git rejects a segment that starts or ends with a dot.
+    check('slug->branch: no leading or trailing dot', slugToBranchSegment('...dots...') === 'dots')
+    // A title the agent wrote can be long; branch names should stay readable.
+    check('slug->branch: caps the length', slugToBranchSegment('a'.repeat(200)).length <= 60)
+    check(
+      'slug->branch: never ends in a dash after truncation',
+      !slugToBranchSegment('word '.repeat(40)).endsWith('-')
+    )
+    // Nothing usable survives -> empty, and the caller falls back to hex.
+    check('slug->branch: empty for an unusable title', slugToBranchSegment('日本語 🎉') === '')
+    check('slug->branch: empty for empty input', slugToBranchSegment('') === '')
+    check('slug->branch: empty for null', slugToBranchSegment(null) === '')
+
+    // isGeneratedSlug decides whether a branch is ours to rename, so a false
+    // positive on a human name is data loss.
+    check('generated slug: recognizes its own output', isGeneratedSlug(randomSlug()))
+    check(
+      'generated slug: recognizes the hyphenated form',
+      isGeneratedSlug('legacy-ogre-apprentice')
+    )
+    check(
+      'generated slug: recognizes a numeric collision suffix',
+      isGeneratedSlug('legacy-ogre-apprentice-2')
+    )
+    check(
+      'generated slug: rejects a human name reusing one of our words',
+      !isGeneratedSlug('fix-ogre-crash')
+    )
+    check('generated slug: rejects two words', !isGeneratedSlug('legacy-ogre'))
+    check('generated slug: rejects four real words', !isGeneratedSlug('a-b-c-d'))
+    check('generated slug: rejects empty', !isGeneratedSlug(''))
+    check('generated slug: rejects null', !isGeneratedSlug(null))
+    // Round-trip: every generated title must survive the branch conversion
+    // and still be recognized, or renames would silently stop working.
+    check(
+      'generated slug: round-trips through slugToBranchSegment',
+      Array.from({ length: 200 }, () => randomSlug()).every((s) =>
+        isGeneratedSlug(slugToBranchSegment(s))
+      )
+    )
+
+    // The branch-level check has to agree, including with a custom prefix.
+    check(
+      'placeholder: a slug branch counts as generated',
+      isPlaceholderBranch('roxy/legacy-ogre-apprentice', 'roxy')
+    )
+    check(
+      'placeholder: ...with a collision suffix too',
+      isPlaceholderBranch('roxy/legacy-ogre-apprentice-2', 'roxy')
+    )
+    check(
+      'placeholder: ...and under a custom prefix',
+      isPlaceholderBranch('wip/legacy-ogre-apprentice', 'wip')
+    )
+    check(
+      'placeholder: a human name is still not generated',
+      !isPlaceholderBranch('roxy/fix-auth', 'roxy')
+    )
+    check('placeholder: hex still counts', isPlaceholderBranch('roxy/6fdc60b8', 'roxy'))
+    // A nested segment is not something we generate.
+    check(
+      'placeholder: rejects an extra path segment',
+      !isPlaceholderBranch('roxy/feat/legacy-ogre-apprentice', 'roxy')
+    )
+    check('placeholder: rejects the bare prefix', !isPlaceholderBranch('roxy/', 'roxy'))
+
+    // The generated branch must itself be a legal branch name.
+    check(
+      'slug->branch: output always passes branch validation',
+      Array.from({ length: 200 }, () => randomSlug()).every(
+        (s) => branchNameError('roxy/' + slugToBranchSegment(s)) === null
+      )
+    )
   }
 
   // ---- branch naming (prefix + rename validation) ----

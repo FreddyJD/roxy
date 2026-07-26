@@ -13,6 +13,7 @@ import {
   normalizeBranchPrefix,
   placeholderBranchName
 } from '@shared/branch'
+import { randomSlug, slugToBranchSegment } from '@shared/slugs'
 import { PageShell } from '../components/PageShell'
 import { McpServers } from '../components/McpServers'
 import { ConfigBackup } from '../components/ConfigBackup'
@@ -30,6 +31,9 @@ export default function Settings(): JSX.Element {
   const setBranchPrefix = useRoxyStore((s) => s.setBranchPrefix)
   const [prefix, setPrefix] = useState('')
   const prefixError = branchPrefixError(prefix)
+  // Pinned once per mount: a preview that reshuffled on every keystroke
+  // would read as noise rather than as an example.
+  const [example] = useState(() => slugToBranchSegment(randomSlug()))
   const bootstrap = useRoxyStore((s) => s.bootstrap)
   const clearActive = useRoxyStore((s) => s.clearActive)
   const [versions, setVersions] = useState<AppVersions | null>(null)
@@ -147,9 +151,9 @@ export default function Settings(): JSX.Element {
         <div className="mt-3 rounded-xl border border-border bg-surface p-4">
           <div className="text-sm font-medium text-text">Branch prefix</div>
           <p className="mt-0.5 text-xs text-text-muted">
-            New workstreams start on a generated branch. This is what goes in front of it — use your
-            initials, <code className="text-text-subtle">wip</code>, or clear it for no prefix at
-            all.
+            New workstreams get a branch named after the session. This is what goes in front of it —
+            use your initials, <code className="text-text-subtle">wip</code>, or clear it for no
+            prefix at all.
           </p>
           <div className="mt-3 flex items-center gap-2">
             <input
@@ -166,10 +170,11 @@ export default function Settings(): JSX.Element {
                 prefixError ? 'border-danger' : 'border-border focus:border-border-strong'
               )}
             />
-            {/* The example is the point: "roxy" in a box means nothing until you
-                see roxy/a1b2c3d4 next to it. */}
+            {/* The example is the point: "roxy" in a box means nothing until
+                you see a whole branch name next to it. Uses a real session
+                slug, because that is what branches actually look like. */}
             <span className="min-w-0 truncate font-mono text-xs text-text-subtle">
-              {placeholderBranchName(prefix, 'a1b2c3d4')}
+              {placeholderBranchName(prefix, example)}
             </span>
             <Button
               onClick={() => void setBranchPrefix(prefix)}

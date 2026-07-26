@@ -123,7 +123,7 @@ export async function materializePendingWorktree(chatId: string): Promise<Materi
     return { ok: false }
   }
 
-  const result = await createForWorkspace(workspace, intent)
+  const result = await createForWorkspace(workspace, intent, chat.title)
   // Clear the intent either way: fulfilled, or failed and falling back.
   repo.setChatWorktreePending(chatId, null)
   if (!result.ok || !result.worktreePath) return result
@@ -152,7 +152,8 @@ export async function materializePendingWorktree(chatId: string): Promise<Materi
 /** Resolve the repo, pick a branch, and create/attach the worktree. */
 async function createForWorkspace(
   workspace: string,
-  intent: WorktreeIntent
+  intent: WorktreeIntent,
+  title: string
 ): Promise<MaterializeResult> {
   if (!(await git.isGitAvailable())) {
     return { ok: false, error: 'Git isn’t installed, so this session runs in the project folder.' }
@@ -164,7 +165,9 @@ async function createForWorkspace(
 
   try {
     if (intent.mode === 'new') {
-      const branch = intent.branch?.trim() || git.temporaryBranchName()
+      // Name the branch after the session, so `roxy/legacy-ogre-apprentice`
+      // shows up in `git branch` and on the PR instead of `roxy/6fdc60b8`.
+      const branch = intent.branch?.trim() || (await git.branchNameForTitle(root, title))
       const r = await git.createWorktree({ repoRoot: root, branch })
       if (!r.ok || !r.worktree)
         return { ok: false, error: r.error ?? 'Could not create the worktree.' }

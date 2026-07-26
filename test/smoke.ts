@@ -26,6 +26,7 @@ import { sessionCwd } from '../src/main/services/workspace'
 import Database from 'better-sqlite3'
 import { MIGRATIONS, repairSchema } from '../src/main/db/migrations'
 import * as git from '../src/main/services/git'
+import { branchNameError, isPlaceholderBranch } from '../src/shared/branch'
 import {
   materializePendingWorktree,
   pruneWorktrees,
@@ -1213,6 +1214,66 @@ async function main(): Promise<void> {
         await fs.rm(path.join(wtPath, 'in-progress.txt'))
         const back = await renameWorkstreamBranch(wtChat.id, tmpBranch)
         check('renamed back for the remaining checks', back.ok, back.error ?? '')
+      }
+
+      // ---- branch names come from the session title ----
+      // A session called "Legacy Ogre Apprentice" should land on
+      // roxy/legacy-ogre-apprentice, not roxy/6fdc60b8.
+      {
+        const named = await git.branchNameForTitle(root!, 'Legacy Ogre Apprentice')
+        check(
+          'branchNameForTitle uses the session title',
+          named === 'roxy/legacy-ogre-apprentice',
+          named
+        )
+
+        // A branch OUTLIVES its worktree, so a repeat title is a real
+        // collision -- and `worktree add -b` on an existing branch is fatal.
+        await runGit(['branch', 'roxy/legacy-ogre-apprentice'])
+        const second = await git.branchNameForTitle(root!, 'Legacy Ogre Apprentice')
+        check(
+          '...and steps aside when the branch already exists',
+          second === 'roxy/legacy-ogre-apprentice-2',
+          second
+        )
+        await runGit(['branch', 'roxy/legacy-ogre-apprentice-2'])
+        const third = await git.branchNameForTitle(root!, 'Legacy Ogre Apprentice')
+        check('...counting up as needed', third === 'roxy/legacy-ogre-apprentice-3', third)
+        await runGit(['branch', '-D', 'roxy/legacy-ogre-apprentice'])
+        await runGit(['branch', '-D', 'roxy/legacy-ogre-apprentice-2'])
+
+        // An unusable title falls back to hex rather than inventing a name.
+        const emoji = await git.branchNameForTitle(root!, '🎉🎉🎉')
+        check(
+          'an unusable title falls back to a hex name',
+          /^roxy\/[0-9a-f]{8}$/.test(emoji),
+          emoji
+        )
+
+        // Whatever it produces must be a legal branch AND recognized as ours,
+        // or the rename guard would refuse to touch it later.
+        check('a generated name is a valid branch', branchNameError(named) === null)
+        check('...and is recognized as generated', isPlaceholderBranch(named, 'roxy'))
+
+        // End to end: a real session materializes onto a named branch.
+        const titled = repo.createChat({
+          title: 'Crimson Goblin Slayer',
+          kind: 'main',
+          workspacePath: gitRepo,
+          worktree: { mode: 'new' }
+        })
+        const tm = await materializePendingWorktree(titled.id)
+        check(
+          'a new workstream lands on a title-shaped branch',
+          tm.ok && tm.branch === 'roxy/crimson-goblin-slayer',
+          tm.branch ?? tm.error ?? ''
+        )
+        check(
+          '...and git agrees',
+          (await git.currentBranch(tm.worktreePath!)) === 'roxy/crimson-goblin-slayer'
+        )
+        await removeWorktreeForChat(titled.id, { force: true })
+        repo.removeChat(titled.id)
       }
 
       // ---- lazy materialization ----

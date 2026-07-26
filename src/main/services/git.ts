@@ -24,6 +24,7 @@ import { spawn } from 'node:child_process'
 import { promises as fs, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
+import { slugToBranchSegment } from '../../shared/slugs'
 import {
   DEFAULT_BRANCH_PREFIX,
   isPlaceholderBranch,
@@ -436,6 +437,35 @@ export async function status(cwd: string): Promise<GitStatus | null> {
 export function temporaryBranchName(prefix?: string): string {
   const hex = Array.from({ length: 8 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
   return placeholderBranchName(prefix ?? branchPrefix(), hex)
+}
+
+/**
+ * The branch name for a session titled `title`, guaranteed not to collide.
+ *
+ * Sessions are already named "Legacy Ogre Apprentice", so the branch reads
+ * `roxy/legacy-ogre-apprentice` rather than `roxy/6fdc60b8` — the name means
+ * something in `git branch`, in a PR list, and to whoever reviews it.
+ *
+ * The uniqueness loop matters more than it looks: a branch OUTLIVES its
+ * worktree (`git worktree remove` leaves the branch behind), so deleting a
+ * session and creating another that draws the same random title is not rare —
+ * and `worktree add -b` on an existing branch is a hard failure on the turn
+ * path.
+ */
+export async function branchNameForTitle(root: string, title: string): Promise<string> {
+  const segment = slugToBranchSegment(title)
+  // Nothing usable survived (an emoji- or CJK-only title): fall back to hex
+  // rather than inventing a name.
+  if (!segment) return temporaryBranchName()
+
+  const prefix = branchPrefix()
+  const base = prefix ? prefix + '/' + segment : segment
+  for (let i = 0; i < 100; i++) {
+    const candidate = i === 0 ? base : base + '-' + (i + 1)
+    const exists = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${candidate}`], root)
+    if (!exists.ok || !exists.stdout.trim()) return candidate
+  }
+  return temporaryBranchName()
 }
 
 /**

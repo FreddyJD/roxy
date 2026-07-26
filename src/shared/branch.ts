@@ -9,6 +9,8 @@
  * and the check the main process does can't drift apart.
  */
 
+import { isGeneratedSlug } from './slugs'
+
 /** The default prefix for generated workstream branches. */
 export const DEFAULT_BRANCH_PREFIX = 'roxy'
 
@@ -55,12 +57,19 @@ export function placeholderBranchName(prefix: string, hex: string): string {
 }
 
 /**
- * Whether a branch is still an auto-generated placeholder for THIS prefix.
+ * Whether a branch name is still one WE generated, for THIS prefix.
  *
- * Renaming a workstream's branch must only ever touch placeholders — clobbering
- * a name the user chose, or one that came from origin, is data loss. So this is
- * an exact shape (`<prefix>/` + 8 lowercase hex) rather than a prefix check:
- * `roxy/fix-auth` is a real name someone typed and must not qualify.
+ * Renaming a workstream's branch must only ever touch generated names —
+ * clobbering a name the user chose, or one that came from origin, is data
+ * loss. So the last segment has to match one of the two shapes we produce:
+ *
+ *   - 8 lowercase hex (`roxy/6fdc60b8`), the fallback for an unusable title;
+ *   - a three-word session slug (`roxy/legacy-ogre-apprentice`), optionally
+ *     with a numeric suffix from collision resolution.
+ *
+ * `roxy/fix-auth` is a name someone typed and must not qualify — and neither
+ * does `roxy/fix-ogre-crash`, even though "ogre" is one of our words, because
+ * `isGeneratedSlug` requires EVERY word to come from the pools.
  */
 export function isPlaceholderBranch(
   name: string | null | undefined,
@@ -68,11 +77,17 @@ export function isPlaceholderBranch(
 ): boolean {
   if (!name) return false
   const clean = normalizeBranchPrefix(prefix)
-  const escaped = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const pattern = clean
-    ? `^${escaped}/[0-9a-f]{${PLACEHOLDER_HEX}}$`
-    : `^[0-9a-f]{${PLACEHOLDER_HEX}}$`
-  return new RegExp(pattern).test(name)
+
+  // Strip the prefix; what remains must be the whole generated segment.
+  let rest = name
+  if (clean) {
+    if (!name.startsWith(clean + '/')) return false
+    rest = name.slice(clean.length + 1)
+  }
+  if (!rest || rest.includes('/')) return false
+
+  const hex = new RegExp(`^[0-9a-f]{${PLACEHOLDER_HEX}}$`)
+  return hex.test(rest) || isGeneratedSlug(rest)
 }
 
 /**
