@@ -1924,6 +1924,46 @@ console.log('\nremote workspace ipc parity\n')
   )
   check('main emits remote:delta', service.includes('CHANNELS.remoteDelta'))
 
+  // ---- chats:updated parity ----
+  // The push that keeps the workstream strip honest. `worktree_path`, `branch`
+  // and `dev_port` are written by MAIN mid-turn (lazy worktree materialization),
+  // so without every link in this chain the strip reads "(pending) / branch
+  // pending" for the whole first turn — the exact bug this channel fixes. Same
+  // four-file contract as remote:*, asserted the same way.
+  {
+    const worktree = read('src/main/services/worktree.ts')
+    const events = read('src/main/services/session-events.ts')
+    check('chats:updated channel value', CHANNELS.chatsUpdated === 'chats:updated')
+    check(
+      'preload subscribes to chats:updated',
+      preload.includes('ipcRenderer.on(CHANNELS.chatsUpdated')
+    )
+    check(
+      'preload unsubscribes from chats:updated',
+      preload.includes('removeListener(CHANNELS.chatsUpdated')
+    )
+    check('main emits chats:updated', events.includes('CHANNELS.chatsUpdated'))
+    check('api declares chats.onUpdated', /\bonUpdated\(/.test(api))
+    // The emit must actually be wired to worktree materialization, not merely
+    // exist: a broadcaster nobody calls is the same bug with extra steps.
+    check(
+      'materialization announces the new worktree',
+      /emitSessionsUpdated\(\{[\s\S]{0,120}reason: 'worktree'/.test(worktree)
+    )
+    check(
+      '...and an agent-driven branch rename announces too',
+      /emitSessionsUpdated\(\{[\s\S]{0,120}reason: 'branch'/.test(worktree)
+    )
+    // The renderer has to consume it, and prime the status for the NEW path —
+    // otherwise the strip trades a stale label for a blank row.
+    const store = read('src/renderer/src/lib/store.ts')
+    check('renderer subscribes to chats.onUpdated', store.includes('api.chats.onUpdated'))
+    check(
+      'renderer primes git status for the new worktree path',
+      /applySessionsUpdated[\s\S]{0,900}api\.git\.status\(key\)/.test(store)
+    )
+  }
+
   // window.roxy.remote.* must match the RoxyApi type surface exactly.
   check('preload exposes remote.start', /\bstart:/.test(preloadRemote))
   check('preload exposes remote.stop', /\bstop:/.test(preloadRemote))
@@ -2286,6 +2326,30 @@ async function main(): Promise<void> {
       view(mk({ workspacePath: null })) === null
     )
     check('strip: hidden before the first status lands', view(mk(), NO_STATUS) === null)
+    // ...but NOT for a session that already owns a worktree. Git only creates
+    // worktrees inside repos, so the path proves the repo, and this is exactly
+    // the state a session is in for the instant after its worktree materializes
+    // mid-turn: on a brand-new path the status map has never been keyed by.
+    // Hiding here would blank the row for a poll interval at precisely the
+    // moment it finally had something true to say.
+    {
+      const fresh = view(mk({ worktreePath: '/wt/auth', branch: 'roxy/auth' }), NO_STATUS)
+      check('strip: a worktree session survives a missing status', fresh !== null)
+      check('strip: ...showing its own branch', fresh?.branch === 'roxy/auth')
+      check('strip: ...not flagged pending', fresh?.pending === false)
+      check('strip: ...and not invented as dirty', fresh?.dirty === false)
+      // A status that ACTUALLY says "not a repo" still wins: the worktree was
+      // deleted underneath us and the strip should go quiet.
+      check(
+        'strip: an arrived isRepo:false still hides a worktree session',
+        view(mk({ worktreePath: '/wt/auth', branch: 'roxy/auth' }), {
+          isRepo: false,
+          branch: null,
+          dirty: false,
+          changed: 0
+        }) === null
+      )
+    }
     check(
       'strip: hidden when the folder is not a repo',
       view(mk(), { isRepo: false, branch: null, dirty: false, changed: 0 }) === null

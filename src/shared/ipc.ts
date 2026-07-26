@@ -22,6 +22,14 @@ export const CHANNELS = {
   chatsReorder: 'chats:reorder',
   /** Pin part of a single session's inference config (model/mode/effort/context). */
   chatsSetConfig: 'chats:setConfig',
+  /**
+   * main -> renderer: a session row changed in MAIN, with no renderer call to
+   * hang a refresh off. The only source of truth for `worktree_path` / `branch`
+   * / `dev_port` is the main process, and it writes them mid-turn (lazy worktree
+   * materialization) — so without this push the workstream strip keeps claiming
+   * "(pending) / branch pending" until something unrelated happens to refetch.
+   */
+  chatsUpdated: 'chats:updated',
 
   /** Project (workspace) display order — read + drag-to-reorder. */
   projectsListOrder: 'projects:listOrder',

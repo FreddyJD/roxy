@@ -312,6 +312,32 @@ export interface SubagentRunView {
   startedAt: number
 }
 
+/**
+ * main -> renderer: session rows changed in MAIN, with no renderer call to hang
+ * a refresh off.
+ *
+ * `worktree_path`, `branch` and `dev_port` are written by the main process on
+ * the turn path (lazy worktree materialization), so the renderer's copy is stale
+ * from the moment the turn starts until something unrelated refetches. This is
+ * the push that closes that window.
+ */
+export interface SessionsUpdated {
+  /**
+   * Why the rows changed. `worktree` is the one that needs more than a refetch:
+   * the session just moved to a git path the renderer has never polled, so its
+   * status map has no entry for it yet.
+   */
+  reason: 'worktree' | 'branch' | 'metadata'
+  /** The sessions affected — usually one. */
+  sessionIds: string[]
+  /**
+   * The session's git path after the change (its worktree, else its project
+   * folder), so the renderer can prime `gitStatus` for a key it has never seen
+   * instead of blanking the strip until the next poll tick.
+   */
+  statusKey?: string | null
+}
+
 /** A background subagent task's lifecycle state, broadcast to all windows. */
 export interface TaskUpdate {
   jobId: string
@@ -509,6 +535,12 @@ export interface RoxyApi {
     setConfig(id: string, patch: SessionConfigPatch): Promise<Chat>
     /** Reorder a project's sessions; `ids` is the full project session list, top-to-bottom. */
     reorder(workspacePath: string | null, ids: string[]): Promise<void>
+    /**
+     * Subscribe to session rows changed by MAIN with no renderer call behind
+     * them — a worktree materialized on the first turn, a branch renamed under
+     * it. Returns an unsubscribe fn.
+     */
+    onUpdated(callback: (payload: SessionsUpdated) => void): () => void
   }
   projects: {
     /** Workspace paths in sidebar display order, top → bottom. */
