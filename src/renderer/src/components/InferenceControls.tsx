@@ -10,16 +10,28 @@ import {
   resolveSessionConfig,
   type SessionConfig
 } from '@shared/session-config'
+import { useMenuAnchor } from '../lib/useMenuAnchor'
 import { cn } from '../lib/cn'
 
-/** Close-on-outside-click / Escape for a small popover. */
-function usePopover(): {
+/**
+ * Close-on-outside-click / Escape for a small popover, plus the geometry that
+ * keeps it inside the window.
+ *
+ * These popovers open upward from the composer footer, which is a left-aligned
+ * row inside a centered column — so the further right a control sits, the more
+ * of its fixed-width menu hangs off the edge. The app root is `overflow:
+ * hidden`, so "hangs off" means "is silently cut". `width` is the menu's width
+ * in px and must match the class it renders with.
+ */
+function usePopover(width: number): {
   open: boolean
   setOpen: (v: boolean) => void
   ref: React.RefObject<HTMLDivElement>
+  anchor: React.CSSProperties
 } {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const anchor = useMenuAnchor(ref, open, width, { gap: 8 })
   useEffect(() => {
     if (!open) return
     const onClick = (e: MouseEvent): void => {
@@ -35,7 +47,7 @@ function usePopover(): {
       document.removeEventListener('keydown', onKey)
     }
   }, [open])
-  return { open, setOpen, ref }
+  return { open, setOpen, ref, anchor }
 }
 
 /**
@@ -77,8 +89,17 @@ function useActiveModelInfo(): ModelInfo | undefined {
 
 const triggerClass =
   'press-scale flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted hover:border-border-strong hover:text-text'
+/**
+ * Width and horizontal offset are supplied by `usePopover`'s anchor, not by
+ * classes — a fixed `left-0` is exactly what pushes these off the window edge.
+ * `flex-col` + `overflow-y-auto` let the `maxHeight` the anchor computes turn a
+ * tall list into a scrolling one instead of one that runs off the top.
+ */
 const popoverClass =
-  'animate-pop-in absolute bottom-full left-0 z-50 mb-2 w-72 origin-bottom-left overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl'
+  'animate-pop-in absolute bottom-full z-50 mb-2 flex flex-col overflow-y-auto rounded-xl border border-border bg-elevated shadow-2xl origin-bottom-left'
+/** Menu widths in px, matching what each picker renders. */
+const POPOVER_W = 288
+const AGENT_POPOVER_W = 256
 
 // ---- Thinking effort ---------------------------------------------------------
 
@@ -94,7 +115,7 @@ export function ThinkingPicker(): JSX.Element | null {
   const info = useActiveModelInfo()
   const config = useSessionConfig()
   const setReasoningEffort = useRoxyStore((s) => s.setReasoningEffort)
-  const { open, setOpen, ref } = usePopover()
+  const { open, setOpen, ref, anchor } = usePopover(POPOVER_W)
 
   if (!info?.reasoning) return null
   const current = config.reasoningEffort
@@ -112,8 +133,8 @@ export function ThinkingPicker(): JSX.Element | null {
         <span>{currentLabel}</span>
       </button>
       {open && (
-        <div className={popoverClass}>
-          <div className="border-b border-border px-3 py-2 text-[11px] font-medium text-text-subtle">
+        <div className={popoverClass} style={anchor}>
+          <div className="shrink-0 border-b border-border px-3 py-2 text-[11px] font-medium text-text-subtle">
             Thinking Effort
           </div>
           <div className="py-1">
@@ -143,7 +164,7 @@ export function ThinkingPicker(): JSX.Element | null {
               )
             })}
           </div>
-          <div className="border-t border-border px-3 py-1.5 text-[11px] text-text-subtle">
+          <div className="shrink-0 border-t border-border px-3 py-1.5 text-[11px] text-text-subtle">
             Higher levels of thinking may increase cost.
           </div>
         </div>
@@ -168,7 +189,7 @@ const AGENT_TAGLINE: Record<string, string> = {
 export function AgentPicker(): JSX.Element {
   const activeAgentId = useRoxyStore((s) => s.activeAgentId)
   const setActiveAgent = useRoxyStore((s) => s.setActiveAgent)
-  const { open, setOpen, ref } = usePopover()
+  const { open, setOpen, ref, anchor } = usePopover(AGENT_POPOVER_W)
 
   const active = getAgent(activeAgentId) ?? getAgent(DEFAULT_AGENT_ID)!
 
@@ -184,7 +205,7 @@ export function AgentPicker(): JSX.Element {
         <span>{active.name}</span>
       </button>
       {open && (
-        <div className={cn(popoverClass, 'w-64')}>
+        <div className={popoverClass} style={anchor}>
           <div className="p-1">
             {PRIMARY_AGENTS.map((a) => {
               const selected = a.id === active.id
@@ -242,7 +263,7 @@ export function ContextPicker(): JSX.Element | null {
   const info = useActiveModelInfo()
   const config = useSessionConfig()
   const setContextLimit = useRoxyStore((s) => s.setContextLimit)
-  const { open, setOpen, ref } = usePopover()
+  const { open, setOpen, ref, anchor } = usePopover(POPOVER_W)
 
   const max = info ? effectiveContextMax(info) : 0
   if (!max) return null
@@ -261,8 +282,8 @@ export function ContextPicker(): JSX.Element | null {
         <span>{formatTokens(current)}</span>
       </button>
       {open && (
-        <div className={popoverClass}>
-          <div className="border-b border-border px-3 py-2 text-[11px] font-medium text-text-subtle">
+        <div className={popoverClass} style={anchor}>
+          <div className="shrink-0 border-b border-border px-3 py-2 text-[11px] font-medium text-text-subtle">
             Context Size
           </div>
           <div className="py-1">
@@ -296,7 +317,7 @@ export function ContextPicker(): JSX.Element | null {
               )
             })}
           </div>
-          <div className="border-t border-border px-3 py-1.5 text-[11px] text-text-subtle">
+          <div className="shrink-0 border-t border-border px-3 py-1.5 text-[11px] text-text-subtle">
             Larger context may increase cost.
           </div>
         </div>
@@ -332,6 +353,9 @@ export function ContextMeter(): JSX.Element {
   const compactConversation = useRoxyStore((s) => s.compactConversation)
   const compacting = useRoxyStore((s) => (activeChatId ? !!s.compactingChats[activeChatId] : false))
   const [open, setOpen] = useState(false)
+  // The rightmost control in the footer, so the most exposed to the window edge.
+  const ref = useRef<HTMLDivElement>(null)
+  const anchor = useMenuAnchor(ref, open, POPOVER_W)
 
   const chat = chats.find((c) => c.id === activeChatId)
   // Load the workspace's instruction files so systemTokens counts them; the
@@ -397,13 +421,14 @@ export function ContextMeter(): JSX.Element {
 
   return (
     <div
+      ref={ref}
       className="relative"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
     >
       {open && (
-        <div className="absolute bottom-full left-0 z-50 w-72 pb-1.5">
-          <div className="animate-pop-in origin-bottom-left overflow-hidden rounded-xl border border-border bg-elevated p-3 shadow-2xl">
+        <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={anchor}>
+          <div className="animate-pop-in min-h-0 origin-bottom-left overflow-y-auto rounded-xl border border-border bg-elevated p-3 shadow-2xl">
             <div className="mb-1.5 text-xs font-medium text-text">Context Window</div>
             <div className="mb-1 flex items-baseline justify-between text-[11px] text-text-subtle">
               <span className="tabular-nums">

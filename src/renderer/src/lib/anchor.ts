@@ -54,6 +54,73 @@ export interface Placement {
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(v, hi))
 
+/* ---- anchored menus --------------------------------------------------------
+ *
+ * Popovers in the workstream strip and the composer footer are fixed-width
+ * boxes pinned to one edge of their trigger (`left-0` / `right-0`) with no idea
+ * where the window ends. That is fine until a trigger sits near an edge — then
+ * the box simply runs off screen and is cut, because the app root is
+ * `overflow: hidden` and there is nothing to scroll.
+ *
+ * The Processes popover hit this first (widest box, and its trigger is the LAST
+ * segment of a centered row, so it starts furthest right), but the bug is
+ * structural: every one of these menus has it. These two functions are the whole
+ * fix — clamp the box into the viewport, and cap its height to the room actually
+ * available on the side it opens toward.
+ *
+ * Kept here, pure and DOM-free, for the same reason `place` is: the interesting
+ * part is the arithmetic at the edges, and that deserves tests. See
+ * lib/useMenuAnchor.ts for the wiring.
+ */
+
+/** Which trigger edge the menu lines up with when there's room for its choice. */
+export type MenuAlign = 'start' | 'end'
+/** Which way the menu opens away from its trigger. */
+export type MenuSide = 'top' | 'bottom'
+/**
+ * A menu never gets squeezed below this. Past it the honest answer is a scroll
+ * bar, not a 30px sliver that can't show a single row.
+ */
+export const MIN_MENU_H = 120
+
+/**
+ * The menu's left edge, expressed RELATIVE TO ITS TRIGGER — i.e. exactly what an
+ * `absolute` child of the trigger wants for `left`. Returning an offset rather
+ * than a viewport coordinate keeps the menu a normal positioned child, so it
+ * still moves with its trigger between measurements instead of detaching.
+ */
+export function alignMenu(
+  triggerLeft: number,
+  triggerWidth: number,
+  menuWidth: number,
+  viewportWidth: number,
+  align: MenuAlign = 'start'
+): number {
+  const ideal = align === 'end' ? triggerLeft + triggerWidth - menuWidth : triggerLeft
+  // When the menu is wider than the viewport allows, the left margin wins. Text
+  // starts on the left, so a box that MUST be cut should lose its tail rather
+  // than its first character.
+  const left = Math.max(MARGIN, Math.min(ideal, viewportWidth - MARGIN - menuWidth))
+  return Math.round(left - triggerLeft)
+}
+
+/**
+ * How tall the menu may be before it has to scroll, given the room between the
+ * trigger and the viewport edge it opens toward. `gap` is the space the menu
+ * already reserves between itself and the trigger.
+ */
+export function menuMaxHeight(
+  triggerTop: number,
+  triggerBottom: number,
+  viewportHeight: number,
+  side: MenuSide = 'top',
+  gap = 6
+): number {
+  const room =
+    side === 'top' ? triggerTop - gap - MARGIN : viewportHeight - triggerBottom - gap - MARGIN
+  return Math.max(MIN_MENU_H, Math.floor(room))
+}
+
 /** Largest the image can be drawn inside `availW`×`availH`, or null if it can't. */
 function fit(
   natW: number,

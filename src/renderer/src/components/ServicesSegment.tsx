@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useMenuAnchor } from '../lib/useMenuAnchor'
 import { ExternalLink, Play, RotateCw, ScrollText, Square, Terminal } from 'lucide-react'
 import type { ServiceView } from '@shared/api'
 import { isServiceFailure, serviceStatusLabel, servicesSummary } from '@shared/services'
@@ -40,6 +41,12 @@ const POLL_MS = 2_000
 const IDLE_POLL_MS = 10_000
 /** Log refresh while a log pane is open — faster, since it's the focus. */
 const LOG_POLL_MS = 1_000
+/**
+ * Menu width, in px rather than a Tailwind class because the anchoring math
+ * needs the number. Wider than the workstream menu: these rows carry a full
+ * shell command plus a port, a status and four actions.
+ */
+const MENU_W = 416
 
 /**
  * Keeps the store's service list warm and reports whether there is anything to
@@ -78,6 +85,9 @@ export function ServicesSegment({
   const [open, setOpen] = useState(false)
   const [logsFor, setLogsFor] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  // The widest menu in the strip, on the segment that sits furthest right — so
+  // it is the first one to run off the window edge if left unclamped.
+  const anchor = useMenuAnchor(ref, open, MENU_W)
 
   // While the popover is open, poll fast regardless of state: the user is
   // watching, and an install that finishes should say so immediately.
@@ -119,6 +129,7 @@ export function ServicesSegment({
           services={services}
           sessionId={sessionId}
           logsFor={logsFor}
+          style={anchor}
           onToggleLogs={(id) => setLogsFor((cur) => (cur === id ? null : id))}
         />
       )}
@@ -154,27 +165,37 @@ function ServicesMenu({
   services,
   sessionId,
   logsFor,
-  onToggleLogs
+  onToggleLogs,
+  style
 }: {
   services: ServiceView[]
   sessionId: string
   logsFor: string | null
   onToggleLogs: (id: string) => void
+  /** Width + edge-clamped offset + height cap, from useMenuAnchor. */
+  style: CSSProperties
 }): JSX.Element {
   return (
-    // Wider than the workstream menu: these rows carry a full shell command.
-    <div className="absolute bottom-full left-0 z-50 w-[26rem] pb-1.5">
-      <div className="overflow-hidden rounded-xl border border-border bg-elevated py-1 shadow-2xl">
-        <div className="px-3 py-1 text-[11px] font-medium text-text-muted">Processes</div>
-        {services.map((svc) => (
-          <ServiceRow
-            key={svc.id}
-            service={svc}
-            sessionId={sessionId}
-            logsOpen={logsFor === svc.id}
-            onToggleLogs={() => onToggleLogs(svc.id)}
-          />
-        ))}
+    // `left` and `maxHeight` come from the anchor rather than from classes: a
+    // fixed `left-0` on a trigger this far right sends the menu off the window,
+    // and there is no scroll container to rescue it.
+    <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={style}>
+      <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+        <div className="shrink-0 px-3 py-1 text-[11px] font-medium text-text-muted">Processes</div>
+        {/* Scrolls instead of growing past the top of the window: a worktree
+            setup can leave several processes behind, and the header has to stay
+            on screen or the list loses its label. */}
+        <div className="min-h-0 overflow-y-auto">
+          {services.map((svc) => (
+            <ServiceRow
+              key={svc.id}
+              service={svc}
+              sessionId={sessionId}
+              logsOpen={logsFor === svc.id}
+              onToggleLogs={() => onToggleLogs(svc.id)}
+            />
+          ))}
+        </div>
       </div>
     </div>
   )

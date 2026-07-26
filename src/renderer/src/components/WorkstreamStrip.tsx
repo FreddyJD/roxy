@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { LifecycleAction, LifecycleTone, ForgeKind } from '@shared/forge'
 import { FORGE_NAMES, relativeAge } from '@shared/forge'
 import { api } from '../lib/api'
@@ -8,6 +8,7 @@ import { useRoxyStore } from '../lib/store'
 import { workstreamStripView, statusKeyForSession } from '@shared/workstream'
 import { branchNameError } from '@shared/branch'
 import { ServicesSegment, useServices } from './ServicesSegment'
+import { useMenuAnchor } from '../lib/useMenuAnchor'
 import { cn } from '../lib/cn'
 
 /**
@@ -27,6 +28,16 @@ import { cn } from '../lib/cn'
 
 /** How often to re-poll git status while a session is on screen. */
 const POLL_MS = 5_000
+
+/**
+ * Menu widths in px, not Tailwind classes, because `useMenuAnchor` needs the
+ * number to keep each menu inside the window. The strip is a centered row whose
+ * segments can sit anywhere across it, so every menu here is one narrow window
+ * away from hanging off an edge — the numbers must match the rendered widths.
+ */
+const WORKSTREAM_MENU_W = 288
+const FORGE_PANEL_W = 320
+const HOST_MENU_W = 224
 
 export function WorkstreamStrip(): JSX.Element | null {
   const chats = useRoxyStore((s) => s.chats)
@@ -165,6 +176,7 @@ function LifecycleChip({
   const forgeStatus = useRoxyStore((s) => s.forgeStatus)
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const anchor = useMenuAnchor(ref, open, FORGE_PANEL_W, { align: 'end' })
 
   useEffect(() => {
     if (!open) return
@@ -197,7 +209,12 @@ function LifecycleChip({
   return (
     <div className="relative" ref={ref}>
       {open && (
-        <ForgePanel ownerId={ownerId} statusKey={statusKey} onClose={() => setOpen(false)} />
+        <ForgePanel
+          ownerId={ownerId}
+          statusKey={statusKey}
+          style={anchor}
+          onClose={() => setOpen(false)}
+        />
       )}
       <button
         type="button"
@@ -222,6 +239,8 @@ function LifecycleChip({
  */
 function UnknownHostChip({ host }: { host: string }): JSX.Element {
   const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const anchor = useMenuAnchor(ref, open, HOST_MENU_W, { align: 'end' })
   const refreshGitStatus = useRoxyStore((s) => s.refreshGitStatus)
   const activeChatId = useRoxyStore((s) => s.activeChatId)
 
@@ -232,10 +251,10 @@ function UnknownHostChip({ host }: { host: string }): JSX.Element {
   }
 
   return (
-    <div className="relative">
+    <div className="relative" ref={ref}>
       {open && (
-        <div className="absolute bottom-full right-0 z-50 w-56 pb-1.5">
-          <div className="overflow-hidden rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+        <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={anchor}>
+          <div className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
             <div className="px-3 py-1.5 text-[11px] text-text-subtle">
               What does <span className="text-text-muted">{host}</span> run?
             </div>
@@ -312,10 +331,13 @@ function StateDot({ tone, filled }: { tone: LifecycleTone; filled: boolean }): J
 function ForgePanel({
   ownerId,
   statusKey,
+  style,
   onClose
 }: {
   ownerId: string
   statusKey: string | null
+  /** Width + edge-clamped offset + height cap, from useMenuAnchor. */
+  style: CSSProperties
   onClose: () => void
 }): JSX.Element {
   const forgeStatus = useRoxyStore((s) => s.forgeStatus)
@@ -363,9 +385,9 @@ function ForgePanel({
   }
 
   return (
-    <div className="absolute bottom-full right-0 z-50 w-80 pb-1.5">
-      <div className="overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl">
-        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+    <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={style}>
+      <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
           <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
             {view?.remote ? view.remote.slug : 'No remote'}
           </span>
@@ -606,6 +628,7 @@ function WorkstreamSegment({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const anchor = useMenuAnchor(ref, open, WORKSTREAM_MENU_W)
 
   // Click-outside + Escape, so the menu behaves like the rest of the app's
   // popovers even though this one is click-opened (ContextMeter is hover-opened,
@@ -640,7 +663,7 @@ function WorkstreamSegment({
 
   return (
     <div className="relative" ref={ref}>
-      {open && <WorkstreamMenu chat={chat} onClose={() => setOpen(false)} />}
+      {open && <WorkstreamMenu chat={chat} style={anchor} onClose={() => setOpen(false)} />}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -670,7 +693,16 @@ function WorkstreamSegment({
 }
 
 /** The dropdown: this project's workstreams, plus ways to start a new one. */
-function WorkstreamMenu({ chat, onClose }: { chat: Chat; onClose: () => void }): JSX.Element {
+function WorkstreamMenu({
+  chat,
+  style,
+  onClose
+}: {
+  chat: Chat
+  /** Width + edge-clamped offset + height cap, from useMenuAnchor. */
+  style: CSSProperties
+  onClose: () => void
+}): JSX.Element {
   const chats = useRoxyStore((s) => s.chats)
   const worktrees = useRoxyStore((s) => s.worktrees)
   const branches = useRoxyStore((s) => s.gitBranches)
@@ -718,8 +750,11 @@ function WorkstreamMenu({ chat, onClose }: { chat: Chat; onClose: () => void }):
   }
 
   return (
-    <div className="absolute bottom-full left-0 z-50 w-72 pb-1.5">
-      <div className="overflow-hidden rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+    <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={style}>
+      {/* The whole menu scrolls, not just the branch list: a project with a
+          dozen sessions makes the workstream list itself taller than the window,
+          and `maxHeight` without `overflow` would only clip it differently. */}
+      <div className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
         <MenuLabel>Workstreams</MenuLabel>
 
         {/* The default workstream is the project folder itself — always present,

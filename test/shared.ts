@@ -186,11 +186,14 @@ import {
 } from '../src/shared/forge'
 import {
   place,
+  alignMenu,
+  menuMaxHeight,
   GAP,
   MARGIN,
   MAX_W,
   MAX_H,
   CHROME_H,
+  MIN_MENU_H,
   type Rect
 } from '../src/renderer/src/lib/anchor'
 
@@ -3550,6 +3553,96 @@ async function main(): Promise<void> {
     gapped !== null && Math.round(700 - boxOf(gapped).bottom) === GAP,
     gapped ? String(700 - boxOf(gapped).bottom) : 'null'
   )
+
+  // ---- anchored menu geometry (renderer/lib/anchor) --------------------------
+  // The regression this exists for: the Processes popover is 416px wide and its
+  // trigger is the LAST segment of a centered max-w-3xl row, so a left-pinned
+  // menu ran past the right edge of the window and was cut (the app root is
+  // overflow:hidden, so there is nothing to scroll it back into view).
+  const MENU_W = 416
+  // Worst realistic case: minimum window width (main/index.ts pins minWidth 760)
+  // with a trigger near the right edge of the composer column.
+  const trigger = { left: 600, width: 90 }
+  const off = alignMenu(trigger.left, trigger.width, MENU_W, 760)
+  check(
+    'menu: clamps a wide menu back inside a narrow window',
+    trigger.left + off + MENU_W <= 760 - MARGIN,
+    String(trigger.left + off + MENU_W)
+  )
+  check('menu: only ever pulls a clipped menu leftward', off <= 0, String(off))
+
+  // With room to spare the menu must NOT drift — it should sit exactly on the
+  // trigger edge it is aligned to, or the fix would move every menu in the app.
+  check(
+    'menu: start-aligns flush with the trigger when there is room',
+    alignMenu(100, 90, 288, 1400, 'start') === 0
+  )
+  check(
+    'menu: end-aligns flush with the trigger when there is room',
+    alignMenu(400, 90, 288, 1400, 'end') === 400 + 90 - 288 - 400
+  )
+
+  // Both edges, both alignments, across window sizes and trigger positions.
+  let outside = 0
+  let drifted = 0
+  for (const vw of [760, 900, 1100, 1440, 1920]) {
+    for (const w of [224, 256, 288, 320, 416]) {
+      for (let x = 0; x <= vw - 40; x += 17) {
+        for (const align of ['start', 'end']) {
+          const tw = 90
+          const left = x + alignMenu(x, tw, w, vw, align)
+          // Never past a margin, unless the menu simply cannot fit — in which
+          // case it pins to the left margin and loses its tail, not its head.
+          const fits = w <= vw - MARGIN * 2
+          if (left < MARGIN - 0.5) outside++
+          else if (fits && left + w > vw - MARGIN + 0.5) outside++
+          // Untouched when it already fits where it wanted to go.
+          const ideal = align === 'end' ? x + tw - w : x
+          if (ideal >= MARGIN && ideal + w <= vw - MARGIN && Math.abs(left - ideal) > 0.5) drifted++
+        }
+      }
+    }
+  }
+  check('menu: never lands outside the viewport margins', outside === 0, String(outside))
+  check(
+    'menu: leaves menus that already fit exactly where they were',
+    drifted === 0,
+    String(drifted)
+  )
+
+  // A menu wider than the window keeps its left edge readable rather than
+  // centering the overflow and cutting both sides.
+  check(
+    'menu: a too-wide menu pins to the left margin',
+    alignMenu(300, 90, 900, 500) === MARGIN - 300
+  )
+
+  // Height: a menu opening upward gets the room above its trigger, never more.
+  const strip = { top: 700, bottom: 724 }
+  const capUp = menuMaxHeight(strip.top, strip.bottom, 780, 'top', 6)
+  check('menu: height cap fits above the trigger', capUp <= strip.top - 6 - MARGIN, String(capUp))
+  const capDown = menuMaxHeight(strip.top, strip.bottom, 780, 'bottom', 6)
+  check(
+    'menu: height cap fits below the trigger',
+    capDown <= 780 - strip.bottom - 6 - MARGIN || capDown === MIN_MENU_H,
+    String(capDown)
+  )
+  // Even pinned against an edge it stays usable — scrolling beats a sliver.
+  check(
+    'menu: never caps below a usable height',
+    menuMaxHeight(4, 28, 780, 'top') === MIN_MENU_H &&
+      menuMaxHeight(750, 774, 780, 'bottom') === MIN_MENU_H
+  )
+  let badCap = 0
+  for (const vh of [480, 600, 780, 1080]) {
+    for (let y = 0; y < vh - 24; y += 13) {
+      for (const side of ['top', 'bottom']) {
+        const cap = menuMaxHeight(y, y + 24, vh, side)
+        if (!Number.isFinite(cap) || cap < MIN_MENU_H) badCap++
+      }
+    }
+  }
+  check('menu: height cap is always finite and usable', badCap === 0, String(badCap))
   if (fails.length) {
     console.error(`\nSHARED FAILED \u2014 ${fails.length} failing: ${fails.join(', ')}`)
     process.exit(1)
