@@ -4,6 +4,7 @@ import { useRoxyStore } from '../lib/store'
 import { resolveSessionConfig } from '@shared/session-config'
 import { ProviderLogo } from '../lib/providerLogos'
 import { triggerClass } from './InferenceControls'
+import { useMenuAnchor } from '../lib/useMenuAnchor'
 import { cn } from '../lib/cn'
 
 /**
@@ -11,6 +12,8 @@ import { cn } from '../lib/cn'
  * trigger, and a popover grouped by every connected provider (with its icon)
  * listing the real models models.dev knows about, with reasoning/tools badges.
  */
+const MENU_W = 320
+
 export function ModelPicker(): JSX.Element {
   const providers = useRoxyStore((s) => s.providers)
   const settings = useRoxyStore((s) => s.settings)
@@ -23,6 +26,9 @@ export function ModelPicker(): JSX.Element {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLDivElement>(null)
+  // Leftmost control, so it only clips in a narrow window — but it clips the
+  // same way, and one rule for all of them beats a special case.
+  const anchor = useMenuAnchor(rootRef, open, MENU_W, { gap: 8 })
 
   // The model shown is the OPEN SESSION's, not a global one: two sessions can
   // sit on different models at once, and each remembers its own across
@@ -90,8 +96,11 @@ export function ModelPicker(): JSX.Element {
       </button>
 
       {open && (
-        <div className="animate-pop-in absolute bottom-full left-0 z-50 mb-2 w-80 origin-bottom-left overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl">
-          <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <div
+          className="animate-pop-in absolute bottom-full z-50 mb-2 flex flex-col overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl origin-bottom-left"
+          style={anchor}
+        >
+          <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
             <Search className="h-3.5 w-3.5 shrink-0 text-text-subtle" />
             <input
               autoFocus
@@ -101,7 +110,7 @@ export function ModelPicker(): JSX.Element {
               className="w-full bg-transparent text-xs text-text outline-none placeholder:text-text-subtle"
             />
           </div>
-          <div className="max-h-80 overflow-y-auto py-1">
+          <div className="min-h-0 flex-1 overflow-y-auto py-1">
             {loading && <div className="px-3 py-3 text-xs text-text-subtle">Loading models…</div>}
             {!loading &&
               providers.map((p) => {
