@@ -263,7 +263,9 @@ export function ChatView(): JSX.Element {
             )}
           </div>
         ) : (
-          <div className="mx-auto max-w-3xl px-4 py-4">
+          // pb clears the fade below: at max scroll the last line has to end
+          // ABOVE the gradient, otherwise the final message always looks dimmed.
+          <div className="mx-auto max-w-3xl px-4 pb-11 pt-4">
             {messages.length > visibleCount && (
               <p className="mb-3 text-center text-xs text-text-subtle">
                 Scroll up to load older — showing the last {visibleCount} of {messages.length}
@@ -276,6 +278,27 @@ export function ChatView(): JSX.Element {
           </div>
         )}
       </div>
+
+      {/* The transcript used to end on a hard clip: the scrollport edge sliced
+          text mid-glyph, straight into the composer’s flat gutter, and the two
+          together read as a black bar cutting the pane in half. This is a
+          gradient of the pane’s own background laid over the last 44px of the
+          scroller, so lines dissolve into the composer instead of being cut.
+
+          Pulled back up by its own height (-mt-11) so it costs no layout — the
+          scroller keeps every pixel of flex-1 — and inert to the pointer, so
+          scrolling and text selection still work underneath it. The matching
+          pb-11 on the message column is what keeps the last line legible: at
+          max scroll it ends above the gradient instead of under it.
+
+          The mr-2.5 is the overlay scrollbar’s width (--os-size in main.css):
+          the handle is drawn inside the scroller, so a full-width fade would
+          paint over its last 44px and swallow the handle exactly when you drag
+          it to the end. */}
+      <div
+        aria-hidden
+        className="pointer-events-none relative z-10 -mt-11 mr-2.5 h-11 shrink-0 bg-gradient-to-b from-transparent to-bg"
+      />
 
       {queue.length > 0 && (
         <div className="bg-bg px-4 pt-2">
