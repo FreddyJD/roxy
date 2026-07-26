@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronRight, FolderOpen, ListTree, Loader2, Repeat, Settings } from 'lucide-react'
+import {
+  ChevronRight,
+  CornerUpLeft,
+  FolderOpen,
+  Hammer,
+  ListTree,
+  Loader2,
+  Repeat,
+  Settings
+} from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
 import { formatInterval } from '@shared/format'
 import { cn } from '../lib/cn'
@@ -37,11 +46,18 @@ export function ChatView(): JSX.Element {
   const stop = useRoxyStore((s) => s.stop)
   const queue = useRoxyStore((s) => s.queue)
   const newSession = useRoxyStore((s) => s.newSession)
+  const selectChat = useRoxyStore((s) => s.selectChat)
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const chats = useRoxyStore((s) => s.chats)
   const loops = useRoxyStore((s) => s.loops)
   const backgroundTaskCount = useRoxyStore((s) =>
     s.activeChatId ? (s.runningTasks[s.activeChatId]?.length ?? 0) : 0
+  )
+  // A subagent working in ITS OWN session. Tracked separately from `sending`
+  // (which is per-chat local-send state): nobody "sent" this turn from the UI —
+  // the parent agent delegated it — so the only signal is the live run itself.
+  const subagentRunning = useRoxyStore((s) =>
+    s.activeChatId ? !!s.runningSubagents[s.activeChatId] : false
   )
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -88,11 +104,17 @@ export function ChatView(): JSX.Element {
   }, [messages, streaming])
 
   const activeChat = chats.find((c) => c.id === activeChatId)
+  const isSub = activeChat?.kind === 'sub'
+  const parentChat = activeChat?.parentId
+    ? chats.find((c) => c.id === activeChat.parentId)
+    : undefined
   const activeLoop = loops.find((l) => l.chatId === activeChatId)
   const sessionTasks = activeChat?.tasks ?? []
   const tasksDone = sessionTasks.filter((t) => t.status === 'completed').length
-  const hasSessionInfo =
-    activeChat?.kind === 'main' && (!!activeChat.description?.trim() || sessionTasks.length > 0)
+  // Any session can carry a description + checklist: the `general` subagent has
+  // the metadata tool too, and its plan is exactly what you open its session to
+  // read. Gate on having something to show, not on the session's kind.
+  const hasSessionInfo = !!activeChat?.description?.trim() || sessionTasks.length > 0
 
   // No workspace open — prompt to open a folder to start a session.
   if (!activeChat) {
@@ -133,11 +155,40 @@ export function ChatView(): JSX.Element {
           </div>
         ) : (
           <div className="flex min-w-0 items-center gap-2">
-            <FolderOpen className="h-4 w-4 shrink-0 text-text-muted" />
+            {isSub ? (
+              <Hammer className="h-4 w-4 shrink-0 text-text-muted" />
+            ) : (
+              <FolderOpen className="h-4 w-4 shrink-0 text-text-muted" />
+            )}
             <span className="shrink-0 text-sm font-medium">{activeChat.title}</span>
-            {activeChat.workspacePath && (
-              <span className="truncate text-xs text-text-subtle" title={activeChat.workspacePath}>
-                {activeChat.workspacePath}
+            {/* A delegate's session is only legible in context — who sent it, and
+                a way back. The folder path is the parent's business. */}
+            {isSub
+              ? parentChat && (
+                  <button
+                    onClick={() => void selectChat(parentChat.id)}
+                    title={`Back to ${parentChat.title}`}
+                    className="flex min-w-0 items-center gap-1 truncate text-xs text-text-subtle transition-colors hover:text-text"
+                  >
+                    <CornerUpLeft className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{parentChat.title}</span>
+                  </button>
+                )
+              : activeChat.workspacePath && (
+                  <span
+                    className="truncate text-xs text-text-subtle"
+                    title={activeChat.workspacePath}
+                  >
+                    {activeChat.workspacePath}
+                  </span>
+                )}
+            {subagentRunning && (
+              <span
+                title="This subagent is working"
+                className="flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent"
+              >
+                <Loader2 className="h-3 w-3 animate-spin" />
+                working
               </span>
             )}
             {hasSessionInfo && (
@@ -195,7 +246,7 @@ export function ChatView(): JSX.Element {
         </div>
       </header>
 
-      {activeChat.kind === 'main' && infoOpen && <SessionInfo chat={activeChat} />}
+      {infoOpen && <SessionInfo chat={activeChat} />}
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
         {isEmpty ? (
@@ -257,7 +308,11 @@ export function ChatView(): JSX.Element {
 
       <ServicesPanel />
 
-      <Composer onSend={submit} sending={sending} onStop={stop} />
+      <Composer
+        onSend={submit}
+        sending={sending || subagentRunning}
+        onStop={subagentRunning ? undefined : stop}
+      />
 
       <WorkstreamStrip />
 

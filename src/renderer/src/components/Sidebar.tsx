@@ -54,6 +54,7 @@ export function Sidebar(): JSX.Element {
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const selectChat = useRoxyStore((s) => s.selectChat)
   const gitStatus = useRoxyStore((s) => s.gitStatus)
+  const runningSubagents = useRoxyStore((s) => s.runningSubagents)
   const newSession = useRoxyStore((s) => s.newSession)
   const newSessionInProject = useRoxyStore((s) => s.newSessionInProject)
   const deleteChat = useRoxyStore((s) => s.deleteChat)
@@ -574,6 +575,10 @@ export function Sidebar(): JSX.Element {
                             const sending = !!sendingChats[chat.id]
                             const subs = subsByParent.get(chat.id) ?? []
                             const subsOpen = expandedSubs.has(chat.id)
+                            // How many of this session's delegates are working
+                            // right now — so a COLLAPSED parent still shows that
+                            // something is happening underneath it.
+                            const liveSubs = subs.filter((x) => runningSubagents[x.id]).length
                             return (
                               <li
                                 key={chat.id}
@@ -671,8 +676,15 @@ export function Sidebar(): JSX.Element {
                                   {subs.length > 0 && (
                                     <button
                                       onClick={() => toggleSubs(chat.id)}
-                                      title={`${subs.length} subagent${subs.length === 1 ? '' : 's'} — tap to ${subsOpen ? 'hide' : 'view'}`}
-                                      className="flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-surface-2 px-1 text-[10px] font-medium tabular-nums text-text-subtle transition-colors hover:text-text"
+                                      title={`${subs.length} subagent${subs.length === 1 ? '' : 's'}${
+                                        liveSubs > 0 ? ` (${liveSubs} working)` : ''
+                                      } — tap to ${subsOpen ? 'hide' : 'view'}`}
+                                      className={cn(
+                                        'flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums transition-colors',
+                                        liveSubs > 0
+                                          ? 'bg-accent/10 text-accent'
+                                          : 'bg-surface-2 text-text-subtle hover:text-text'
+                                      )}
                                     >
                                       {subs.length}
                                     </button>
@@ -697,7 +709,11 @@ export function Sidebar(): JSX.Element {
                                               : 'text-text-muted hover:bg-white/5 hover:text-text'
                                           )}
                                         >
-                                          <Hammer className="h-3 w-3 shrink-0 opacity-70" />
+                                          {runningSubagents[sub.id] ? (
+                                            <BrailleSpinner className="shrink-0 text-xs text-accent" />
+                                          ) : (
+                                            <Hammer className="h-3 w-3 shrink-0 opacity-70" />
+                                          )}
                                           {editingId === sub.id ? (
                                             <input
                                               autoFocus

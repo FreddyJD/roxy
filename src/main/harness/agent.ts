@@ -58,6 +58,7 @@ import { SKILL_TOOL_NAME, SKILL_TOOL_DESCRIPTION } from '../../shared/skills'
 import { listSkills, skillInstructions } from '../services/skills'
 import { findGitRoot } from '../services/workspace'
 import { registerBackgroundJob, finishBackgroundJob } from '../services/background-tasks'
+import { startSubagentRun } from '../services/subagent-stream'
 import {
   messagesHaveImages,
   openAiContent,
@@ -1412,9 +1413,9 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
     runSignal: AbortSignal,
     forwardToParent: boolean
   ): Promise<{ report: string; state: 'completed' | 'error' }> => {
-    // One fold builds the subagent's transcript; the same events are forwarded to
-    // the parent, so what persists on the sub session and what you watch live in
-    // the `task` card are the same thing by construction.
+    // One fold builds the subagent's transcript; the same events fan out to the
+    // parent's `task` card and to the sub session's own live stream, so all three
+    // views are the same thing by construction and cannot drift.
     const fold = new PartsFold()
     const persistSub = (): void => {
       if (!subChatId) return
@@ -1429,14 +1430,31 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
         // best-effort — never break the parent turn over sub-session persistence
       }
     }
+    // The sub session's own live feed. Registered only when the subagent was
+    // persisted as a session, since there is otherwise nothing for a viewer to
+    // open. `live.finish` is what flips its chat view from the streaming bubble
+    // back to the persisted transcript, so it must fire on EVERY exit path.
+    const live = subChatId
+      ? startSubagentRun({
+          subChatId,
+          parentChatId: parentChatId ?? null,
+          description,
+          subagentType,
+          background: background === true
+        })
+      : null
     /**
      * Every step the subagent takes — its prose, its thinking, and its tool calls
-     * — folded into its own transcript AND forwarded to the parent turn wrapped as
-     * a `tool-child` addressed to this `task` card, so the launching session shows
-     * the delegate working live instead of a spinner and a wall of text at the end.
+     * — folded into its own transcript and fanned out to both audiences:
      *
-     * A background run skips forwarding: its launching turn is typically over, and
-     * it reports through its own session plus the completion card instead.
+     *  - the parent turn, wrapped as a `tool-child` addressed to this `task`
+     *    card, so the launching session shows the delegate working live;
+     *  - the sub session's own stream, tagged with ITS chat id, so opening the
+     *    subagent's individual chat streams the same work in full fidelity.
+     *
+     * A background run skips the parent forward (its launching turn is typically
+     * over) but still streams to its own session — which is the only place a
+     * detached subagent was ever watchable.
      */
     const emitNested = (event: LlmEvent): void => {
       // Depth is capped at 1, so a subagent never emits `tool-child` itself; the
@@ -1445,6 +1463,7 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
       if (event.type === 'tool-child') return
       fold.apply(event)
       if (forwardToParent) emit({ type: 'tool-child', callId, event })
+      live?.emit(event)
     }
 
     try {
@@ -1480,10 +1499,15 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
         depth: depth + 1
       })
       persistSub()
+      // Persist BEFORE ending the run: the renderer reloads the sub session's
+      // transcript on the end frame, and reloading before the row exists would
+      // blank the view for a beat between the live bubble and the saved message.
+      live?.finish('completed')
       return { report: text.trim() || '(subagent returned no report)', state: 'completed' }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       persistSub()
+      live?.finish('error')
       return { report: `Subagent failed: ${msg}`, state: 'error' }
     }
   }

@@ -18,6 +18,7 @@ import type {
   ModelInfo,
   RemoteDelta,
   RemoteState,
+  SubagentDelta,
   TaskUpdate
 } from '@shared/api'
 import { selectPromptName, buildEnvironment, assembleSystemPrompt } from '@shared/prompt'
@@ -59,6 +60,13 @@ interface RoxyStore {
   compactingChats: Record<string, boolean>
   /** Running background subagent tasks, keyed by parent session id (Phase 11). */
   runningTasks: Record<string, TaskUpdate[]>
+  /**
+   * Subagent sessions with a run in flight, by SUB chat id. Drives the live
+   * bubble in a subagent's own chat view and its sidebar spinner — both of which
+   * used to be impossible, since a subagent's work only ever streamed into its
+   * parent's `task` card.
+   */
+  runningSubagents: Record<string, true>
   /** Remote Workspace sharing status — mirrors the main process's RemoteState. */
   remote: RemoteState
   /** Background processes for the active session (the Services panel). */
@@ -150,6 +158,7 @@ let llmDeltaSubscribed = false
 let taskUpdateSubscribed = false
 let remoteStateSubscribed = false
 let remoteDeltaSubscribed = false
+let subagentDeltaSubscribed = false
 /** Routes streamed completion events to the in-flight send for a request id. */
 const deltaHandlers = new Map<string, (event: LlmEvent) => void>()
 /** The active llm request id per chat, so stop() can abort the right stream. */
@@ -164,6 +173,15 @@ const remoteMirror = { deferred: false }
  * A turn:idle frame clears the entry once the persisted reply takes over.
  */
 const remoteTurns = new Map<string, PartsFold>()
+/**
+ * Live parts for each in-flight SUBAGENT run, keyed by its own chat id — the
+ * third sibling of `parts` (local send) and `remoteTurns` (phone turn).
+ *
+ * Kept for every running subagent, not just the visible one: a delegate you
+ * aren't watching keeps folding, so switching into its session mid-run shows the
+ * whole transcript so far instead of resuming from whatever arrives next.
+ */
+const subagentTurns = new Map<string, PartsFold>()
 
 /**
  * Desktop live-mirror: reload the shared chat's transcript from disk after a
@@ -230,6 +248,111 @@ function applyRemoteDelta(payload: RemoteDelta): void {
   reflect(turn.apply(payload.event))
 }
 
+/**
+ * Fold one SUBAGENT step (or run boundary) into that subagent's own live parts
+ * and, when its session is on screen, reflect it into `streamingChats` — so
+ * opening a delegate's chat shows it working in real time, exactly like a normal
+ * session, instead of a lone prompt until the run ends.
+ *
+ * Deliberately keyed by the sub chat id rather than a requestId: a subagent run
+ * (especially a background one) routinely outlives the request that launched it,
+ * and after a window reload there is no request to key on at all.
+ *
+ * A `run: completed|error` frame drops the live parts; the subagent's persisted
+ * assistant message — written just before that frame is sent — takes over, so
+ * there's no gap between the live bubble and the saved transcript.
+ */
+function applySubagentDelta(payload: SubagentDelta): void {
+  const { subChatId } = payload
+  const reflect = (parts: MessagePart[] | null): void => {
+    if (useRoxyStore.getState().activeChatId !== subChatId) return
+    useRoxyStore.setState((s) => {
+      const next = { ...s.streamingChats }
+      if (parts === null) delete next[subChatId]
+      else next[subChatId] = parts
+      return { streamingChats: next }
+    })
+  }
+
+  if (payload.kind === 'run') {
+    if (payload.state === 'running') {
+      // Open an empty live bubble the moment the run starts, so a viewer who is
+      // already on the session gets the thinking indicator rather than a blank
+      // pane while the delegate resolves its first token.
+      subagentTurns.set(subChatId, new PartsFold())
+      useRoxyStore.setState((s) => ({
+        runningSubagents: { ...s.runningSubagents, [subChatId]: true }
+      }))
+      reflect([])
+      return
+    }
+    subagentTurns.delete(subChatId)
+    useRoxyStore.setState((s) => {
+      const runningSubagents = { ...s.runningSubagents }
+      delete runningSubagents[subChatId]
+      return { runningSubagents }
+    })
+    reflect(null)
+    // The run's transcript landed a moment ago — swap the live bubble for the
+    // persisted message, and refresh the sidebar (a finished sub may now prune).
+    void (async () => {
+      if (useRoxyStore.getState().activeChatId === subChatId) {
+        useRoxyStore.setState({ messages: await api.messages.list(subChatId) })
+      }
+      await useRoxyStore.getState().refreshChats()
+    })()
+    return
+  }
+
+  // A stream event: fold it through the SAME pure fold the main process and every
+  // other live path use, so a subagent's view can never drift from — or silently
+  // drop an event type handled by — the parent's `task` card.
+  let turn = subagentTurns.get(subChatId)
+  if (!turn) {
+    turn = new PartsFold()
+    subagentTurns.set(subChatId, turn)
+  }
+  reflect(turn.apply(payload.event))
+
+  // A subagent's `change_session_metadata` writes to its OWN session (the tool
+  // runs with the sub chat id), so its title, description, and task checklist all
+  // live on that row. Reload the chat list when one lands, or the header strip
+  // and the sidebar entry would sit stale until the run ends — and watching a
+  // delegate tick off its own checklist is most of the point of opening it.
+  const event = payload.event
+  if (event.type === 'tool-end' && event.ok) {
+    const card = turn.parts.find((p) => p.type === 'tool' && p.callId === event.callId)
+    if (card?.type === 'tool' && card.tool === 'change_session_metadata') {
+      void useRoxyStore.getState().refreshChats()
+    }
+  }
+}
+
+/**
+ * Catch up a subagent session opened mid-run: pull the parts main has folded so
+ * far and seed the local fold with them, so the live bubble starts complete and
+ * subsequent deltas append rather than replacing a half-empty transcript.
+ *
+ * Seeding (not assigning) matters — the fold rebuilds its call-id index from the
+ * snapshot, so an inherited running tool card still flips to done when its
+ * `tool-end` arrives instead of spinning forever.
+ */
+async function hydrateSubagent(subChatId: string): Promise<void> {
+  const parts = await api.subagents.snapshot(subChatId).catch(() => null)
+  // The run may have finished (or the user navigated away) during the round trip;
+  // its persisted message is then the truth and must not be overwritten.
+  if (!parts || useRoxyStore.getState().activeChatId !== subChatId) return
+  const fold = subagentTurns.get(subChatId) ?? new PartsFold()
+  // Never rewind: deltas that arrived while the snapshot was in flight are
+  // already folded locally and are strictly newer than what main sent back.
+  if (fold.parts.length === 0) fold.seed(parts)
+  subagentTurns.set(subChatId, fold)
+  useRoxyStore.setState((s) => ({
+    runningSubagents: { ...s.runningSubagents, [subChatId]: true },
+    streamingChats: { ...s.streamingChats, [subChatId]: fold.parts }
+  }))
+}
+
 export const useRoxyStore = create<RoxyStore>((set, get) => ({
   ready: false,
   settings: null,
@@ -248,6 +371,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   stopChats: {},
   compactingChats: {},
   runningTasks: {},
+  runningSubagents: {},
   remote: { phase: 'idle', guests: 0, rev: 0 },
   services: [],
   gitAvailable: null,
@@ -315,6 +439,33 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       api.tasks.onUpdate((update) => {
         void get().handleTaskUpdate(update)
       })
+    }
+
+    // A subagent's own live stream. Separate from the requestId-keyed llm:delta
+    // channel on purpose: a subagent run outlives the request that launched it
+    // (a background one by design), and after a window reload there is no
+    // request to route by — but its session id is still on screen in the sidebar.
+    if (!subagentDeltaSubscribed) {
+      subagentDeltaSubscribed = true
+      api.subagents.onDelta((payload) => applySubagentDelta(payload))
+      // A window that just (re)loaded missed every `run: running` frame, so
+      // restore the in-flight set from main — otherwise a delegate that is very
+      // much still working shows no spinner anywhere until it happens to emit.
+      void api.subagents
+        .listRunning()
+        .then((running) => {
+          if (running.length === 0) return
+          set((s) => {
+            const runningSubagents = { ...s.runningSubagents }
+            for (const r of running) runningSubagents[r.subChatId] = true
+            return { runningSubagents }
+          })
+          const active = get().activeChatId
+          if (active && running.some((r) => r.subChatId === active)) void hydrateSubagent(active)
+        })
+        .catch(() => {
+          // best-effort — a failed restore costs a spinner, never correctness
+        })
     }
 
     // Remote Workspace: keep the sharing badge live and mirror remote activity.
@@ -538,8 +689,15 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     // Per-chat send state survives switching — just swap which chat is shown.
     // Clear messages/queue first so the previous chat's content never flashes.
     set({ activeChatId: id, messages: [], queue: [], activeAgentId: DEFAULT_AGENT_ID })
-    const workspace = get().chats.find((c) => c.id === id)?.workspacePath
+    const chat = get().chats.find((c) => c.id === id)
+    const workspace = chat?.workspacePath
     if (workspace) void get().ensureProjectInstructions(workspace)
+    // Tell main which sub session is on screen so the end-of-turn prune spares
+    // it — a one-shot delegate you're reading shouldn't vanish mid-sentence.
+    void api.subagents.setViewed(chat?.kind === 'sub' ? id : null).catch(() => {})
+    // Opening a subagent mid-run: pull what it has already done so the live
+    // bubble starts from the whole transcript, not from the next delta.
+    if (chat?.kind === 'sub') void hydrateSubagent(id)
     const [messages, queue] = await Promise.all([api.messages.list(id), api.queue.list(id)])
     if (get().activeChatId === id) set({ messages, queue })
   },
@@ -640,7 +798,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     // "Busy" means a local send is streaming *or* a phone-driven turn is running
     // into this same session (`remoteTurns`) — so a desktop prompt lands in the
     // shared FIFO behind a phone turn instead of starting a second concurrent one.
-    if (get().sendingChats[chatId] || remoteTurns.has(chatId)) {
+    // A subagent still running in its own session counts as busy too: its turn
+    // is driven from the main process, so a prompt sent now would start a SECOND
+    // concurrent turn writing into the same transcript. Queue it instead — it
+    // drains as a normal follow-up once the delegate reports.
+    if (get().sendingChats[chatId] || remoteTurns.has(chatId) || subagentTurns.has(chatId)) {
       await api.queue.add(
         chatId,
         text,

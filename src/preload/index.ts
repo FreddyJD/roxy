@@ -9,6 +9,7 @@ import type {
   BrowserTab,
   RemoteState,
   RemoteDelta,
+  SubagentDelta,
   UpdateState
 } from '../shared/api'
 
@@ -138,6 +139,17 @@ const roxy: RoxyApi = {
         callback(update)
       ipcRenderer.on(CHANNELS.taskUpdate, handler)
       return () => ipcRenderer.removeListener(CHANNELS.taskUpdate, handler)
+    }
+  },
+  subagents: {
+    snapshot: (subChatId) => ipcRenderer.invoke(CHANNELS.subagentSnapshot, subChatId),
+    listRunning: () => ipcRenderer.invoke(CHANNELS.subagentListRunning),
+    setViewed: (chatId) => ipcRenderer.invoke(CHANNELS.subagentSetViewed, chatId),
+    onDelta: (callback) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: SubagentDelta): void =>
+        callback(payload)
+      ipcRenderer.on(CHANNELS.subagentDelta, handler)
+      return () => ipcRenderer.removeListener(CHANNELS.subagentDelta, handler)
     }
   },
   models: {

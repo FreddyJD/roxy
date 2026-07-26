@@ -126,6 +126,34 @@ export class PartsFold {
   /** Parent `task` callId → its subagent's own callId → slot in that card's `children`. */
   private readonly childIndex = new Map<string, Map<string, number>>()
 
+  /**
+   * Adopt an existing parts list as this fold's state, rebuilding the call-id
+   * indexes from the cards themselves so subsequent events land on the right
+   * slots.
+   *
+   * This is what makes a fold *resumable*: a viewer joining a run already in
+   * progress (opening a subagent's session mid-flight) seeds from a snapshot and
+   * keeps folding from there. Assigning `parts` directly would leave the indexes
+   * empty, so every inherited card's `tool-end` would be dropped and the card
+   * would spin forever.
+   */
+  seed(parts: MessagePart[]): MessagePart[] {
+    this.parts = parts
+    this.index.clear()
+    this.childIndex.clear()
+    parts.forEach((part, i) => {
+      if (part.type !== 'tool' || !part.callId) return
+      this.index.set(part.callId, i)
+      if (!part.children?.length) return
+      const sub = new Map<string, number>()
+      part.children.forEach((child, j) => {
+        if (child.type === 'tool' && child.callId) sub.set(child.callId, j)
+      })
+      this.childIndex.set(part.callId, sub)
+    })
+    return this.parts
+  }
+
   apply(event: LlmEvent): MessagePart[] {
     if (event.type !== 'tool-child') {
       this.parts = foldInto(this.parts, this.index, event)
