@@ -2212,6 +2212,70 @@ async function main(): Promise<void> {
     check('strip: ...read-only (no dropdown)', subView?.readOnly === true)
     check('strip: an orphaned sub renders nothing', view(sub, repoStatus, true, [sub]) === null)
 
+    // ---- pending workstreams ----
+    // Worktrees are materialized lazily, on the first turn. Between "new
+    // workstream" and that turn the session has no worktreePath -- which the
+    // strip used to render as "default workstream", i.e. it named the shared
+    // checkout that every other session and the user's editor sit in. That is
+    // wrong in the worst direction: it reads as "your next turn edits main".
+    const pendingNew = view(mk({ title: 'azure orsted mage', worktreePending: { mode: 'new' } }))
+    check('strip: a pending workstream is flagged pending', pendingNew?.pending === true)
+    check(
+      'strip: ...and is NOT called the default workstream',
+      pendingNew?.label !== 'default workstream'
+    )
+    check('strip: ...it keeps the session title', pendingNew?.label === 'azure orsted mage')
+    check('strip: ...and is not yet in a worktree', pendingNew?.inWorktree === false)
+    // A 'new' workstream's branch is generated at materialization, so there is
+    // no name to show -- and showing the CURRENT branch would name the very
+    // branch the workstream exists to stay off.
+    check('strip: a pending "new" workstream has no branch yet', pendingNew?.branch === null)
+    check(
+      'strip: ...and does not inherit the default branch dirtiness',
+      pendingNew?.dirty === false
+    )
+
+    // fromBranch/attach DO know their branch up front, so show it.
+    const pendingFrom = view(
+      mk({ title: 'hotfix', worktreePending: { mode: 'fromBranch', branch: 'release/2.1' } })
+    )
+    check(
+      'strip: a pending fromBranch shows its target branch',
+      pendingFrom?.branch === 'release/2.1'
+    )
+    check('strip: ...still flagged pending', pendingFrom?.pending === true)
+    check(
+      'strip: an attach intent shows its branch too',
+      view(mk({ worktreePending: { mode: 'attach', branch: 'feat/x' } }))?.branch === 'feat/x'
+    )
+    check(
+      'strip: a blank intent branch falls back to no branch',
+      view(mk({ worktreePending: { mode: 'fromBranch', branch: '   ' } }))?.branch === null
+    )
+    check(
+      'strip: an untitled pending workstream still reads as new',
+      view(mk({ title: '', worktreePending: { mode: 'new' } }))?.label === 'new workstream'
+    )
+
+    // The genuinely-default session must keep behaving exactly as before.
+    check('strip: a session with no intent is the default workstream', plain?.pending === false)
+    check('strip: ...and keeps its label', plain?.label === 'default workstream')
+    // Once the worktree EXISTS the intent is cleared, but a stale one must not
+    // win over reality -- worktreePath is the source of truth.
+    const settled = view(
+      mk({ worktreePath: '/wt/auth', branch: 'roxy/auth', worktreePending: { mode: 'new' } })
+    )
+    check('strip: a real worktree beats a stale pending intent', settled?.pending === false)
+    check('strip: ...and shows its real branch', settled?.branch === 'roxy/auth')
+
+    // A sub-session inherits its parent's pending state, since it will run in
+    // that tree once it exists.
+    const pendingParent = mk({ id: 'p2', title: 'wip', worktreePending: { mode: 'new' } })
+    const subOfPending = mk({ id: 'sub2', kind: 'sub', parentId: 'p2', workspacePath: null })
+    const subPendingView = view(subOfPending, repoStatus, true, [pendingParent, subOfPending])
+    check('strip: a sub of a pending workstream reports pending', subPendingView?.pending === true)
+    check('strip: ...with the parent label', subPendingView?.label === 'wip')
+
     const dirty = view(mk(), { isRepo: true, branch: 'main', dirty: true, changed: 3 })
     check('strip: surfaces the dirty flag', dirty?.dirty === true)
 

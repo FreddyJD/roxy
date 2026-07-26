@@ -7,6 +7,7 @@
  * dropdown that would move its parent's tree, or a permanent greyed-out row in
  * every non-git folder.
  */
+import type { WorktreeIntent } from './types'
 
 /** The minimal session shape the strip cares about. */
 export interface StripSession {
@@ -17,6 +18,14 @@ export interface StripSession {
   workspacePath: string | null
   worktreePath: string | null
   branch: string | null
+  /**
+   * A worktree this session asked for but hasn't got yet — worktrees are
+   * materialized lazily, on the first turn, so an abandoned composer leaves
+   * nothing on disk. Between "new workstream" and that first turn the session
+   * has no `worktreePath`, which is NOT the same as belonging to the default
+   * workstream, and the strip has to say so.
+   */
+  worktreePending?: WorktreeIntent | null
 }
 
 /** The minimal git status shape the strip cares about. */
@@ -38,6 +47,11 @@ export interface StripView {
   /** Sub-sessions inherit their workstream and must not offer the dropdown. */
   readOnly: boolean
   inWorktree: boolean
+  /**
+   * The workstream is requested but not created yet. The strip dims the label
+   * and the menu marks the row, so "pending" never reads as "done".
+   */
+  pending: boolean
 }
 
 /**
@@ -69,15 +83,50 @@ export function workstreamStripView(input: {
   const readOnly = chat.kind !== 'main'
   if (!status?.isRepo) return null
 
+  // A session that has ASKED for a workstream is not in the default one. Saying
+  // "default workstream" there is not merely vague, it is wrong in the direction
+  // that matters: it names the shared checkout every other session and the
+  // user's editor are sitting in, so the honest reading of the old label was
+  // "your next turn edits main directly" — the opposite of what will happen.
+  const pending = !owner.worktreePath && !!owner.worktreePending
+
   return {
     ownerId: owner.id,
     statusKey: owner.worktreePath ?? owner.workspacePath,
-    label: owner.worktreePath ? owner.title || 'workstream' : 'default workstream',
-    branch: owner.branch ?? status.branch,
-    dirty: status.dirty,
+    label: workstreamLabel(owner),
+    // Same trap on the branch: until the worktree exists the session has no
+    // branch of its own, and falling back to the CURRENT branch would display
+    // the very branch this workstream is meant to avoid.
+    branch: pending ? pendingBranch(owner.worktreePending) : (owner.branch ?? status.branch),
+    dirty: pending ? false : status.dirty,
     readOnly,
-    inWorktree: !!owner.worktreePath
+    inWorktree: !!owner.worktreePath,
+    pending
   }
+}
+
+/**
+ * What to call a session's workstream.
+ *
+ * Pending sessions are titled from their intent at creation, so the title is
+ * already the right word — it just needs to not claim to exist yet.
+ */
+function workstreamLabel(owner: StripSession): string {
+  if (owner.worktreePath) return owner.title || 'workstream'
+  if (owner.worktreePending) return owner.title || 'new workstream'
+  return 'default workstream'
+}
+
+/**
+ * The branch a pending workstream will land on, when it is already known.
+ *
+ * Only `fromBranch`/`attach` know it: `new` gets a generated placeholder name
+ * (`roxy/a1b2c3d4`) at materialization time, and inventing one here would show a
+ * branch that never comes to exist.
+ */
+function pendingBranch(intent: WorktreeIntent | null | undefined): string | null {
+  const branch = intent?.branch?.trim()
+  return branch || null
 }
 
 /**

@@ -64,7 +64,7 @@ export function WorkstreamStrip(): JSX.Element | null {
   }, [ownerId, refreshGitStatus])
 
   if (!view || !owner) return null
-  const { branch, dirty, readOnly } = view
+  const { branch, dirty, readOnly, pending } = view
   const changed = (statusKey ? gitStatus[statusKey]?.changed : 0) ?? 0
 
   return (
@@ -72,7 +72,7 @@ export function WorkstreamStrip(): JSX.Element | null {
     // reads as the composer's footer rather than a stray row pinned to the left.
     <div className="shrink-0 px-4 pb-2.5 text-xs">
       <div className="mx-auto flex max-w-3xl items-center gap-1 px-1">
-        <WorkstreamSegment chat={owner} readOnly={readOnly} label={view.label} />
+        <WorkstreamSegment chat={owner} readOnly={readOnly} label={view.label} pending={pending} />
 
         <Divider />
 
@@ -80,11 +80,25 @@ export function WorkstreamStrip(): JSX.Element | null {
             different (and riskier) action than opening a workstream; the
             workstream menu above is the branch picker. */}
         <span
-          className="flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-text-muted"
-          title={branch ? `On branch ${branch}` : undefined}
+          className={cn(
+            'flex min-w-0 items-center gap-1.5 px-1.5 py-1',
+            pending ? 'text-text-subtle' : 'text-text-muted'
+          )}
+          title={
+            pending
+              ? branch
+                ? `Will check out ${branch} when this session starts`
+                : 'Branch is chosen when this session starts'
+              : branch
+                ? `On branch ${branch}`
+                : undefined
+          }
         >
           <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
-          <span className="truncate">{branch ?? 'detached'}</span>
+          {/* A pending 'new' workstream has no branch yet — its name is
+              generated at materialization. Showing the CURRENT branch here
+              would name the one thing this workstream exists to stay off. */}
+          <span className="truncate">{branch ?? (pending ? 'branch pending' : 'detached')}</span>
           {dirty && (
             <span
               className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"
@@ -102,10 +116,10 @@ export function WorkstreamStrip(): JSX.Element | null {
             commit/push actions. Left static here so the layout is final. */}
         <span
           className="flex items-center gap-1.5 px-1.5 py-1 text-text-subtle"
-          title="Not pushed yet"
+          title={pending ? 'Created when this session starts' : 'Not pushed yet'}
         >
           <span className="h-1.5 w-1.5 rounded-full border border-text-subtle/70" />
-          local
+          {pending ? 'not created' : 'local'}
         </span>
       </div>
     </div>
@@ -125,11 +139,13 @@ function Divider(): JSX.Element {
 function WorkstreamSegment({
   chat,
   readOnly,
-  label
+  label,
+  pending
 }: {
   chat: Chat
   readOnly: boolean
   label: string
+  pending: boolean
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -171,7 +187,11 @@ function WorkstreamSegment({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        title="Workstreams — isolated checkouts you can run in parallel"
+        title={
+          pending
+            ? 'This workstream is created when the session starts'
+            : 'Workstreams — isolated checkouts you can run in parallel'
+        }
         className={cn(
           'flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 transition hover:bg-white/5',
           open ? 'text-text' : 'text-text-muted hover:text-text'
@@ -179,6 +199,11 @@ function WorkstreamSegment({
       >
         <SquareStack className="h-3.5 w-3.5 shrink-0 opacity-70" />
         <span className="max-w-[12rem] truncate">{label}</span>
+        {/* The one word that distinguishes "you are here" from "you will be
+            here". Without it a pending workstream is indistinguishable from a
+            live one, and the session silently looks like it edits the shared
+            checkout. */}
+        {pending && <span className="shrink-0 text-text-subtle">(pending)</span>}
         <ChevronDown
           className={cn('h-3 w-3 shrink-0 opacity-60 transition', open && 'rotate-180')}
         />
@@ -221,6 +246,8 @@ function WorkstreamMenu({ chat, onClose }: { chat: Chat; onClose: () => void }):
     return map
   }, [sessions])
 
+  // Other sessions' pending workstreams are deliberately NOT listed: there is
+  // nothing to switch to yet, and git has not reserved the branch name.
   const inWorktree = sessions.filter((s) => s.worktreePath)
   const run = async (fn: () => Promise<void>): Promise<void> => {
     if (busy) return
@@ -239,12 +266,29 @@ function WorkstreamMenu({ chat, onClose }: { chat: Chat; onClose: () => void }):
         <MenuLabel>Workstreams</MenuLabel>
 
         {/* The default workstream is the project folder itself — always present,
-            and shown for orientation rather than as something to click. */}
+            and shown for orientation rather than as something to click. The tick
+            means "this session is here", so a session waiting on its own
+            worktree must NOT tick it — it is precisely the one place that
+            session will not run. */}
         <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-text-subtle">
           <SquareStack className="h-3.5 w-3.5 opacity-70" />
           <span className="min-w-0 flex-1 truncate">default workstream</span>
-          {!chat.worktreePath && <Check className="h-3.5 w-3.5 text-accent" />}
+          {!chat.worktreePath && !chat.worktreePending && (
+            <Check className="h-3.5 w-3.5 text-accent" />
+          )}
         </div>
+
+        {/* A session whose worktree doesn't exist yet still belongs in the list:
+            it is where the current session is going, and leaving it out makes
+            the menu look like the "new workstream" click did nothing. */}
+        {chat.worktreePending && !chat.worktreePath && (
+          <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-text-subtle">
+            <SquareStack className="h-3.5 w-3.5 opacity-70" />
+            <span className="min-w-0 flex-1 truncate">{chat.title || 'new workstream'}</span>
+            <span className="shrink-0 text-[11px]">pending</span>
+            <Check className="h-3.5 w-3.5 text-accent" />
+          </div>
+        )}
 
         {inWorktree.map((s) => (
           <MenuItem
