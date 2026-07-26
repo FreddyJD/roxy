@@ -75,11 +75,11 @@ export function RemoteWorkspaceDialog({ onClose }: { onClose: () => void }): JSX
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
+      className="animate-scrim-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md overflow-hidden rounded-2xl border border-border bg-surface"
+        className="animate-modal-in w-full max-w-md overflow-hidden rounded-2xl border border-border bg-surface"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -102,7 +102,7 @@ export function RemoteWorkspaceDialog({ onClose }: { onClose: () => void }): JSX
           <button
             onClick={onClose}
             title="Close (keeps sharing)"
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <X className="h-4 w-4" />
           </button>
@@ -207,7 +207,7 @@ function ShareView({
         <button
           onClick={onCopy}
           title="Copy link"
-          className="flex h-6 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-text-muted transition hover:bg-white/5 hover:text-text"
+          className="press-scale flex h-6 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-text-muted hover:bg-white/5 hover:text-text"
         >
           {copied ? (
             <>

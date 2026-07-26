@@ -186,43 +186,99 @@ export const MIGRATIONS: Migration[] = [
       GROUP BY workspace_path;
   `,
 
-  // ---- v14: git-worktree-backed sessions ----
+  // ---- v14: per-model-call token usage (powers the cost/usage dashboard) ----
+  // One row per model call (main turn, subagent, or loop). Costs are priced at
+  // record time from the models.dev catalog so historical spend never shifts when
+  // prices change; tokens are real provider `usage` when available, else an
+  // estimate (estimated=1). chat_id is nullable + ON DELETE SET NULL so deleting a
+  // session keeps its spend in the lifetime totals.
+  //
+  // Keeps position 14: it shipped in v0.0.43, so every installed database already
+  // counts it as v14. The worktree steps below were developed in parallel and
+  // originally claimed this same number — that collision is what the reconcile
+  // step at the end repairs.
+  /* sql */ `
+    CREATE TABLE usage (
+      id          TEXT PRIMARY KEY,
+      chat_id     TEXT REFERENCES chats(id) ON DELETE SET NULL,
+      provider_id TEXT NOT NULL,
+      model       TEXT NOT NULL,
+      input       INTEGER NOT NULL DEFAULT 0,
+      output      INTEGER NOT NULL DEFAULT 0,
+      cache_read  INTEGER NOT NULL DEFAULT 0,
+      cache_write INTEGER NOT NULL DEFAULT 0,
+      reasoning   INTEGER NOT NULL DEFAULT 0,
+      cost        REAL NOT NULL DEFAULT 0,
+      estimated   INTEGER NOT NULL DEFAULT 0,
+      created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX idx_usage_created ON usage(created_at);
+    CREATE INDEX idx_usage_provider ON usage(provider_id, created_at);
+  `,
+
+  // ---- v15: git-worktree-backed sessions ----
   // A session can run in its own `git worktree` — an isolated checkout of the
   // same repo on its own branch — so several agents work in parallel without
   // sharing one filesystem. All three columns are NULL for a normal session,
-  // which keeps today's behaviour exactly (see services/workspace.ts).
+  // which keeps the previous behaviour exactly (see services/workspace.ts).
   //   worktree_path — the worktree's directory, or NULL to work in place
   //   branch        — the branch checked out there (mirrors git; git is truth)
   //   dev_port      — the port this session's dev server owns, so N sessions
   //                   don't all fight over :3000
-  /* sql */ `
-    ALTER TABLE chats ADD COLUMN worktree_path TEXT;
-    ALTER TABLE chats ADD COLUMN branch TEXT;
-    ALTER TABLE chats ADD COLUMN dev_port INTEGER;
-  `,
+  //
+  // Idempotent, not raw ALTER: these columns were briefly published at position
+  // 14, so some databases already have them at a LOWER version than this step.
+  (db) => {
+    addColumnIfMissing(db, 'chats', 'worktree_path', 'TEXT')
+    addColumnIfMissing(db, 'chats', 'branch', 'TEXT')
+    addColumnIfMissing(db, 'chats', 'dev_port', 'INTEGER')
+  },
 
-  // ---- v15: pending worktree intent ----
+  // ---- v16: pending worktree intent ----
   // Worktrees are materialized LAZILY, on a session's first turn rather than at
   // create time, so an abandoned composer never leaves an orphan directory on
   // disk. The requested mode/branch is parked here as JSON and cleared once the
-  // worktree exists (or once creation fails and we fall back to working in the
-  // project folder).
-  /* sql */ `
-    ALTER TABLE chats ADD COLUMN worktree_pending TEXT;
-  `,
-
-  // ---- v16: reconcile the worktree columns ----
-  // Repairs databases that skipped an earlier migration because two branches
-  // both numbered one "v14": a DB that took the other branch's v14 advanced its
-  // user_version past ours, so our columns were never added and every worktree
-  // write failed with "no such column: worktree_path".
-  //
-  // Written as a function because it must be idempotent — it runs on healthy
-  // databases too, where every column already exists and it does nothing.
+  // worktree exists (or once creation fails and we fall back to the project
+  // folder). Idempotent for the same reason as v15.
   (db) => {
+    addColumnIfMissing(db, 'chats', 'worktree_pending', 'TEXT')
+  },
+
+  // ---- v17: reconcile everything the v14 collision could have skipped ----
+  // Two branches each shipped a migration numbered v14 — the usage dashboard and
+  // the worktree columns. Because the version is an ARRAY POSITION, a database
+  // that applied one of them advanced past the other and would never run it:
+  //
+  //   ran usage v14     -> reached 14+, never got the worktree columns
+  //   ran worktree v14  -> reached 14+, never got the usage table
+  //
+  // Both leave a database that looks fully migrated and is missing a schema
+  // object, which surfaces as "no such column: worktree_path" or a crash in the
+  // usage dashboard. This step re-asserts every affected object, does nothing on
+  // a healthy database, and is safe to run repeatedly.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS usage (
+        id          TEXT PRIMARY KEY,
+        chat_id     TEXT REFERENCES chats(id) ON DELETE SET NULL,
+        provider_id TEXT NOT NULL,
+        model       TEXT NOT NULL,
+        input       INTEGER NOT NULL DEFAULT 0,
+        output      INTEGER NOT NULL DEFAULT 0,
+        cache_read  INTEGER NOT NULL DEFAULT 0,
+        cache_write INTEGER NOT NULL DEFAULT 0,
+        reasoning   INTEGER NOT NULL DEFAULT 0,
+        cost        REAL NOT NULL DEFAULT 0,
+        estimated   INTEGER NOT NULL DEFAULT 0,
+        created_at  INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_usage_created ON usage(created_at);
+      CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage(provider_id, created_at);
+    `)
     addColumnIfMissing(db, 'chats', 'worktree_path', 'TEXT')
     addColumnIfMissing(db, 'chats', 'branch', 'TEXT')
     addColumnIfMissing(db, 'chats', 'dev_port', 'INTEGER')
     addColumnIfMissing(db, 'chats', 'worktree_pending', 'TEXT')
   }
+
 ]

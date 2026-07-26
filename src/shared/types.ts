@@ -319,3 +319,112 @@ export interface AppVersions {
   chrome: string
   node: string
 }
+
+// ---- Usage / cost ------------------------------------------------------------
+
+/**
+ * Token counts for ONE model call. `input`/`output` are fresh (uncached) tokens;
+ * `cacheRead`/`cacheWrite` split out so pricing can charge them at their (cheaper)
+ * rates. `estimated` marks rows we derived from text length rather than a real
+ * provider `usage` frame, so the UI can be honest about precision.
+ */
+export interface TokenUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  reasoning: number
+  estimated: boolean
+}
+
+/** One persisted usage record — a single model call, attributed to a provider/model. */
+export interface UsageRecord extends TokenUsage {
+  id: string
+  chatId: string | null
+  providerId: string
+  model: string
+  /** USD cost priced at record time from the model catalog (0 when price unknown). */
+  cost: number
+  createdAt: number
+}
+
+/** Rolled-up totals for one provider (or model), over a window. */
+export interface UsageBucket {
+  tokens: number
+  cost: number
+  calls: number
+}
+
+/** One day of spend, for the popover's bar graph (oldest → newest). */
+export interface UsageDay {
+  /** Local YYYY-MM-DD. */
+  date: string
+  tokens: number
+  cost: number
+}
+
+/** Per-provider usage summary shown as a tab in the popover. */
+export interface ProviderUsage {
+  providerId: string
+  /** Human label (falls back to the id when the provider was removed). */
+  name: string
+  today: UsageBucket
+  last30d: UsageBucket
+  /** Most-used model over the window, by token volume. */
+  topModel: string | null
+  /** Daily spend for the last 30 days (bar graph). */
+  daily: UsageDay[]
+  /** True if any priced-in record was estimated (drives the "~/estimated" note). */
+  hasEstimates: boolean
+  /** True if any record lacked catalog pricing (cost is a floor, not exact). */
+  hasUnpriced: boolean
+}
+
+/** The whole usage dashboard payload — an "Overview" plus a tab per provider. */
+export interface UsageStats {
+  overview: {
+    today: UsageBucket
+    last30d: UsageBucket
+    topModel: string | null
+    daily: UsageDay[]
+    hasEstimates: boolean
+    hasUnpriced: boolean
+  }
+  providers: ProviderUsage[]
+}
+
+// ---- Activity (contribution graph) ------------------------------------------
+
+/**
+ * One calendar day in the Settings contribution graph. `count` is the number of
+ * agent turns (assistant replies) recorded that day across every session; `level`
+ * is the GitHub-style 0–4 intensity bucket (0 = nothing, 4 = the busiest tier),
+ * derived from the window's peak so the graph self-scales to how you actually use
+ * Roxy.
+ */
+export interface ActivityDay {
+  /** Local YYYY-MM-DD. */
+  date: string
+  count: number
+  level: 0 | 1 | 2 | 3 | 4
+}
+
+/**
+ * The activity dashboard payload for the Settings contribution graph — a
+ * zero-filled daily series (oldest → newest) plus the headline figures that ride
+ * above it (total, streaks, busiest day).
+ */
+export interface ActivityStats {
+  /** Daily activity, oldest → newest, exactly `days` entries (zero-filled). */
+  days: ActivityDay[]
+  /** Total turns counted across the window. */
+  total: number
+  /** Busiest single day's count (drives the level scale + legend). */
+  max: number
+  /** Distinct days with any activity. */
+  activeDays: number
+  /** Longest run of consecutive active days anywhere in the window. */
+  longestStreak: number
+  /** Active-day run ending today (0 if today is idle). */
+  currentStreak: number
+}

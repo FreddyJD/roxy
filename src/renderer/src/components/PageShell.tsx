@@ -20,7 +20,7 @@ export function PageShell({
         <button
           onClick={onBack}
           title="Back"
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition hover:bg-white/5 hover:text-text"
+          className="press-scale flex h-7 w-7 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
         >
           <ArrowLeft className="h-4 w-4" />
         </button>

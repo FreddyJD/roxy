@@ -26,7 +26,7 @@ export function BrailleSpinner({ className }: { className?: string }): JSX.Eleme
   )
 }
 
-export function ThinkingIndicator(): JSX.Element {
+export function ThinkingIndicator({ label = 'thinking' }: { label?: string }): JSX.Element {
   const [seconds, setSeconds] = useState(0)
   useEffect(() => {
     const start = Date.now()
@@ -36,7 +36,7 @@ export function ThinkingIndicator(): JSX.Element {
   return (
     <div className="flex items-center gap-2 py-1 text-sm">
       <BrailleSpinner className="text-base text-accent" />
-      <span className="animate-pulse text-text-muted">thinking</span>
+      <span className="animate-pulse text-text-muted">{label}</span>
       {seconds > 0 && (
         <span className="font-mono text-xs tabular-nums text-text-subtle">{seconds}s</span>
       )}

@@ -11,7 +11,7 @@
  * Wires without tool support yet (azure/bedrock) fall back to a plain answer.
  */
 import type { ChatMessage, LlmEvent } from '../../shared/api'
-import type { MessagePart, ReasoningEffort } from '../../shared/types'
+import type { MessagePart, ReasoningEffort, TokenUsage } from '../../shared/types'
 import {
   getAgent,
   isReadOnlyAgent,
@@ -42,6 +42,8 @@ import { dirname, join, resolve } from 'node:path'
 import * as repo from '../db/repo'
 import { runTool } from './tools'
 import { boundToolOutput } from '../services/tool-output-store'
+import { modelCost } from '../services/models'
+import { usageCost } from '../../shared/cost'
 import {
   ensureMcpConnected,
   loadWorkspaceMcpServers,
@@ -51,16 +53,10 @@ import {
   isMcpTool
 } from '../services/mcp'
 import type { McpServerRecord } from '../../shared/mcp'
-import {
-  SKILL_TOOL_NAME,
-  SKILL_TOOL_DESCRIPTION
-} from '../../shared/skills'
+import { SKILL_TOOL_NAME, SKILL_TOOL_DESCRIPTION } from '../../shared/skills'
 import { listSkills, skillInstructions } from '../services/skills'
 import { findGitRoot } from '../services/workspace'
-import {
-  registerBackgroundJob,
-  finishBackgroundJob
-} from '../services/background-tasks'
+import { registerBackgroundJob, finishBackgroundJob } from '../services/background-tasks'
 import {
   messagesHaveImages,
   openAiContent,
@@ -258,11 +254,11 @@ export async function streamTurn(
   onText: (delta: string) => void,
   onReasoning: (delta: string) => void,
   deps: StreamTurnDeps = {}
-): Promise<{ text: string; toolCalls: ToolCallAccum[] }> {
+): Promise<{ text: string; toolCalls: ToolCallAccum[]; usage: TokenUsage | null }> {
   const runOnce = deps.runOnce ?? streamOnce
   const delay = deps.delay ?? abortableDelay
   for (let attempt = 0; ; attempt++) {
-    if (signal.aborted) return { text: '', toolCalls: [] }
+    if (signal.aborted) return { text: '', toolCalls: [], usage: null }
     let emitted = false
     try {
       return await runOnce(
@@ -445,7 +441,7 @@ function buildSystemMessage(
     ...(mcpInfo ? [mcpInfo] : []),
     ...(agentPrompt ? [agentPrompt] : [])
   ]
-  const contextSummary = chatId ? repo.getChat(chatId)?.contextSummary ?? undefined : undefined
+  const contextSummary = chatId ? (repo.getChat(chatId)?.contextSummary ?? undefined) : undefined
   return assembleSystemPrompt({
     base,
     environment,
@@ -473,7 +469,12 @@ function gatherMcpRecords(cwd: string): McpServerRecord[] {
 
 /** OpenAI function schemas for the workspace/browser tools (the base toolset). */
 const BASE_SCHEMAS = [
-  fn('read', 'Read a file from the workspace.', { path: str('File path, relative to the workspace.') }, ['path']),
+  fn(
+    'read',
+    'Read a file from the workspace.',
+    { path: str('File path, relative to the workspace.') },
+    ['path']
+  ),
   fn(
     'write',
     'Create or overwrite a file with the given content. Creates parent folders.',
@@ -490,8 +491,15 @@ const BASE_SCHEMAS = [
     },
     ['path', 'oldString', 'newString']
   ),
-  fn('list', 'List the entries of a directory.', { path: str('Directory path (default ".").') }, []),
-  fn('glob', 'Find files matching a glob pattern.', { pattern: str('e.g. "src/**/*.ts"') }, ['pattern']),
+  fn(
+    'list',
+    'List the entries of a directory.',
+    { path: str('Directory path (default ".").') },
+    []
+  ),
+  fn('glob', 'Find files matching a glob pattern.', { pattern: str('e.g. "src/**/*.ts"') }, [
+    'pattern'
+  ]),
   fn(
     'grep',
     'Search file contents with a case-insensitive regex.',
@@ -522,24 +530,54 @@ const BASE_SCHEMAS = [
     'Run a shell command in the workspace (PowerShell on Windows). By default each call is a FRESH shell (cwd/env do NOT persist) that returns when the command finishes or after `timeout` seconds. For a LONG-RUNNING process (a dev server, watcher, `npm run dev`), pass background:true — it starts the process and returns immediately with an id; then use bash_output to read its logs and bash_kill to stop it.',
     {
       command: str('The command.'),
-      timeout: { type: 'number', description: 'Foreground timeout in seconds (default 60, max 600). Ignored when background is true.' },
-      background: { type: 'boolean', description: 'Run as a long-lived background process (servers/watchers) instead of waiting. Returns a process id.' }
+      timeout: {
+        type: 'number',
+        description:
+          'Foreground timeout in seconds (default 60, max 600). Ignored when background is true.'
+      },
+      background: {
+        type: 'boolean',
+        description:
+          'Run as a long-lived background process (servers/watchers) instead of waiting. Returns a process id.'
+      }
     },
     ['command']
   ),
-  fn('bash_list', 'List the background processes running in this workspace (id, status, runtime, command).', {}, []),
+  fn(
+    'bash_list',
+    'List the background processes running in this workspace (id, status, runtime, command).',
+    {},
+    []
+  ),
   fn(
     'bash_output',
     'Read new output from a background process started by bash (background:true), and whether it is still running or has exited.',
     { id: str('The background process id, e.g. "bg_1" (from bash or bash_list).') },
     ['id']
   ),
-  fn('bash_kill', 'Stop a background process started by bash (background:true).', { id: str('The background process id, e.g. "bg_1".') }, ['id']),
-  fn('browser_open', 'Open the built-in browser to a URL.', { url: str('URL or bare host.') }, ['url']),
+  fn(
+    'bash_kill',
+    'Stop a background process started by bash (background:true).',
+    { id: str('The background process id, e.g. "bg_1".') },
+    ['id']
+  ),
+  fn('browser_open', 'Open the built-in browser to a URL.', { url: str('URL or bare host.') }, [
+    'url'
+  ]),
   fn('browser_screenshot', 'Screenshot the current browser page.', {}, []),
-  fn('browser_read', 'Read the current page HTML (optionally a CSS selector).', { selector: str('CSS selector.') }, []),
+  fn(
+    'browser_read',
+    'Read the current page HTML (optionally a CSS selector).',
+    { selector: str('CSS selector.') },
+    []
+  ),
   fn('browser_console', 'Read console logs/errors from the current page.', {}, []),
-  fn('browser_click', 'Click the first element matching a CSS selector on the current page.', { selector: str('CSS selector, e.g. "button[type=submit]" or "a.login".') }, ['selector']),
+  fn(
+    'browser_click',
+    'Click the first element matching a CSS selector on the current page.',
+    { selector: str('CSS selector, e.g. "button[type=submit]" or "a.login".') },
+    ['selector']
+  ),
   fn(
     'browser_scroll',
     'Scroll the current page — into a selector, or by direction.',
@@ -550,10 +588,25 @@ const BASE_SCHEMAS = [
     },
     []
   ),
-  fn('browser_type', 'Type text into an input/textarea/contenteditable matching a CSS selector.', { selector: str('CSS selector of the field.'), text: str('Text to type.') }, ['selector', 'text']),
+  fn(
+    'browser_type',
+    'Type text into an input/textarea/contenteditable matching a CSS selector.',
+    { selector: str('CSS selector of the field.'), text: str('Text to type.') },
+    ['selector', 'text']
+  ),
   fn('browser_tabs', 'List the open browser tabs (id, title, URL, and which is active).', {}, []),
-  fn('browser_new_tab', 'Open a new browser tab (optionally at a URL) and make it active.', { url: str('Optional URL or bare host.') }, []),
-  fn('browser_activate_tab', 'Switch to a browser tab by its id (ids come from browser_tabs).', { id: str('Tab id from browser_tabs.') }, ['id']),
+  fn(
+    'browser_new_tab',
+    'Open a new browser tab (optionally at a URL) and make it active.',
+    { url: str('Optional URL or bare host.') },
+    []
+  ),
+  fn(
+    'browser_activate_tab',
+    'Switch to a browser tab by its id (ids come from browser_tabs).',
+    { id: str('Tab id from browser_tabs.') },
+    ['id']
+  ),
   fn('browser_close', 'Close the built-in browser and end the current browsing session.', {}, []),
   fn(
     'loop_create',
@@ -566,8 +619,12 @@ const BASE_SCHEMAS = [
     ['name', 'prompt', 'interval_minutes']
   ),
   fn('loop_list', 'List the scheduled loops and whether each is running.', {}, []),
-  fn('loop_enable', 'Resume a paused loop by name or id.', { loop: str('Loop name or id.') }, ['loop']),
-  fn('loop_disable', 'Pause a running loop by name or id.', { loop: str('Loop name or id.') }, ['loop']),
+  fn('loop_enable', 'Resume a paused loop by name or id.', { loop: str('Loop name or id.') }, [
+    'loop'
+  ]),
+  fn('loop_disable', 'Pause a running loop by name or id.', { loop: str('Loop name or id.') }, [
+    'loop'
+  ]),
   fn('loop_remove', 'Delete a loop by name or id.', { loop: str('Loop name or id.') }, ['loop']),
   fn(
     'change_session_metadata',
@@ -610,14 +667,18 @@ const BASE_SCHEMAS = [
         description:
           '"add" (create/replace a server and connect it), "list" (show configured servers with status + tools), "reconnect" (refresh/retry a server), "enable"/"disable" (activate/deactivate), "remove" (delete).'
       },
-      id: str('A short unique name for the server, e.g. "filesystem" or "github". Required for every action except "list".'),
+      id: str(
+        'A short unique name for the server, e.g. "filesystem" or "github". Required for every action except "list".'
+      ),
       command: {
         type: 'array',
         items: { type: 'string' },
         description:
           'For a LOCAL (stdio) server on "add": the argv to spawn, e.g. ["npx","-y","@modelcontextprotocol/server-filesystem","/abs/dir"]. Provide EITHER command (local) OR url (remote).'
       },
-      url: str('For a REMOTE (HTTP) server on "add": the server URL. Provide EITHER url (remote) OR command (local).'),
+      url: str(
+        'For a REMOTE (HTTP) server on "add": the server URL. Provide EITHER url (remote) OR command (local).'
+      ),
       env: {
         type: 'object',
         description: 'Optional environment variables for a local server, e.g. {"API_KEY":"…"}.',
@@ -625,10 +686,13 @@ const BASE_SCHEMAS = [
       },
       headers: {
         type: 'object',
-        description: 'Optional HTTP headers for a remote server, e.g. {"Authorization":"Bearer …"}.',
+        description:
+          'Optional HTTP headers for a remote server, e.g. {"Authorization":"Bearer …"}.',
         additionalProperties: { type: 'string' }
       },
-      cwd: str('Optional working directory for a local server (relative paths resolve from the workspace).')
+      cwd: str(
+        'Optional working directory for a local server (relative paths resolve from the workspace).'
+      )
     },
     ['action']
   ),
@@ -649,7 +713,7 @@ const BASE_SCHEMAS = [
         'For action "install": where to fetch from — a GitHub "owner/repo" shorthand, a github.com repo/tree/blob URL, or a direct https URL to a SKILL.md. Installs every SKILL.md it finds (repo root + skills/).'
       ),
       description: str(
-        "A one-line summary of WHEN to use this skill. Stored in frontmatter and shown to the agent so it knows when to load the skill. Strongly recommended on create."
+        'A one-line summary of WHEN to use this skill. Stored in frontmatter and shown to the agent so it knows when to load the skill. Strongly recommended on create.'
       ),
       body: {
         type: 'string',
@@ -721,7 +785,11 @@ function schemasFor(tools: string[] | 'all', includeTask: boolean): ToolSchema[]
 const SKILL_SCHEMA = fn(
   SKILL_TOOL_NAME,
   SKILL_TOOL_DESCRIPTION,
-  { name: str('The exact name of the skill to load, from the available skills list in the system prompt.') },
+  {
+    name: str(
+      'The exact name of the skill to load, from the available skills list in the system prompt.'
+    )
+  },
   ['name']
 )
 
@@ -758,9 +826,21 @@ interface StreamDelta {
       content?: string
       reasoning_content?: string
       reasoning?: string
-      tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]
+      tool_calls?: {
+        index?: number
+        id?: string
+        function?: { name?: string; arguments?: string }
+      }[]
     }
   }[]
+  /** Final `usage` chunk when `stream_options.include_usage` is set (OpenAI-compat). */
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+    prompt_tokens_details?: { cached_tokens?: number }
+    completion_tokens_details?: { reasoning_tokens?: number }
+  }
 }
 
 export interface RunTurnOptions {
@@ -834,8 +914,19 @@ function sanitizeMessageToolIds(messages: OpenAiMessage[]): OpenAiMessage[] {
 
 /** Run one user turn: the tool-using agent loop (primary "build" agent) or a plain answer. */
 export async function runAgentTurn(opts: RunTurnOptions): Promise<void> {
-  const { providerId, model, messages, cwd, chatId, agentId, signal, emit, reasoning, reasoningEffort, contextLimit } =
-    opts
+  const {
+    providerId,
+    model,
+    messages,
+    cwd,
+    chatId,
+    agentId,
+    signal,
+    emit,
+    reasoning,
+    reasoningEffort,
+    contextLimit
+  } = opts
   const wire =
     providerId === 'github-copilot'
       ? 'openai-chat'
@@ -844,7 +935,10 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<void> {
   // the AI SDK path (anthropic/google). Azure/Bedrock still fall back to a plain
   // answer until their tool transports land.
   const toolCapable =
-    providerId === 'github-copilot' || wire === 'openai' || wire === 'openai-chat' || usesAiSdk(wire)
+    providerId === 'github-copilot' ||
+    wire === 'openai' ||
+    wire === 'openai-chat' ||
+    usesAiSdk(wire)
 
   // Resolve the chosen primary agent (Build by default). A subagent id or an
   // unknown id falls back to Build so a bad selection can't disable tools.
@@ -892,7 +986,15 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<void> {
   // the provider + model + workspace (and pick the right per-model prompt) and
   // layer the agent's own prompt (e.g. Plan mode); the renderer no longer sends
   // its own system message.
-  const systemText = buildSystemMessage(providerId, model, cwd ?? '', chatId, agent, mcpInfo, parentSkillInfo)
+  const systemText = buildSystemMessage(
+    providerId,
+    model,
+    cwd ?? '',
+    chatId,
+    agent,
+    mcpInfo,
+    parentSkillInfo
+  )
   const systemMessage: ChatMessage = { role: 'system', content: systemText }
 
   // No workspace, or a wire without tool support yet → plain streamed answer.
@@ -982,10 +1084,51 @@ interface LoopOptions {
   depth: number
 }
 
+/**
+ * Persist one model call's token usage, priced from the models.dev catalog.
+ * Best-effort: usage is ancillary to the turn, so a failure here (missing price,
+ * DB hiccup) must never break the run. `sessionId` may be a subagent's own chat.
+ */
+function recordCall(
+  providerId: string,
+  model: string,
+  sessionId: string | undefined,
+  usage: TokenUsage | null
+): void {
+  if (!usage) return
+  try {
+    const cost = usageCost(usage, modelCost(providerId, model))
+    repo.recordUsage({ chatId: sessionId ?? null, providerId, model, usage, cost })
+  } catch {
+    // ignore — never let usage accounting interfere with the actual turn
+  }
+}
+
 /** The shared agent loop: stream → run tools (incl. `task`) → repeat. Returns the final prose. */
 async function runLoop(o: LoopOptions): Promise<string> {
-  const { providerId, vision, model, convo, cwd, parentChatId, sessionId, browserKey, signal, emitTool, onText, onReasoning, tools, mcpTools, skillTools, skillInfo, readOnly, reasoning, effort, contextLimit, depth } =
-    o
+  const {
+    providerId,
+    vision,
+    model,
+    convo,
+    cwd,
+    parentChatId,
+    sessionId,
+    browserKey,
+    signal,
+    emitTool,
+    onText,
+    onReasoning,
+    tools,
+    mcpTools,
+    skillTools,
+    skillInfo,
+    readOnly,
+    reasoning,
+    effort,
+    contextLimit,
+    depth
+  } = o
   let lastText = ''
 
   // The tool list is normally fixed for the turn, but the `mcp` tool can connect a
@@ -1003,7 +1146,7 @@ async function runLoop(o: LoopOptions): Promise<string> {
   // finishes with prose (no tool calls) or the user stops it (signal aborts).
   for (;;) {
     if (signal.aborted) return lastText
-    const { text, toolCalls } = await streamTurn(
+    const { text, toolCalls, usage } = await streamTurn(
       providerId,
       vision,
       model,
@@ -1015,6 +1158,8 @@ async function runLoop(o: LoopOptions): Promise<string> {
       onText,
       onReasoning
     )
+    // Record this model call's usage/cost (subagents pass their own sessionId).
+    recordCall(providerId, model, sessionId, usage)
     if (text) lastText = text
     if (toolCalls.length === 0) return lastText // model finished with prose
 
@@ -1102,7 +1247,13 @@ async function runLoop(o: LoopOptions): Promise<string> {
         input = {}
       }
 
-      emitTool({ type: 'tool-start', callId: tc.id, tool: tc.name, title: toolTitle(tc.name, input), input })
+      emitTool({
+        type: 'tool-start',
+        callId: tc.id,
+        tool: tc.name,
+        title: toolTitle(tc.name, input),
+        input
+      })
       const result = await runTool(tc.name, input, {
         cwd,
         sessionId,
@@ -1178,8 +1329,26 @@ interface SubagentOptions {
 
 /** Spawn a subagent: a focused child run of the same loop, returned as a `task` result. */
 async function runSubagent(o: SubagentOptions): Promise<string> {
-  const { callId, input, providerId, vision, model, cwd, parentChatId, browserKey, readOnly, signal, emit, reasoning, effort, contextLimit, depth, mcpTools, skillTools, skillInfo } =
-    o
+  const {
+    callId,
+    input,
+    providerId,
+    vision,
+    model,
+    cwd,
+    parentChatId,
+    browserKey,
+    readOnly,
+    signal,
+    emit,
+    reasoning,
+    effort,
+    contextLimit,
+    depth,
+    mcpTools,
+    skillTools,
+    skillInfo
+  } = o
   const { description, prompt, subagentType, background } = input
   const fail = (msg: string): string => {
     emit({
@@ -1254,7 +1423,12 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
       try {
         const prose: string[] = []
         for (const p of parts) if (p.type === 'text' || p.type === 'reasoning') prose.push(p.text)
-        repo.addMessage({ chatId: subChatId, role: 'assistant', content: prose.join('\n').trim(), parts })
+        repo.addMessage({
+          chatId: subChatId,
+          role: 'assistant',
+          content: prose.join('\n').trim(),
+          parts
+        })
       } catch {
         // best-effort — never break the parent turn over sub-session persistence
       }
@@ -1292,6 +1466,9 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
           { role: 'user', content: prompt || description }
         ],
         cwd,
+        // Attribute the subagent's model calls to its own sub-session (or the
+        // parent when it wasn't persisted), so its spend still lands in totals.
+        sessionId: subChatId ?? parentChatId ?? undefined,
         // Inherit the parent's browser window so the project keeps ONE browser.
         browserKey,
         signal: runSignal,
@@ -1331,7 +1508,12 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
       title: `${agent.name}: ${description} (background)`,
       input: { description, prompt, subagent_type: subagentType, background: true }
     })
-    emit({ type: 'tool-end', callId, output: `Started "${description}" in the background.`, ok: true })
+    emit({
+      type: 'tool-end',
+      callId,
+      output: `Started "${description}" in the background.`,
+      ok: true
+    })
 
     // Its own signal — the launching turn ending must NOT cancel it (that's the
     // whole point). Session delete / app quit cancel it via the registry.
@@ -1435,7 +1617,7 @@ async function streamOnce(
   tools: ToolSchema[],
   onText: (delta: string) => void,
   onReasoning: (delta: string) => void
-): Promise<{ text: string; toolCalls: ToolCallAccum[] }> {
+): Promise<{ text: string; toolCalls: ToolCallAccum[]; usage: TokenUsage | null }> {
   // Anthropic/Google speak their own wire — route them through the AI SDK, which
   // handles their tool-calling. The return shape matches the OpenAI path below,
   // so the loop stays wire-agnostic. (Copilot is always openai-chat → SSE path.)
@@ -1484,7 +1666,10 @@ async function streamOnce(
     tools,
     tool_choice: 'auto',
     ...(reasoning && effort ? { reasoning_effort: effort } : {}),
-    stream: true
+    stream: true,
+    // Ask OpenAI-compatible providers for a final token-usage chunk. Providers
+    // that ignore it just don't send one — we fall back to an estimate below.
+    stream_options: { include_usage: true }
   })
   // Resolve a FRESH endpoint + auth on EVERY model call. For GitHub Copilot this
   // re-exchanges the short-lived Copilot token as it nears expiry, so a long
@@ -1499,22 +1684,79 @@ async function streamOnce(
   const res = await withCopilotRetry(providerId === 'github-copilot', send, signal)
   if (!res.ok || !res.body) {
     const body = await res.text().catch(() => '')
-    throw new ModelHttpError(res.status, `Model request failed (${res.status}). ${body.slice(0, 300)}`)
+    throw new ModelHttpError(
+      res.status,
+      `Model request failed (${res.status}). ${body.slice(0, 300)}`
+    )
   }
 
   let text = ''
   const calls: ToolCallAccum[] = []
+  let usage: TokenUsage | null = null
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  const finish = (): { text: string; toolCalls: ToolCallAccum[] } => {
+  // Fall back to a ~chars/4 estimate when the provider sends no usage chunk, so
+  // usage is captured regardless of provider (marked estimated=true downstream).
+  const estimateUsage = (): TokenUsage => ({
+    input: messages.reduce((n, m) => n + msgTokens(m), 0),
+    output: Math.ceil(text.length / 4),
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoning: 0,
+    estimated: true
+  })
+  const finish = (): { text: string; toolCalls: ToolCallAccum[]; usage: TokenUsage } => {
     const toolCalls = calls.filter(Boolean)
     toolCalls.forEach((c, i) => {
       // Hyphen, not underscore: the fallback id must itself satisfy the strict
       // tool_use.id pattern (see sanitizeToolCallId) so it survives replay as-is.
       if (!c.id) c.id = `call-${i}`
     })
-    return { text, toolCalls: toolCalls.filter((c) => c.name) }
+    return { text, toolCalls: toolCalls.filter((c) => c.name), usage: usage ?? estimateUsage() }
+  }
+
+  // Parse one SSE line. Returns true on the `[DONE]` sentinel so the caller can
+  // stop. Shared by the streaming loop and the final drain below so the last
+  // frame is handled identically whichever way the stream ends.
+  const handleLine = (line: string): boolean => {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('data:')) return false
+    const payload = trimmed.slice(5).trim()
+    if (payload === '[DONE]') return true
+    let json: StreamDelta
+    try {
+      json = JSON.parse(payload) as StreamDelta
+    } catch {
+      return false
+    }
+    // A usage chunk (final frame; its `choices` is usually empty) → real counts.
+    if (json.usage) {
+      const cached = json.usage.prompt_tokens_details?.cached_tokens ?? 0
+      usage = {
+        input: Math.max(0, (json.usage.prompt_tokens ?? 0) - cached),
+        output: json.usage.completion_tokens ?? 0,
+        cacheRead: cached,
+        cacheWrite: 0,
+        reasoning: json.usage.completion_tokens_details?.reasoning_tokens ?? 0,
+        estimated: false
+      }
+    }
+    const delta = json.choices?.[0]?.delta
+    const reasoningDelta = delta?.reasoning_content ?? delta?.reasoning
+    if (reasoningDelta) onReasoning(reasoningDelta)
+    if (delta?.content) {
+      text += delta.content
+      onText(delta.content)
+    }
+    for (const tcd of delta?.tool_calls ?? []) {
+      const i = tcd.index ?? 0
+      if (!calls[i]) calls[i] = { id: '', name: '', args: '' }
+      if (tcd.id) calls[i].id = tcd.id
+      if (tcd.function?.name) calls[i].name = tcd.function.name
+      if (tcd.function?.arguments) calls[i].args += tcd.function.arguments
+    }
+    return false
   }
 
   for (;;) {
@@ -1524,32 +1766,17 @@ async function streamOnce(
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
     for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed.startsWith('data:')) continue
-      const payload = trimmed.slice(5).trim()
-      if (payload === '[DONE]') return finish()
-      let json: StreamDelta
-      try {
-        json = JSON.parse(payload) as StreamDelta
-      } catch {
-        continue
-      }
-      const delta = json.choices?.[0]?.delta
-      const reasoningDelta = delta?.reasoning_content ?? delta?.reasoning
-      if (reasoningDelta) onReasoning(reasoningDelta)
-      if (delta?.content) {
-        text += delta.content
-        onText(delta.content)
-      }
-      for (const tcd of delta?.tool_calls ?? []) {
-        const i = tcd.index ?? 0
-        if (!calls[i]) calls[i] = { id: '', name: '', args: '' }
-        if (tcd.id) calls[i].id = tcd.id
-        if (tcd.function?.name) calls[i].name = tcd.function.name
-        if (tcd.function?.arguments) calls[i].args += tcd.function.arguments
-      }
+      if (handleLine(line)) return finish()
     }
   }
+  // Drain whatever the stream left buffered. Copilot's Anthropic proxy (and
+  // some OpenAI-compatible endpoints) close the socket right after the final
+  // `data:` frame WITHOUT a trailing newline or a `[DONE]` sentinel, so that
+  // last frame — the closing token(s) — never made it out of `buffer` and the
+  // reply looked "cut short". decode() with no args flushes any dangling
+  // multi-byte char too.
+  buffer += decoder.decode()
+  for (const line of buffer.split('\n')) handleLine(line)
   return finish()
 }
 

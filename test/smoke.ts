@@ -89,6 +89,8 @@ import {
   MODEL_FATAL_ATTEMPTS
 } from '../src/main/harness/agent'
 import { ModelHttpError } from '../src/main/services/llm'
+import { getUsageStats } from '../src/main/services/usage'
+import { consumeAiSdkStream } from '../src/main/services/aisdk'
 import { APICallError } from 'ai'
 import type { MessagePart } from '../src/shared/types'
 
@@ -135,13 +137,17 @@ async function main(): Promise<void> {
   repo.setActiveProvider('openai', 'gpt-test')
   check(
     'setActiveProvider persists',
-    repo.getSettings().activeProviderId === 'openai' && repo.getSettings().activeModel === 'gpt-test'
+    repo.getSettings().activeProviderId === 'openai' &&
+      repo.getSettings().activeModel === 'gpt-test'
   )
   check('reasoning effort default high', repo.getSettings().reasoningEffort === 'high')
   repo.setReasoningEffort('low')
   check('setReasoningEffort persists', repo.getSettings().reasoningEffort === 'low')
   repo.setReasoningEffort('max')
-  check('setReasoningEffort accepts the xhigh/max ladder', repo.getSettings().reasoningEffort === 'max')
+  check(
+    'setReasoningEffort accepts the xhigh/max ladder',
+    repo.getSettings().reasoningEffort === 'max'
+  )
   repo.setReasoningEffort('high')
   check('context limit default null', repo.getSettings().contextLimit === null)
   repo.setContextLimit(1_000_000)
@@ -157,7 +163,10 @@ async function main(): Promise<void> {
   // ---- chats / sessions ----
   const chat = repo.createChat({ title: 'smoke', kind: 'main', workspacePath: ws })
   check('createChat (main + workspace)', chat.kind === 'main' && chat.workspacePath === ws)
-  check('listChats contains it', repo.listChats().some((c) => c.id === chat.id))
+  check(
+    'listChats contains it',
+    repo.listChats().some((c) => c.id === chat.id)
+  )
   check('getChatWorkspace', repo.getChatWorkspace(chat.id) === ws)
   repo.renameChat(chat.id, 'renamed')
   check('renameChat', repo.listChats().find((c) => c.id === chat.id)?.title === 'renamed')
@@ -199,7 +208,10 @@ async function main(): Promise<void> {
       .filter((p) => p === pA || p === pB || p === pC)
       .map((p) => p.split(/[\\/]/).pop())
       .join()
-  check('new projects append at the bottom in creation order', projOrder() === 'proj-a,proj-b,proj-c')
+  check(
+    'new projects append at the bottom in creation order',
+    projOrder() === 'proj-a,proj-b,proj-c'
+  )
   // Creating another session in the FIRST project must not float it to the top.
   repo.createChat({ title: 'a2', kind: 'main', workspacePath: pA })
   check('a new session does not reorder its project', projOrder() === 'proj-a,proj-b,proj-c')
@@ -228,7 +240,10 @@ async function main(): Promise<void> {
       .filter((c) => c.workspacePath === p)
       .forEach((c) => repo.removeChat(c.id))
   )
-  check('all test projects cleaned up', repo.listProjectOrder().every((p) => p !== pA && p !== pB && p !== pC))
+  check(
+    'all test projects cleaned up',
+    repo.listProjectOrder().every((p) => p !== pA && p !== pB && p !== pC)
+  )
 
   repo.removeChat(rs1.id)
   repo.removeChat(rs2.id)
@@ -242,7 +257,10 @@ async function main(): Promise<void> {
     parentId: chat.id
   })
   check('createChat (sub + parentId)', sub.kind === 'sub' && sub.parentId === chat.id)
-  check('listSubchats returns the sub', repo.listSubchats(chat.id).some((c) => c.id === sub.id))
+  check(
+    'listSubchats returns the sub',
+    repo.listSubchats(chat.id).some((c) => c.id === sub.id)
+  )
   const tmpParent = repo.createChat({ title: 'tmp', kind: 'main', workspacePath: ws })
   const tmpSub = repo.createChat({ title: 'sub', kind: 'sub', parentId: tmpParent.id })
   repo.removeChat(tmpParent.id)
@@ -254,8 +272,14 @@ async function main(): Promise<void> {
   const busySub = repo.createChat({ title: 'busy sub', kind: 'sub', parentId: chat.id })
   repo.enqueue(busySub.id, 'follow-up')
   repo.pruneSubchats(chat.id)
-  check('pruneSubchats drops a queue-less sub', !repo.listSubchats(chat.id).some((c) => c.id === sub.id))
-  check('pruneSubchats keeps a queued sub', repo.listSubchats(chat.id).some((c) => c.id === busySub.id))
+  check(
+    'pruneSubchats drops a queue-less sub',
+    !repo.listSubchats(chat.id).some((c) => c.id === sub.id)
+  )
+  check(
+    'pruneSubchats keeps a queued sub',
+    repo.listSubchats(chat.id).some((c) => c.id === busySub.id)
+  )
 
   // ---- messages + ordered parts round-trip (v6) ----
   repo.addMessage({ chatId: chat.id, role: 'user', content: 'hi' })
@@ -283,11 +307,29 @@ async function main(): Promise<void> {
   // ---- queue (FIFO) ----
   const q1 = repo.enqueue(chat.id, 'q1')
   const q2 = repo.enqueue(chat.id, 'q2')
-  check('queue FIFO order', repo.listQueue(chat.id).map((x) => x.content).join() === 'q1,q2')
+  check(
+    'queue FIFO order',
+    repo
+      .listQueue(chat.id)
+      .map((x) => x.content)
+      .join() === 'q1,q2'
+  )
   repo.reorderQueue(chat.id, [q2.id, q1.id])
-  check('queue reorder', repo.listQueue(chat.id).map((x) => x.content).join() === 'q2,q1')
+  check(
+    'queue reorder',
+    repo
+      .listQueue(chat.id)
+      .map((x) => x.content)
+      .join() === 'q2,q1'
+  )
   repo.removeQueueItem(q1.id)
-  check('queue remove', repo.listQueue(chat.id).map((x) => x.content).join() === 'q2')
+  check(
+    'queue remove',
+    repo
+      .listQueue(chat.id)
+      .map((x) => x.content)
+      .join() === 'q2'
+  )
   const qImg = repo.enqueue(chat.id, 'with image', [
     { dataUrl: 'data:image/png;base64,iVBORw0KGgo=', mediaType: 'image/png', name: 'a.png' }
   ])
@@ -295,7 +337,106 @@ async function main(): Promise<void> {
     'queue stores images',
     repo.listQueue(chat.id).find((x) => x.id === qImg.id)?.images?.length === 1
   )
+  // Editing rewrites text + images in place, keeping the item's FIFO position.
+  const qEditPos = repo.listQueue(chat.id).findIndex((x) => x.id === qImg.id)
+  const qEdited = repo.updateQueueItem(qImg.id, 'edited text', [
+    { dataUrl: 'data:image/png;base64,AAAA', mediaType: 'image/png', name: 'b.png' },
+    { dataUrl: 'data:image/png;base64,BBBB', mediaType: 'image/png', name: 'c.png' }
+  ])
+  check('queue edit returns updated item', qEdited?.content === 'edited text')
+  check(
+    'queue edit persists text',
+    repo.listQueue(chat.id).find((x) => x.id === qImg.id)?.content === 'edited text'
+  )
+  check(
+    'queue edit updates images',
+    repo.listQueue(chat.id).find((x) => x.id === qImg.id)?.images?.length === 2
+  )
+  check(
+    'queue edit preserves position',
+    repo.listQueue(chat.id).findIndex((x) => x.id === qImg.id) === qEditPos
+  )
+  // Clearing images on edit drops them entirely (no empty array left behind).
+  repo.updateQueueItem(qImg.id, 'text only', [])
+  check(
+    'queue edit can clear images',
+    repo.listQueue(chat.id).find((x) => x.id === qImg.id)?.images === undefined
+  )
+  check('queue edit unknown id is a no-op', repo.updateQueueItem('missing-id', 'x') === undefined)
   repo.removeQueueItem(qImg.id)
+
+  // ---- usage / cost recording + rollup ----
+  check('usage empty before any record', repo.hasAnyUsage() === false)
+  const nowU = Date.now()
+  const rec1 = repo.recordUsage({
+    chatId: chat.id,
+    providerId: 'openai',
+    model: 'gpt-x',
+    usage: {
+      input: 1000,
+      output: 500,
+      cacheRead: 100,
+      cacheWrite: 0,
+      reasoning: 20,
+      estimated: false
+    },
+    cost: 0.03
+  })
+  check('usage record returns id + fields', !!rec1.id && rec1.input === 1000 && rec1.cost === 0.03)
+  check('usage record persists estimated flag', rec1.estimated === false)
+  repo.recordUsage({
+    chatId: chat.id,
+    providerId: 'anthropic',
+    model: 'claude-y',
+    usage: {
+      input: 3000,
+      output: 1500,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning: 0,
+      estimated: true
+    },
+    cost: 0.09
+  })
+  check('usage hasAnyUsage after record', repo.hasAnyUsage() === true)
+  const since = nowU - 60_000
+  const listed = repo.listUsageSince(since)
+  check('usage listUsageSince returns both rows', listed.length === 2)
+  check('usage listUsageSince newest-first', listed[0].createdAt >= listed[1].createdAt)
+  check(
+    'usage rounds fractional tokens',
+    repo.recordUsage({
+      chatId: null,
+      providerId: 'openai',
+      model: 'gpt-x',
+      usage: {
+        input: 10.7,
+        output: 0.2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoning: 0,
+        estimated: false
+      },
+      cost: 0
+    }).input === 11
+  )
+  // Service rollup (prices already baked into rows).
+  const uStats = getUsageStats()
+  check('usage stats overview has spend', uStats.overview.last30d.cost > 0.11)
+  check('usage stats has provider tabs', uStats.providers.length >= 2)
+  check('usage stats daily is 30 long', uStats.overview.daily.length === 30)
+  // Deleting a chat keeps its usage rows (chat_id SET NULL, not cascade).
+  const before = repo.listUsageSince(since).length
+  const throwaway = repo.createChat({ title: 'x', kind: 'main' })
+  repo.recordUsage({
+    chatId: throwaway.id,
+    providerId: 'openai',
+    model: 'gpt-x',
+    usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, reasoning: 0, estimated: false },
+    cost: 0.001
+  })
+  repo.removeChat(throwaway.id)
+  check('usage survives chat deletion', repo.listUsageSince(since).length === before + 1)
 
   // ---- compaction summary ----
   check('chat summary null by default', repo.getChat(chat.id)?.contextSummary === null)
@@ -313,10 +454,18 @@ async function main(): Promise<void> {
     'loop chat is kind=loop',
     repo.listChats().some((c) => c.id === loop.chatId && c.kind === 'loop')
   )
-  check('dueLoops includes enabled loop', repo.dueLoops(Date.now() + 1000).some((l) => l.id === loop.id))
+  check(
+    'dueLoops includes enabled loop',
+    repo.dueLoops(Date.now() + 1000).some((l) => l.id === loop.id)
+  )
   repo.appendLoopRun(loop.id, 'scheduled prompt', 'heartbeat reply')
   check('appendLoopRun posts into loop chat', repo.listMessages(loop.chatId).length === 2)
-  const projLoop = repo.createLoop({ name: 'P', prompt: 'go', intervalMinutes: 3, workspacePath: ws })
+  const projLoop = repo.createLoop({
+    name: 'P',
+    prompt: 'go',
+    intervalMinutes: 3,
+    workspacePath: ws
+  })
   check('createLoop scopes to a project workspace', repo.getChatWorkspace(projLoop.chatId) === ws)
   const dueBefore = repo.dueLoops(Date.now() + 1000).some((l) => l.id === projLoop.id)
   repo.markLoopRan(projLoop.id)
@@ -325,7 +474,10 @@ async function main(): Promise<void> {
 
   // ---- sessions status excludes loop chats ----
   const status = repo.listSessionsStatus()
-  check('listSessionsStatus includes the main session', status.some((s) => s.id === chat.id))
+  check(
+    'listSessionsStatus includes the main session',
+    status.some((s) => s.id === chat.id)
+  )
   check('listSessionsStatus excludes loop chats', !status.some((s) => s.id === loop.chatId))
   check('checkSession reports message count', repo.checkSession(chat.id)?.messageCount === 2)
 
@@ -349,7 +501,9 @@ async function main(): Promise<void> {
   const img = await run('read', { path: 'pixel.png' })
   check(
     'read image returns inline image',
-    img.ok && (img.image ?? '').startsWith('data:image/png;base64,') && img.output.startsWith('Read image'),
+    img.ok &&
+      (img.image ?? '').startsWith('data:image/png;base64,') &&
+      img.output.startsWith('Read image'),
     img.output
   )
   const list = await run('list', { path: '.' })
@@ -361,11 +515,23 @@ async function main(): Promise<void> {
 
   // ---- webfetch (offline-safe reject paths; no network needed) ----
   const badScheme = await run('webfetch', { url: 'file:///etc/passwd' })
-  check('webfetch rejects non-http scheme', !badScheme.ok && badScheme.output.includes('scheme'), badScheme.output)
+  check(
+    'webfetch rejects non-http scheme',
+    !badScheme.ok && badScheme.output.includes('scheme'),
+    badScheme.output
+  )
   const badUrl = await run('webfetch', { url: 'not a url' })
-  check('webfetch rejects a malformed url', !badUrl.ok && badUrl.output.toLowerCase().includes('valid'), badUrl.output)
+  check(
+    'webfetch rejects a malformed url',
+    !badUrl.ok && badUrl.output.toLowerCase().includes('valid'),
+    badUrl.output
+  )
   const emptyQuery = await run('websearch', { query: '' })
-  check('websearch rejects an empty query', !emptyQuery.ok && emptyQuery.output.includes('missing'), emptyQuery.output)
+  check(
+    'websearch rejects an empty query',
+    !emptyQuery.ok && emptyQuery.output.includes('missing'),
+    emptyQuery.output
+  )
 
   // ---- disk-backed tool-output store (Phase 9.3) ----
   const smallBound = await boundToolOutput('sess-1', 'call-small', 'a short result')
@@ -373,25 +539,46 @@ async function main(): Promise<void> {
   // >2000 lines trips the line bound while staying well under read's 100k char cap.
   const bigText = Array.from({ length: 2500 }, (_, i) => `line ${i}`).join('\n')
   const bigBound = await boundToolOutput('sess-1', 'call-big', bigText)
-  check('boundToolOutput previews oversized output', bigBound.length < bigText.length && bigBound.includes('truncated'))
+  check(
+    'boundToolOutput previews oversized output',
+    bigBound.length < bigText.length && bigBound.includes('truncated')
+  )
   const ptrMatch = bigBound.match(/saved to (\S+\.txt)/)
   const ptr = ptrMatch?.[1] ?? ''
-  check('boundToolOutput returns a file pointer', ptr.length > 0 && isManagedToolOutputPath(ptr), ptr)
+  check(
+    'boundToolOutput returns a file pointer',
+    ptr.length > 0 && isManagedToolOutputPath(ptr),
+    ptr
+  )
   check('spilled file lives under the managed root', ptr.startsWith(toolOutputRoot()))
   const full = await fs.readFile(ptr, 'utf8')
   check('spilled file holds the full output', full === bigText)
   // The model can read the pointer back via the read tool (managed dir is allowed).
   const readBack = await run('read', { path: ptr })
-  check('read tool can reach the spilled pointer', readBack.ok && readBack.output.includes('line 2499'), readBack.output)
+  check(
+    'read tool can reach the spilled pointer',
+    readBack.ok && readBack.output.includes('line 2499'),
+    readBack.output
+  )
   // A path outside both the workspace and the managed dir is still rejected.
   const escaped = await run('read', { path: path.join(tmp, 'outside.txt') })
   check('read still rejects non-managed absolute paths', !escaped.ok, escaped.output)
   await cleanupToolOutputs()
-  check('cleanupToolOutputs keeps fresh spills', await fs.readFile(ptr, 'utf8').then(() => true).catch(() => false))
+  check(
+    'cleanupToolOutputs keeps fresh spills',
+    await fs
+      .readFile(ptr, 'utf8')
+      .then(() => true)
+      .catch(() => false)
+  )
 
   const bashCmd = process.platform === 'win32' ? 'Write-Output roxy-bash-ok' : 'echo roxy-bash-ok'
   const bashr = await run('bash', { command: bashCmd })
-  check('bash tool runs in workspace', bashr.ok && bashr.output.includes('roxy-bash-ok'), bashr.output)
+  check(
+    'bash tool runs in workspace',
+    bashr.ok && bashr.output.includes('roxy-bash-ok'),
+    bashr.output
+  )
 
   // ---- background bash (long-running processes: dev servers / watchers) ----
   const bgCmd =
@@ -409,7 +596,11 @@ async function main(): Promise<void> {
     bgList.output
   )
   const bgOut = await run('bash_output', { id: bgId })
-  check('bash_output reads new output', bgOut.ok && bgOut.output.includes('roxy-bg-ok'), bgOut.output)
+  check(
+    'bash_output reads new output',
+    bgOut.ok && bgOut.output.includes('roxy-bg-ok'),
+    bgOut.output
+  )
   const bgKill = await run('bash_kill', { id: bgId })
   check('bash_kill stops the process', bgKill.ok, bgKill.output)
   check('bash_output rejects an unknown id', !(await run('bash_output', { id: 'bg_nope' })).ok)
@@ -485,72 +676,116 @@ async function main(): Promise<void> {
   }
 
   // ---- migration repair (two branches, two different "v14"s) ----
-  // The version is a POSITION, so a database that ran another branch's v14
-  // advanced past ours and never got the worktree columns — every worktree
-  // write then failed with "no such column: worktree_path". The reconcile step
-  // must fix that, be idempotent, and leave the other branch's tables alone.
+  // The schema version is an ARRAY POSITION, so when the usage-dashboard branch
+  // and the worktree branch each shipped a migration numbered v14, a database
+  // that applied one advanced past the other and would never run it. Both
+  // directions leave a DB that looks fully migrated with a schema object missing.
+  // The reconcile step must repair either, be idempotent, and lose no data.
   {
-    const brokenDir = path.join(tmp, 'broken-db')
-    await fs.mkdir(brokenDir, { recursive: true })
-    const brokenFile = path.join(brokenDir, 'roxy.db')
-    const broken = new Database(brokenFile)
-    for (let i = 0; i < 13; i++) broken.exec(MIGRATIONS[i] as string)
-    // Another branch's v14: a table of its own, not our columns.
-    broken.exec('CREATE TABLE usage (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);')
-    broken.pragma('user_version = 14')
-    // Our v15 then ran at position 14, skipping our v14 entirely.
-    broken.exec('ALTER TABLE chats ADD COLUMN worktree_pending TEXT')
-    broken.pragma('user_version = 15')
-    broken
-      .prepare(
+    /** Run the real ladder the way database.ts does. */
+    const runLadder = (db: InstanceType<typeof Database>): void => {
+      for (let v = db.pragma('user_version', { simple: true }) as number; v < MIGRATIONS.length; v++) {
+        const step = MIGRATIONS[v]
+        if (typeof step === 'string') db.exec(step)
+        else step(db)
+        db.pragma(`user_version = ${v + 1}`)
+      }
+    }
+    const colsOf = (db: InstanceType<typeof Database>): string[] =>
+      (db.prepare('PRAGMA table_info(chats)').all() as { name: string }[]).map((c) => c.name)
+    const tablesOf = (db: InstanceType<typeof Database>): string[] =>
+      (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(
+        (t) => t.name
+      )
+    /** Apply the first `upTo` migrations, then seed a session. */
+    const seeded = async (name: string, upTo: number): Promise<InstanceType<typeof Database>> => {
+      const dir = path.join(tmp, name)
+      await fs.mkdir(dir, { recursive: true })
+      const db = new Database(path.join(dir, 'roxy.db'))
+      for (let i = 0; i < upTo; i++) {
+        const step = MIGRATIONS[i]
+        if (typeof step === 'string') db.exec(step)
+        else step(db)
+      }
+      db.pragma(`user_version = ${upTo}`)
+      db.prepare(
         `INSERT INTO chats(id, title, kind, workspace_path, created_at, updated_at, sort_order)
          VALUES('mig1','pre-existing','main','/proj',1,1,1)`
-      )
-      .run()
-    const beforeCols = (broken.prepare('PRAGMA table_info(chats)').all() as { name: string }[]).map(
-      (c) => c.name
-    )
-    check('migration repro: the broken DB lacks worktree_path', !beforeCols.includes('worktree_path'))
-    broken.close()
+      ).run()
+      return db
+    }
 
-    // Re-open and run the ladder, exactly as database.ts does.
-    const repaired = new Database(brokenFile)
-    for (let v = repaired.pragma('user_version', { simple: true }) as number; v < MIGRATIONS.length; v++) {
-      const step = MIGRATIONS[v]
-      if (typeof step === 'string') repaired.exec(step)
-      else step(repaired)
-      repaired.pragma(`user_version = ${v + 1}`)
-    }
-    const afterCols = (repaired.prepare('PRAGMA table_info(chats)').all() as { name: string }[]).map(
-      (c) => c.name
-    )
-    for (const col of ['worktree_path', 'branch', 'dev_port', 'worktree_pending']) {
-      check(`migration repair: adds ${col}`, afterCols.includes(col))
-    }
-    // The write from the bug report.
-    repaired.prepare('UPDATE chats SET worktree_path = ? WHERE id = ?').run('/wt', 'mig1')
-    const row = repaired.prepare('SELECT * FROM chats WHERE id = ?').get('mig1') as {
-      title: string
-      worktree_path: string | null
-    }
-    check('migration repair: the failing write now succeeds', row.worktree_path === '/wt')
-    check('migration repair: existing rows survive', row.title === 'pre-existing')
-    const tables = (
-      repaired.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
-    ).map((t) => t.name)
-    check("migration repair: the other branch's table is untouched", tables.includes('usage'))
+    // Direction 1: took the usage v14, so the worktree columns were skipped.
+    // This is the state from the bug report ("no such column: worktree_path").
+    {
+      const db = await seeded('mig-usage-first', 14)
+      db.exec('ALTER TABLE chats ADD COLUMN worktree_pending TEXT')
+      db.pragma('user_version = 15')
+      check('migration repro: worktree columns are missing', !colsOf(db).includes('worktree_path'))
+      let reported = ''
+      try {
+        db.prepare('UPDATE chats SET worktree_path = ? WHERE id = ?').run('/wt', 'mig1')
+      } catch (e) {
+        reported = e instanceof Error ? e.message : String(e)
+      }
+      check('migration repro: reproduces the reported error',
+        /no such column: worktree_path/.test(reported), reported)
 
-    // Idempotent — it runs on healthy databases too.
-    const reconcile = MIGRATIONS[MIGRATIONS.length - 1]
-    if (typeof reconcile !== 'string') {
-      reconcile(repaired)
-      reconcile(repaired)
+      runLadder(db)
+      for (const col of ['worktree_path', 'branch', 'dev_port', 'worktree_pending']) {
+        check(`migration repair (usage-first): adds ${col}`, colsOf(db).includes(col))
+      }
+      db.prepare('UPDATE chats SET worktree_path = ? WHERE id = ?').run('/wt', 'mig1')
+      const row = db.prepare('SELECT * FROM chats WHERE id = ?').get('mig1') as {
+        title: string
+        worktree_path: string | null
+      }
+      check('migration repair (usage-first): the failing write now succeeds', row.worktree_path === '/wt')
+      check('migration repair (usage-first): existing rows survive', row.title === 'pre-existing')
+      check('migration repair (usage-first): usage table intact', tablesOf(db).includes('usage'))
+
+      // Idempotent — the reconcile step also runs on healthy databases.
+      const reconcile = MIGRATIONS[MIGRATIONS.length - 1]
+      if (typeof reconcile !== 'string') {
+        reconcile(db)
+        reconcile(db)
+      }
+      check('migration repair: re-running changes nothing',
+        (db.prepare('SELECT worktree_path AS w FROM chats WHERE id = ?').get('mig1') as { w: string }).w ===
+          '/wt')
+      check('migration repair: no duplicate columns',
+        colsOf(db).filter((c) => c === 'worktree_path').length === 1)
+      db.close()
     }
-    const twice = repaired.prepare('SELECT * FROM chats WHERE id = ?').get('mig1') as {
-      worktree_path: string | null
+
+    // Direction 2: took the WORKTREE v14 (the pre-merge build), so the usage
+    // table was skipped — the cost dashboard would crash instead.
+    {
+      const db = await seeded('mig-worktree-first', 13)
+      db.exec(`ALTER TABLE chats ADD COLUMN worktree_path TEXT;
+               ALTER TABLE chats ADD COLUMN branch TEXT;
+               ALTER TABLE chats ADD COLUMN dev_port INTEGER;`)
+      db.pragma('user_version = 14')
+      db.exec('ALTER TABLE chats ADD COLUMN worktree_pending TEXT')
+      db.pragma('user_version = 15')
+      check('migration repro: the usage table is missing', !tablesOf(db).includes('usage'))
+
+      runLadder(db)
+      check('migration repair (worktree-first): creates the usage table', tablesOf(db).includes('usage'))
+      check('migration repair (worktree-first): keeps the worktree columns',
+        colsOf(db).includes('worktree_path'))
+      check('migration repair (worktree-first): existing rows survive',
+        (db.prepare('SELECT title FROM chats WHERE id = ?').get('mig1') as { title: string }).title ===
+          'pre-existing')
+      // The usage table must be the REAL one, not a stub.
+      const usageCols = (
+        db.prepare('PRAGMA table_info(usage)').all() as { name: string }[]
+      ).map((c) => c.name)
+      for (const col of ['provider_id', 'model', 'cost', 'estimated']) {
+        check(`migration repair (worktree-first): usage.${col} exists`, usageCols.includes(col))
+      }
+      db.close()
     }
-    check('migration repair: re-running changes nothing', twice.worktree_path === '/wt')
-    repaired.close()
   }
 
   // ---- sessionCwd (the one working-directory resolver) ----
@@ -1020,11 +1255,20 @@ async function main(): Promise<void> {
       description: 'crunch',
       subagentType: 'general'
     })
-    check('registerBackgroundJob returns a job id', typeof j1.jobId === 'string' && j1.jobId.length > 0)
+    check(
+      'registerBackgroundJob returns a job id',
+      typeof j1.jobId === 'string' && j1.jobId.length > 0
+    )
     check('a fresh background job signal is not aborted', j1.signal.aborted === false)
-    check('listRunningBackgroundJobs shows the running job', listRunningBackgroundJobs(s1).length === 1)
+    check(
+      'listRunningBackgroundJobs shows the running job',
+      listRunningBackgroundJobs(s1).length === 1
+    )
     check('hasActiveBackgroundJobs true while running', hasActiveBackgroundJobs(s1) === true)
-    check('activeBackgroundSubChatIds tracks the sub session', activeBackgroundSubChatIds().has('sub_1'))
+    check(
+      'activeBackgroundSubChatIds tracks the sub session',
+      activeBackgroundSubChatIds().has('sub_1')
+    )
 
     // A second session's job is isolated; a null subChatId is never tracked for pruning.
     const j2 = registerBackgroundJob({
@@ -1045,21 +1289,43 @@ async function main(): Promise<void> {
     // Cancel aborts the signal, but the job stays listed until its run settles + finishes.
     cancelBackgroundJob(j1.jobId)
     check('cancelBackgroundJob aborts the job signal', j1.signal.aborted === true)
-    check('a cancelled job is still listed until it finishes', listRunningBackgroundJobs(s1).length === 1)
+    check(
+      'a cancelled job is still listed until it finishes',
+      listRunningBackgroundJobs(s1).length === 1
+    )
 
     // Finishing removes it from the registry, freeing its sub session to be pruned.
     finishBackgroundJob(j1.jobId, 'error')
     check('finishBackgroundJob removes the job', listRunningBackgroundJobs(s1).length === 0)
     check('a finished job frees its sub session', !activeBackgroundSubChatIds().has('sub_1'))
-    check('hasActiveBackgroundJobs false after the last job finishes', hasActiveBackgroundJobs(s1) === false)
-    check('finishing an unknown job id is a no-op', (finishBackgroundJob('nope', 'completed'), true))
+    check(
+      'hasActiveBackgroundJobs false after the last job finishes',
+      hasActiveBackgroundJobs(s1) === false
+    )
+    check(
+      'finishing an unknown job id is a no-op',
+      (finishBackgroundJob('nope', 'completed'), true)
+    )
 
     // cancelSessionBackgroundJobs aborts every job belonging to a session.
     finishBackgroundJob(j2.jobId, 'completed')
-    const a = registerBackgroundJob({ sessionId: s1, subChatId: 'sub_a', description: 'a', subagentType: 'general' })
-    const b = registerBackgroundJob({ sessionId: s1, subChatId: 'sub_b', description: 'b', subagentType: 'general' })
+    const a = registerBackgroundJob({
+      sessionId: s1,
+      subChatId: 'sub_a',
+      description: 'a',
+      subagentType: 'general'
+    })
+    const b = registerBackgroundJob({
+      sessionId: s1,
+      subChatId: 'sub_b',
+      description: 'b',
+      subagentType: 'general'
+    })
     cancelSessionBackgroundJobs(s1)
-    check('cancelSessionBackgroundJobs aborts every session signal', a.signal.aborted && b.signal.aborted)
+    check(
+      'cancelSessionBackgroundJobs aborts every session signal',
+      a.signal.aborted && b.signal.aborted
+    )
 
     // _resetBackgroundJobs clears everything (test isolation).
     _resetBackgroundJobs()
@@ -1092,7 +1358,10 @@ async function main(): Promise<void> {
       registerMock()
       const f = path.join(ws, 'sample.mocklsp')
 
-      check('lsp: configuredServerId matches the registered server', lsp.configuredServerId(f) === 'mocklsp')
+      check(
+        'lsp: configuredServerId matches the registered server',
+        lsp.configuredServerId(f) === 'mocklsp'
+      )
 
       // A clean document produces no diagnostics (didOpen → empty push).
       await fs.writeFile(f, 'all good here', 'utf8')
@@ -1102,11 +1371,18 @@ async function main(): Promise<void> {
       // Editing in a fault surfaces an error (warm client → didChange → error push).
       await fs.writeFile(f, 'this line is BROKEN now', 'utf8')
       const dirty = await withTimeout(lsp.diagnostics(f), 15_000, 'lsp dirty')
-      check('lsp: error surfaced after edit', dirty.length === 1 && dirty[0].severity === 1, JSON.stringify(dirty))
+      check(
+        'lsp: error surfaced after edit',
+        dirty.length === 1 && dirty[0].severity === 1,
+        JSON.stringify(dirty)
+      )
       check('lsp: diagnostic carries the message', (dirty[0]?.message ?? '').includes('BROKEN'))
 
       const block = await withTimeout(lsp.diagnosticsBlock(f, ws), 15_000, 'lsp block')
-      check('lsp: diagnosticsBlock renders an errors block', block.includes('<diagnostics') && block.includes('ERROR'))
+      check(
+        'lsp: diagnosticsBlock renders an errors block',
+        block.includes('<diagnostics') && block.includes('ERROR')
+      )
       check('lsp: diagnosticsBlock path is workspace-relative', block.includes('sample.mocklsp'))
 
       // Fixing the fault clears diagnostics on the next edit (warm didChange).
@@ -1155,28 +1431,55 @@ async function main(): Promise<void> {
       const echoName = names.find((n) => n.endsWith('__echo')) ?? ''
       const boomName = names.find((n) => n.endsWith('__boom')) ?? ''
       check('mcp: discovered both tools', schemas.length === 2, names.join(','))
-      check('mcp: tool names are mcp-namespaced', echoName.startsWith('mcp__mockmcp__') && boomName.startsWith('mcp__mockmcp__'))
+      check(
+        'mcp: tool names are mcp-namespaced',
+        echoName.startsWith('mcp__mockmcp__') && boomName.startsWith('mcp__mockmcp__')
+      )
       check('mcp: isMcpTool routes namespaced names', isMcpTool(echoName) && !isMcpTool('read'))
       check('mcp: mcpToolTitle renders server · tool', mcpToolTitle(echoName) === 'mockmcp · echo')
 
       const echoSchema = schemas.find((s) => (s.function as { name: string }).name === echoName)
-      check('mcp: tool schema is a function schema with parameters', !!echoSchema && echoSchema.type === 'function' && typeof echoSchema.function === 'object')
+      check(
+        'mcp: tool schema is a function schema with parameters',
+        !!echoSchema && echoSchema.type === 'function' && typeof echoSchema.function === 'object'
+      )
 
       const summaries = mcpServerSummaries()
-      check('mcp: server summary reports connected + tools', summaries.length === 1 && summaries[0].status === 'connected' && summaries[0].tools.includes('echo'))
+      check(
+        'mcp: server summary reports connected + tools',
+        summaries.length === 1 &&
+          summaries[0].status === 'connected' &&
+          summaries[0].tools.includes('echo')
+      )
       const instr = mcpInstructions()
       check('mcp: instructions blurb mentions the server', !!instr && instr.includes('mockmcp'))
 
-      const echoRes = await withTimeout(callMcpTool(echoName, { message: 'hi' }), 15_000, 'mcp echo')
-      check('mcp: callMcpTool(echo) returns text', echoRes.ok && echoRes.output.includes('echo: hi'), echoRes.output)
+      const echoRes = await withTimeout(
+        callMcpTool(echoName, { message: 'hi' }),
+        15_000,
+        'mcp echo'
+      )
+      check(
+        'mcp: callMcpTool(echo) returns text',
+        echoRes.ok && echoRes.output.includes('echo: hi'),
+        echoRes.output
+      )
       const boomRes = await withTimeout(callMcpTool(boomName, {}), 15_000, 'mcp boom')
-      check('mcp: callMcpTool(boom) surfaces isError → ok:false', !boomRes.ok && boomRes.output.includes('boom'), boomRes.output)
+      check(
+        'mcp: callMcpTool(boom) surfaces isError → ok:false',
+        !boomRes.ok && boomRes.output.includes('boom'),
+        boomRes.output
+      )
       const missRes = await callMcpTool('mcp__mockmcp__nope', {})
       check('mcp: unknown MCP tool → ok:false (never throws)', !missRes.ok)
 
       // The real dispatch seam: runTool's default case routes namespaced names.
       const viaRunTool = await withTimeout(run(echoName, { message: 'hey' }), 15_000, 'mcp runTool')
-      check('mcp: runTool dispatches MCP tools', viaRunTool.ok && viaRunTool.output.includes('echo: hey'), viaRunTool.output)
+      check(
+        'mcp: runTool dispatches MCP tools',
+        viaRunTool.ok && viaRunTool.output.includes('echo: hey'),
+        viaRunTool.output
+      )
 
       // Dispose drops the tools + closes the child; a stale call degrades cleanly.
       await disposeConnection('mockmcp')
@@ -1191,10 +1494,22 @@ async function main(): Promise<void> {
       // Workspace scoping: the pool is process-global, but a turn only sees the
       // servers in ITS record set (so workspace A's `.roxy/mcp.json` server can't
       // leak into workspace B's chat).
-      check('mcp: schemas scoped to own ids include the server', mcpToolSchemas(new Set(['mockmcp'])).length === 2)
-      check('mcp: schemas scoped to other ids exclude the server', mcpToolSchemas(new Set(['other'])).length === 0)
-      check('mcp: instructions scoped to other ids are empty', mcpInstructions(new Set(['other'])) === undefined)
-      check('mcp: summaries scoped to other ids are empty', mcpServerSummaries(new Set(['other'])).length === 0)
+      check(
+        'mcp: schemas scoped to own ids include the server',
+        mcpToolSchemas(new Set(['mockmcp'])).length === 2
+      )
+      check(
+        'mcp: schemas scoped to other ids exclude the server',
+        mcpToolSchemas(new Set(['other'])).length === 0
+      )
+      check(
+        'mcp: instructions scoped to other ids are empty',
+        mcpInstructions(new Set(['other'])) === undefined
+      )
+      check(
+        'mcp: summaries scoped to other ids are empty',
+        mcpServerSummaries(new Set(['other'])).length === 0
+      )
 
       // Race guard: disposing DURING the connect window must not resurrect a zombie
       // pool entry (the in-flight connect self-tears-down instead of committing).
@@ -1202,7 +1517,10 @@ async function main(): Promise<void> {
       const inflight = ensureMcpConnected([rec], ws) // do NOT await — connect is mid-flight
       await disposeConnection('mockmcp') // tear down before connectOne resolves
       await withTimeout(inflight, 20_000, 'mcp inflight')
-      check('mcp: dispose during connect leaves no resurrected connection', mcpToolSchemas().length === 0)
+      check(
+        'mcp: dispose during connect leaves no resurrected connection',
+        mcpToolSchemas().length === 0
+      )
       await withTimeout(ensureMcpConnected([rec], ws), 20_000, 'mcp reconnect after race')
       check('mcp: pool still healthy after a mid-connect dispose', mcpToolSchemas().length === 2)
 
@@ -1219,9 +1537,15 @@ async function main(): Promise<void> {
         'utf8'
       )
       const wsRecords = loadWorkspaceMcpServers(ws)
-      check('mcp: loadWorkspaceMcpServers parses .roxy/mcp.json', wsRecords.length === 1 && wsRecords[0].id === 'wsserver')
+      check(
+        'mcp: loadWorkspaceMcpServers parses .roxy/mcp.json',
+        wsRecords.length === 1 && wsRecords[0].id === 'wsserver'
+      )
       check('mcp: workspace `disabled:true` → enabled:false', wsRecords[0].enabled === false)
-      check('mcp: loader never throws on a missing file', loadWorkspaceMcpServers(path.join(ws, 'nope')).length === 0)
+      check(
+        'mcp: loader never throws on a missing file',
+        loadWorkspaceMcpServers(path.join(ws, 'nope')).length === 0
+      )
 
       await shutdownAllMcp()
       check('mcp: shutdownAllMcp clears the pool', mcpToolSchemas().length === 0)
@@ -1230,39 +1554,106 @@ async function main(): Promise<void> {
       // ---- the `mcp` MANAGEMENT tool (add/list/enable/disable/reconnect/remove) ----
       // Drives the agent-facing tool through runTool end-to-end against the real DB
       // + the mock server: add → connect → use in the same flow → toggle → remove.
-      const mcpCmd = { action: 'add', id: 'toolmcp', command: [process.execPath, mockPath], env: { ELECTRON_RUN_AS_NODE: '1' } }
+      const mcpCmd = {
+        action: 'add',
+        id: 'toolmcp',
+        command: [process.execPath, mockPath],
+        env: { ELECTRON_RUN_AS_NODE: '1' }
+      }
       const added = await withTimeout(run('mcp', mcpCmd), 20_000, 'mcp tool add')
-      check('mcp tool: add connects the server and names its tools', added.ok && added.output.includes('mcp__toolmcp__echo'), added.output)
-      check('mcp tool: add persists the server to the DB', repo.listMcpServers().some((r) => r.id === 'toolmcp'))
+      check(
+        'mcp tool: add connects the server and names its tools',
+        added.ok && added.output.includes('mcp__toolmcp__echo'),
+        added.output
+      )
+      check(
+        'mcp tool: add persists the server to the DB',
+        repo.listMcpServers().some((r) => r.id === 'toolmcp')
+      )
       // This is what runLoop calls to rebuild the live tool list mid-turn:
-      check('mcp tool: added server is immediately in the scoped schemas (usable same turn)', mcpToolSchemas(new Set(['toolmcp'])).length === 2)
+      check(
+        'mcp tool: added server is immediately in the scoped schemas (usable same turn)',
+        mcpToolSchemas(new Set(['toolmcp'])).length === 2
+      )
 
       const listedRes = await run('mcp', { action: 'list' })
-      check('mcp tool: list shows the server as connected', listedRes.ok && listedRes.output.includes('toolmcp') && listedRes.output.includes('connected'), listedRes.output)
+      check(
+        'mcp tool: list shows the server as connected',
+        listedRes.ok &&
+          listedRes.output.includes('toolmcp') &&
+          listedRes.output.includes('connected'),
+        listedRes.output
+      )
 
       // The payoff: a tool the agent just added is callable through the same runTool.
-      const usedAdded = await withTimeout(run('mcp__toolmcp__echo', { message: 'viatool' }), 15_000, 'mcp added echo')
-      check('mcp tool: a just-added server\'s tool is callable', usedAdded.ok && usedAdded.output.includes('echo: viatool'), usedAdded.output)
+      const usedAdded = await withTimeout(
+        run('mcp__toolmcp__echo', { message: 'viatool' }),
+        15_000,
+        'mcp added echo'
+      )
+      check(
+        "mcp tool: a just-added server's tool is callable",
+        usedAdded.ok && usedAdded.output.includes('echo: viatool'),
+        usedAdded.output
+      )
 
-      const disabled = await withTimeout(run('mcp', { action: 'disable', id: 'toolmcp' }), 15_000, 'mcp tool disable')
-      check('mcp tool: disable disconnects + drops its schemas', disabled.ok && mcpToolSchemas().length === 0)
-      check('mcp tool: disable persists enabled=false', repo.listMcpServers().find((r) => r.id === 'toolmcp')?.enabled === false)
+      const disabled = await withTimeout(
+        run('mcp', { action: 'disable', id: 'toolmcp' }),
+        15_000,
+        'mcp tool disable'
+      )
+      check(
+        'mcp tool: disable disconnects + drops its schemas',
+        disabled.ok && mcpToolSchemas().length === 0
+      )
+      check(
+        'mcp tool: disable persists enabled=false',
+        repo.listMcpServers().find((r) => r.id === 'toolmcp')?.enabled === false
+      )
 
-      const enabled = await withTimeout(run('mcp', { action: 'enable', id: 'toolmcp' }), 20_000, 'mcp tool enable')
-      check('mcp tool: enable reconnects the server', enabled.ok && mcpToolSchemas(new Set(['toolmcp'])).length === 2, enabled.output)
+      const enabled = await withTimeout(
+        run('mcp', { action: 'enable', id: 'toolmcp' }),
+        20_000,
+        'mcp tool enable'
+      )
+      check(
+        'mcp tool: enable reconnects the server',
+        enabled.ok && mcpToolSchemas(new Set(['toolmcp'])).length === 2,
+        enabled.output
+      )
 
-      const reconnected = await withTimeout(run('mcp', { action: 'reconnect', id: 'toolmcp' }), 20_000, 'mcp tool reconnect')
-      check('mcp tool: reconnect refreshes the connection', reconnected.ok && mcpToolSchemas(new Set(['toolmcp'])).length === 2, reconnected.output)
+      const reconnected = await withTimeout(
+        run('mcp', { action: 'reconnect', id: 'toolmcp' }),
+        20_000,
+        'mcp tool reconnect'
+      )
+      check(
+        'mcp tool: reconnect refreshes the connection',
+        reconnected.ok && mcpToolSchemas(new Set(['toolmcp'])).length === 2,
+        reconnected.output
+      )
 
-      const removed = await withTimeout(run('mcp', { action: 'remove', id: 'toolmcp' }), 15_000, 'mcp tool remove')
-      check('mcp tool: remove deletes from DB + drops schemas', removed.ok && !repo.listMcpServers().some((r) => r.id === 'toolmcp') && mcpToolSchemas().length === 0)
+      const removed = await withTimeout(
+        run('mcp', { action: 'remove', id: 'toolmcp' }),
+        15_000,
+        'mcp tool remove'
+      )
+      check(
+        'mcp tool: remove deletes from DB + drops schemas',
+        removed.ok &&
+          !repo.listMcpServers().some((r) => r.id === 'toolmcp') &&
+          mcpToolSchemas().length === 0
+      )
 
       // Input validation — every bad call degrades to ok:false, never throws.
       const noAction = await run('mcp', {})
       check('mcp tool: missing action → ok:false', !noAction.ok)
       const noConfig = await run('mcp', { action: 'add', id: 'incomplete' })
       check('mcp tool: add without command/url → ok:false', !noConfig.ok)
-      check('mcp tool: a failed add did not persist a broken server', !repo.listMcpServers().some((r) => r.id === 'incomplete'))
+      check(
+        'mcp tool: a failed add did not persist a broken server',
+        !repo.listMcpServers().some((r) => r.id === 'incomplete')
+      )
       const ghost = await run('mcp', { action: 'reconnect', id: 'ghost' })
       check('mcp tool: reconnect an unknown server → ok:false', !ghost.ok)
       const bogus = await run('mcp', { action: 'frobnicate', id: 'toolmcp' })
@@ -1292,23 +1683,51 @@ async function main(): Promise<void> {
       // Workspace fixture: frontmatter-named + folder-named + bare-file skills, a
       // companion file, and a name clash across .roxy/.claude roots.
       await fs.mkdir(w('.roxy/skills/demo/scripts'), { recursive: true })
-      await fs.writeFile(w('.roxy/skills/demo/SKILL.md'), '---\nname: demokit\ndescription: Workspace demo skill\n---\n# Demo\nUse scripts/run.sh.\n', 'utf8')
+      await fs.writeFile(
+        w('.roxy/skills/demo/SKILL.md'),
+        '---\nname: demokit\ndescription: Workspace demo skill\n---\n# Demo\nUse scripts/run.sh.\n',
+        'utf8'
+      )
       await fs.writeFile(w('.roxy/skills/demo/scripts/run.sh'), 'echo hi\n', 'utf8')
-      await fs.writeFile(w('.roxy/skills/notes.md'), '---\ndescription: Bare single-file skill\n---\nNotes body.\n', 'utf8')
+      await fs.writeFile(
+        w('.roxy/skills/notes.md'),
+        '---\ndescription: Bare single-file skill\n---\nNotes body.\n',
+        'utf8'
+      )
       await fs.mkdir(w('.claude/skills/greet'), { recursive: true })
-      await fs.writeFile(w('.claude/skills/greet/SKILL.md'), '---\ndescription: Says hello\n---\nHello!\n', 'utf8')
+      await fs.writeFile(
+        w('.claude/skills/greet/SKILL.md'),
+        '---\ndescription: Says hello\n---\nHello!\n',
+        'utf8'
+      )
       await fs.mkdir(w('.roxy/skills/dup'), { recursive: true })
-      await fs.writeFile(w('.roxy/skills/dup/SKILL.md'), '---\ndescription: roxy wins\n---\nR\n', 'utf8')
+      await fs.writeFile(
+        w('.roxy/skills/dup/SKILL.md'),
+        '---\ndescription: roxy wins\n---\nR\n',
+        'utf8'
+      )
       await fs.mkdir(w('.claude/skills/dup'), { recursive: true })
-      await fs.writeFile(w('.claude/skills/dup/SKILL.md'), '---\ndescription: claude loses\n---\nC\n', 'utf8')
+      await fs.writeFile(
+        w('.claude/skills/dup/SKILL.md'),
+        '---\ndescription: claude loses\n---\nC\n',
+        'utf8'
+      )
 
       // Global fixture (under the isolated home): one that clashes with the workspace
       // (must lose) and one global-only (must be discovered).
       if (globalActive) {
         await fs.mkdir(path.join(skHome, '.roxy/skills/demokit'), { recursive: true })
-        await fs.writeFile(path.join(skHome, '.roxy/skills/demokit/SKILL.md'), '---\ndescription: global demokit (should lose)\n---\nG\n', 'utf8')
+        await fs.writeFile(
+          path.join(skHome, '.roxy/skills/demokit/SKILL.md'),
+          '---\ndescription: global demokit (should lose)\n---\nG\n',
+          'utf8'
+        )
         await fs.mkdir(path.join(skHome, '.roxy/skills/awscli'), { recursive: true })
-        await fs.writeFile(path.join(skHome, '.roxy/skills/awscli/SKILL.md'), '---\ndescription: Global AWS skill\n---\nAWS\n', 'utf8')
+        await fs.writeFile(
+          path.join(skHome, '.roxy/skills/awscli/SKILL.md'),
+          '---\ndescription: Global AWS skill\n---\nAWS\n',
+          'utf8'
+        )
       }
 
       _resetSkillsForTests()
@@ -1317,19 +1736,44 @@ async function main(): Promise<void> {
       check('skills: frontmatter name wins over folder name', by.has('demokit') && !by.has('demo'))
       check('skills: discovers a folder-named SKILL.md', by.get('greet')?.source === 'workspace')
       check('skills: discovers a bare <name>.md', by.has('notes'))
-      check('skills: results sorted by name', found.map((s) => s.name).join() === [...found.map((s) => s.name)].sort().join())
-      check('skills: .roxy beats .claude on a name clash', by.get('dup')?.description === 'roxy wins')
+      check(
+        'skills: results sorted by name',
+        found.map((s) => s.name).join() === [...found.map((s) => s.name)].sort().join()
+      )
+      check(
+        'skills: .roxy beats .claude on a name clash',
+        by.get('dup')?.description === 'roxy wins'
+      )
       if (globalActive) {
         check('skills: discovers global skills', by.get('awscli')?.source === 'global')
-        check('skills: workspace overrides a same-named global', by.get('demokit')?.source === 'workspace' && by.get('demokit')?.description === 'Workspace demo skill')
+        check(
+          'skills: workspace overrides a same-named global',
+          by.get('demokit')?.source === 'workspace' &&
+            by.get('demokit')?.description === 'Workspace demo skill'
+        )
       }
 
       const instr = await skillInstructions(ws)
-      check('skills: instructions block lists discovered skills', !!instr && instr.includes('<available_skills>') && instr.includes('demokit') && instr.includes('greet'))
+      check(
+        'skills: instructions block lists discovered skills',
+        !!instr &&
+          instr.includes('<available_skills>') &&
+          instr.includes('demokit') &&
+          instr.includes('greet')
+      )
 
       const loaded = await loadSkill('demokit', ws)
-      check('skills: loadSkill returns body + base dir', loaded.ok && loaded.output.includes('Use scripts/run.sh') && loaded.output.includes('Base directory'))
-      check('skills: loadSkill samples companion files (relative)', loaded.output.includes('<skill_files>') && loaded.output.includes('<file>scripts/run.sh</file>'))
+      check(
+        'skills: loadSkill returns body + base dir',
+        loaded.ok &&
+          loaded.output.includes('Use scripts/run.sh') &&
+          loaded.output.includes('Base directory')
+      )
+      check(
+        'skills: loadSkill samples companion files (relative)',
+        loaded.output.includes('<skill_files>') &&
+          loaded.output.includes('<file>scripts/run.sh</file>')
+      )
 
       // Symlink hardening: a symlinked file whose real path escapes the skill dir
       // must NOT be listed (no out-of-dir path leaked into the model context).
@@ -1338,32 +1782,57 @@ async function main(): Promise<void> {
         await fs.writeFile(outside, 'TOPSECRET', 'utf8')
         await fs.symlink(outside, w('.roxy/skills/demo/secret.txt'))
         const linked = await loadSkill('demokit', ws)
-        check('skills: symlinked file escaping the skill dir is not listed', linked.ok && !linked.output.includes('secret.txt') && !linked.output.includes('TOPSECRET'))
+        check(
+          'skills: symlinked file escaping the skill dir is not listed',
+          linked.ok && !linked.output.includes('secret.txt') && !linked.output.includes('TOPSECRET')
+        )
       } catch {
         check('skills: symlink hardening (skipped — symlinks unsupported here)', true)
       }
       const loadedBare = await loadSkill('notes', ws)
-      check('skills: a bare-file skill has no <skill_files>', loadedBare.ok && !loadedBare.output.includes('<skill_files>'))
+      check(
+        'skills: a bare-file skill has no <skill_files>',
+        loadedBare.ok && !loadedBare.output.includes('<skill_files>')
+      )
       const loadedCI = await loadSkill('DEMOKIT', ws)
       check('skills: loadSkill is case-insensitive', loadedCI.ok)
       const loadedMiss = await loadSkill('nope', ws)
-      check('skills: unknown skill → ok:false with a list', !loadedMiss.ok && loadedMiss.output.includes('Available skills'))
+      check(
+        'skills: unknown skill → ok:false with a list',
+        !loadedMiss.ok && loadedMiss.output.includes('Available skills')
+      )
 
       const viaRun = await run('skill', { name: 'demokit' })
-      check('skills: runTool dispatches the skill tool', viaRun.ok && viaRun.output.includes('<skill_content'))
+      check(
+        'skills: runTool dispatches the skill tool',
+        viaRun.ok && viaRun.output.includes('<skill_content')
+      )
 
       // Cache invalidation: a newly-added skill is only seen after a refresh.
-      await fs.writeFile(w('.roxy/skills/fresh.md'), '---\ndescription: Added later\n---\nX\n', 'utf8')
-      check('skills: discovery is cached (new file not seen yet)', !(await listSkills(ws)).some((s) => s.name === 'fresh'))
+      await fs.writeFile(
+        w('.roxy/skills/fresh.md'),
+        '---\ndescription: Added later\n---\nX\n',
+        'utf8'
+      )
+      check(
+        'skills: discovery is cached (new file not seen yet)',
+        !(await listSkills(ws)).some((s) => s.name === 'fresh')
+      )
       refreshSkills(ws)
-      check('skills: refreshSkills re-scans', (await listSkills(ws)).some((s) => s.name === 'fresh'))
+      check(
+        'skills: refreshSkills re-scans',
+        (await listSkills(ws)).some((s) => s.name === 'fresh')
+      )
 
       // Kill switch.
       process.env.ROXY_SKILLS = '0'
       _resetSkillsForTests()
       check('skills: ROXY_SKILLS=0 disables discovery', (await listSkills(ws)).length === 0)
       const disabledLoad = await loadSkill('demokit', ws)
-      check('skills: ROXY_SKILLS=0 disables the tool', !disabledLoad.ok && disabledLoad.output.toLowerCase().includes('disabled'))
+      check(
+        'skills: ROXY_SKILLS=0 disables the tool',
+        !disabledLoad.ok && disabledLoad.output.toLowerCase().includes('disabled')
+      )
     } finally {
       if (prevHome === undefined) delete process.env.HOME
       else process.env.HOME = prevHome
@@ -1374,7 +1843,6 @@ async function main(): Promise<void> {
       _resetSkillsForTests()
     }
   }
-
 
   // ---- Portable config export/import (backup skills + MCP to another machine) ----
   // Drives the REAL buildExport/applyImport against an isolated global home + the
@@ -1399,7 +1867,11 @@ async function main(): Promise<void> {
           '---\nname: backupme\ndescription: Backup me\n---\nBody here. Use scripts/go.sh.\n',
           'utf8'
         )
-        await fs.writeFile(path.join(pHome, '.roxy/skills/backupme/scripts/go.sh'), 'echo go\n', 'utf8')
+        await fs.writeFile(
+          path.join(pHome, '.roxy/skills/backupme/scripts/go.sh'),
+          'echo go\n',
+          'utf8'
+        )
         await fs.writeFile(
           path.join(pHome, '.roxy/skills/solo.md'),
           '---\ndescription: Bare solo skill\n---\nSolo body.\n',
@@ -1409,19 +1881,39 @@ async function main(): Promise<void> {
 
         const exported = await exportGlobalSkills()
         const byName = new Map(exported.map((s) => [s.name, s]))
-        check('portable(app): export finds the folder + bare skills', byName.has('backupme') && byName.has('solo'))
-        check('portable(app): folder skill carries its companion file', (byName.get('backupme')?.files.length ?? 0) === 2)
+        check(
+          'portable(app): export finds the folder + bare skills',
+          byName.has('backupme') && byName.has('solo')
+        )
+        check(
+          'portable(app): folder skill carries its companion file',
+          (byName.get('backupme')?.files.length ?? 0) === 2
+        )
         check(
           'portable(app): bare skill is normalized to a SKILL.md file',
           byName.get('solo')?.files.some((f) => f.path.toLowerCase() === 'skill.md') === true
         )
 
         // Seed MCP rows, then build the whole export via the service (skills + DB).
-        repo.upsertMcpServer({ id: 'port-fs', config: { type: 'local', command: ['npx', 'srv'] }, enabled: true })
-        repo.upsertMcpServer({ id: 'port-remote', config: { type: 'remote', url: 'https://p.example/mcp' }, enabled: false })
+        repo.upsertMcpServer({
+          id: 'port-fs',
+          config: { type: 'local', command: ['npx', 'srv'] },
+          enabled: true
+        })
+        repo.upsertMcpServer({
+          id: 'port-remote',
+          config: { type: 'remote', url: 'https://p.example/mcp' },
+          enabled: false
+        })
         const built = await buildExport()
-        check('portable(app): buildExport counts skills + servers', built.skills >= 2 && built.mcpServers >= 2)
-        check('portable(app): buildExport text is a valid bundle', parseBundle(built.text).ok === true)
+        check(
+          'portable(app): buildExport counts skills + servers',
+          built.skills >= 2 && built.mcpServers >= 2
+        )
+        check(
+          'portable(app): buildExport text is a valid bundle',
+          parseBundle(built.text).ok === true
+        )
 
         // Wipe both sides, then restore from the exported text.
         await fs.rm(path.join(pHome, '.roxy/skills'), { recursive: true, force: true })
@@ -1432,21 +1924,31 @@ async function main(): Promise<void> {
 
         const applied = await applyImport(built.text)
         check('portable(app): applyImport reports ok', applied.ok === true)
-        check('portable(app): applyImport restored the skills', applied.skills.some((s) => s.name === 'backupme'))
+        check(
+          'portable(app): applyImport restored the skills',
+          applied.skills.some((s) => s.name === 'backupme')
+        )
         check(
           'portable(app): applyImport restored the servers',
-          applied.mcpServers.some((s) => s.id === 'port-fs') && applied.mcpServers.some((s) => s.id === 'port-remote')
+          applied.mcpServers.some((s) => s.id === 'port-fs') &&
+            applied.mcpServers.some((s) => s.id === 'port-remote')
         )
 
         // Verify the files + DB rows really came back.
         const restoredSkill = await fs
           .readFile(path.join(pHome, '.roxy/skills/backupme/SKILL.md'), 'utf8')
           .catch(() => '')
-        check('portable(app): restored SKILL.md content matches', restoredSkill.includes('Body here.'))
+        check(
+          'portable(app): restored SKILL.md content matches',
+          restoredSkill.includes('Body here.')
+        )
         const restoredCompanion = await fs
           .readFile(path.join(pHome, '.roxy/skills/backupme/scripts/go.sh'), 'utf8')
           .catch(() => '')
-        check('portable(app): restored companion file matches', restoredCompanion.includes('echo go'))
+        check(
+          'portable(app): restored companion file matches',
+          restoredCompanion.includes('echo go')
+        )
         const remote = repo.listMcpServers().find((r) => r.id === 'port-remote')
         check(
           'portable(app): restored a disabled remote server',
@@ -1455,27 +1957,43 @@ async function main(): Promise<void> {
 
         // Re-importing overwrites (replaced=true), never duplicates.
         const again = await applyImport(built.text)
-        check('portable(app): re-import marks skills replaced', again.skills.find((s) => s.name === 'backupme')?.replaced === true)
-        check('portable(app): re-import marks servers replaced', again.mcpServers.find((s) => s.id === 'port-fs')?.replaced === true)
+        check(
+          'portable(app): re-import marks skills replaced',
+          again.skills.find((s) => s.name === 'backupme')?.replaced === true
+        )
+        check(
+          'portable(app): re-import marks servers replaced',
+          again.mcpServers.find((s) => s.id === 'port-fs')?.replaced === true
+        )
 
         // A malformed bundle is a graceful, structured failure.
         const bad = await applyImport('{ not a bundle }')
-        check('portable(app): applyImport rejects junk without throwing', bad.ok === false && !!bad.error)
+        check(
+          'portable(app): applyImport rejects junk without throwing',
+          bad.ok === false && !!bad.error
+        )
 
         // importGlobalSkills refuses a path escaping the skill folder.
         const escaped = await importGlobalSkills([
           {
             name: 'evil',
             files: [
-              { path: 'SKILL.md', dataBase64: Buffer.from('---\nname: evil\n---\nx', 'utf8').toString('base64') },
+              {
+                path: 'SKILL.md',
+                dataBase64: Buffer.from('---\nname: evil\n---\nx', 'utf8').toString('base64')
+              },
               { path: '../pwn.sh', dataBase64: Buffer.from('bad', 'utf8').toString('base64') }
             ]
           }
         ])
-        check('portable(app): import writes the skill but drops the escaping path', escaped.installed.some((s) => s.name === 'evil'))
+        check(
+          'portable(app): import writes the skill but drops the escaping path',
+          escaped.installed.some((s) => s.name === 'evil')
+        )
         check(
           'portable(app): the escaping companion was not written',
-          !existsSync(path.join(pHome, '.roxy/skills/pwn.sh')) && !existsSync(path.join(tmp, 'pwn.sh'))
+          !existsSync(path.join(pHome, '.roxy/skills/pwn.sh')) &&
+            !existsSync(path.join(tmp, 'pwn.sh'))
         )
 
         // Clean up DB rows this block created.
@@ -1521,32 +2039,49 @@ async function main(): Promise<void> {
 
       // the `skill` tool can load what we just created
       const loaded = await run('skill', { name: SN })
-      check('skill_manage: created skill loads via the skill tool', loaded.ok && loaded.output.includes(MARK))
+      check(
+        'skill_manage: created skill loads via the skill tool',
+        loaded.ok && loaded.output.includes(MARK)
+      )
 
       // duplicate create is refused
       const dup = await run('skill_manage', { action: 'create', name: SN, body: 'x' })
       check('skill_manage: duplicate create → ok:false', !dup.ok)
 
       // edit description only → body preserved
-      const edited = await run('skill_manage', { action: 'edit', name: SN, description: 'second desc' })
+      const edited = await run('skill_manage', {
+        action: 'edit',
+        name: SN,
+        description: 'second desc'
+      })
       check('skill_manage: edit returns ok', edited.ok)
       const afterEdit = (await listSkills(ws)).find((s) => s.name === SN)
       check('skill_manage: edit changed the description', afterEdit?.description === 'second desc')
       const reloaded = await run('skill', { name: SN })
-      check('skill_manage: edit preserved the omitted body', reloaded.ok && reloaded.output.includes(MARK))
+      check(
+        'skill_manage: edit preserved the omitted body',
+        reloaded.ok && reloaded.output.includes(MARK)
+      )
 
       // list action surfaces it
       const listed = await run('skill_manage', { action: 'list' })
       check('skill_manage: list includes the skill', listed.ok && listed.output.includes(SN))
 
       // synonyms: op/add + content alias
-      const viaSyn = await run('skill_manage', { op: 'add', name: 'smokesyn', content: 'body via content alias' })
+      const viaSyn = await run('skill_manage', {
+        op: 'add',
+        name: 'smokesyn',
+        content: 'body via content alias'
+      })
       check('skill_manage: op/add + content alias works', viaSyn.ok)
       await run('skill_manage', { action: 'remove', name: 'smokesyn' })
 
       // remove deletes it
       const removed = await run('skill_manage', { action: 'remove', name: SN })
-      check('skill_manage: remove returns ok+removed', removed.ok && removed.output.includes('Removed'))
+      check(
+        'skill_manage: remove returns ok+removed',
+        removed.ok && removed.output.includes('Removed')
+      )
       check(
         'skill_manage: removed skill is gone',
         !(await listSkills(ws)).some((s) => s.name === SN)
@@ -1564,7 +2099,10 @@ async function main(): Promise<void> {
       const unknown = await run('skill_manage', { action: 'frobnicate', name: 'x' })
       check('skill_manage: unknown action → ok:false', !unknown.ok)
       const missRm = await run('skill_manage', { action: 'remove', name: 'does-not-exist-xyz' })
-      check('skill_manage: remove nonexistent → friendly ok', missRm.ok && /no skill/i.test(missRm.output))
+      check(
+        'skill_manage: remove nonexistent → friendly ok',
+        missRm.ok && /no skill/i.test(missRm.output)
+      )
     } finally {
       if (prevDisabled === undefined) delete process.env.ROXY_SKILLS
       else process.env.ROXY_SKILLS = prevDisabled
@@ -1590,7 +2128,11 @@ async function main(): Promise<void> {
       size,
       download_url: `${RAWBASE}/acme/${repo}/HEAD/${p}`
     })
-    const ghDir = (p: string): Record<string, unknown> => ({ type: 'dir', name: path.posix.basename(p), path: p })
+    const ghDir = (p: string): Record<string, unknown> => ({
+      type: 'dir',
+      name: path.posix.basename(p),
+      path: p
+    })
     // Contents API tree, keyed by "owner/repo" then repo-relative dir path.
     const contents: Record<string, Record<string, unknown[]>> = {
       'acme/skills': {
@@ -1634,23 +2176,44 @@ async function main(): Promise<void> {
 
     try {
       // 1) Repo install (owner/repo shorthand) → finds skills/hello + companion file.
-      const res = await installSkillFromSource('acme/skills', { cwd: ws, scope: 'workspace', fetchImpl: fakeFetch })
-      check('skill install: repo install ok', res.ok && res.installed.some((s) => s.name === 'hello'))
+      const res = await installSkillFromSource('acme/skills', {
+        cwd: ws,
+        scope: 'workspace',
+        fetchImpl: fakeFetch
+      })
+      check(
+        'skill install: repo install ok',
+        res.ok && res.installed.some((s) => s.name === 'hello')
+      )
       const helloMd = path.join(ws, '.roxy/skills/hello/SKILL.md')
       check('skill install: wrote SKILL.md', existsSync(helloMd))
-      check('skill install: wrote companion file', existsSync(path.join(ws, '.roxy/skills/hello/scripts/run.sh')))
+      check(
+        'skill install: wrote companion file',
+        existsSync(path.join(ws, '.roxy/skills/hello/scripts/run.sh'))
+      )
       refreshSkills(ws)
       const found = await listSkills(ws)
-      check('skill install: installed skill is discovered', found.some((s) => s.name === 'hello'))
+      check(
+        'skill install: installed skill is discovered',
+        found.some((s) => s.name === 'hello')
+      )
       const loaded = await loadSkill('hello', ws)
-      check('skill install: installed skill loads with companions', loaded.ok && loaded.output.includes('Run scripts/run.sh') && loaded.output.includes('run.sh'))
+      check(
+        'skill install: installed skill loads with companions',
+        loaded.ok &&
+          loaded.output.includes('Run scripts/run.sh') &&
+          loaded.output.includes('run.sh')
+      )
 
       // 2) Direct blob URL to a SKILL.md → installs that one skill (via its folder).
       const blob = await installSkillFromSource(
         'https://github.com/acme/skills/blob/main/skills/hello/SKILL.md',
         { cwd: ws, scope: 'workspace', fetchImpl: fakeFetch }
       )
-      check('skill install: blob URL installs the skill', blob.ok && blob.installed[0]?.name === 'hello')
+      check(
+        'skill install: blob URL installs the skill',
+        blob.ok && blob.installed[0]?.name === 'hello'
+      )
 
       // 3) Direct raw SKILL.md URL → bare install using its frontmatter name.
       const raw = await installSkillFromSource(`${RAWBASE}/acme/solo/main/solo/SKILL.md`, {
@@ -1658,28 +2221,61 @@ async function main(): Promise<void> {
         scope: 'workspace',
         fetchImpl: fakeFetch
       })
-      check('skill install: raw .md URL installs (frontmatter name)', raw.ok && raw.installed[0]?.name === 'solo')
-      check('skill install: raw install wrote canonical SKILL.md', existsSync(path.join(ws, '.roxy/skills/solo/SKILL.md')))
+      check(
+        'skill install: raw .md URL installs (frontmatter name)',
+        raw.ok && raw.installed[0]?.name === 'solo'
+      )
+      check(
+        'skill install: raw install wrote canonical SKILL.md',
+        existsSync(path.join(ws, '.roxy/skills/solo/SKILL.md'))
+      )
 
       // 4) A repo with no SKILL.md → friendly ok:false (never throws).
-      const empty = await installSkillFromSource('acme/empty', { cwd: ws, scope: 'workspace', fetchImpl: fakeFetch })
-      check('skill install: no SKILL.md → ok:false', !empty.ok && /no skill\.?md/i.test(empty.error ?? ''))
+      const empty = await installSkillFromSource('acme/empty', {
+        cwd: ws,
+        scope: 'workspace',
+        fetchImpl: fakeFetch
+      })
+      check(
+        'skill install: no SKILL.md → ok:false',
+        !empty.ok && /no skill\.?md/i.test(empty.error ?? '')
+      )
 
       // 5) Unsupported source (GitLab) → ok:false with a reason, no fetch.
-      const gitlab = await installSkillFromSource('https://gitlab.com/o/r', { cwd: ws, scope: 'workspace', fetchImpl: fakeFetch })
-      check('skill install: unsupported source → ok:false', !gitlab.ok && /gitlab/i.test(gitlab.error ?? ''))
+      const gitlab = await installSkillFromSource('https://gitlab.com/o/r', {
+        cwd: ws,
+        scope: 'workspace',
+        fetchImpl: fakeFetch
+      })
+      check(
+        'skill install: unsupported source → ok:false',
+        !gitlab.ok && /gitlab/i.test(gitlab.error ?? '')
+      )
 
       // 6) 404 source → friendly message, never throws.
-      const missing = await installSkillFromSource('acme/nope', { cwd: ws, scope: 'workspace', fetchImpl: fakeFetch })
+      const missing = await installSkillFromSource('acme/nope', {
+        cwd: ws,
+        scope: 'workspace',
+        fetchImpl: fakeFetch
+      })
       check('skill install: 404 source → friendly ok:false', !missing.ok && !!missing.error)
 
       // 7) Through runTool('skill_manage', install) using the test fetch seam.
       _setInstallFetchForTests(fakeFetch)
       const viaTool = await run('skill_manage', { action: 'install', source: 'acme/skills' })
-      check('skill install: skill_manage install dispatches via runTool', viaTool.ok && viaTool.output.includes('Installed') && viaTool.output.includes('hello'))
+      check(
+        'skill install: skill_manage install dispatches via runTool',
+        viaTool.ok && viaTool.output.includes('Installed') && viaTool.output.includes('hello')
+      )
       // create-with-source-and-no-body is treated as an install (forgiving routing).
-      const viaCreate = await run('skill_manage', { action: 'create', source: `${RAWBASE}/acme/solo/main/solo/SKILL.md` })
-      check('skill install: create+source (no body) routes to install', viaCreate.ok && viaCreate.output.includes('Installed'))
+      const viaCreate = await run('skill_manage', {
+        action: 'create',
+        source: `${RAWBASE}/acme/solo/main/solo/SKILL.md`
+      })
+      check(
+        'skill install: create+source (no body) routes to install',
+        viaCreate.ok && viaCreate.output.includes('Installed')
+      )
       const noSource = await run('skill_manage', { action: 'install' })
       check('skill install: install without source → ok:false', !noSource.ok)
     } finally {
@@ -1716,7 +2312,9 @@ async function main(): Promise<void> {
     check(
       'browser_screenshot returns an inline image + saves a file',
       headlessCapture ||
-        (Boolean(shot.image) && shot.image!.startsWith('data:image/') && shot.output.includes('.roxy')),
+        (Boolean(shot.image) &&
+          shot.image!.startsWith('data:image/') &&
+          shot.output.includes('.roxy')),
       headlessCapture ? '(skipped: headless has no capturable surface)' : shot.output
     )
     const con = await withTimeout(run('browser_console', {}), 15_000, 'browser_console')
@@ -1806,11 +2404,15 @@ async function main(): Promise<void> {
         isNonRetryableModelError(
           new ModelHttpError(400, 'Your credit balance is too low to access the Anthropic API.')
         ) &&
-        isNonRetryableModelError(apiErr(429, '{"type":"error","error":{"code":"insufficient_quota"}}'))
+        isNonRetryableModelError(
+          apiErr(429, '{"type":"error","error":{"code":"insufficient_quota"}}')
+        )
     )
     check(
       'isNonRetryableModelError: a plain rate-limit / 5xx / network blip is NOT billing',
-      !isNonRetryableModelError(new ModelHttpError(429, 'Rate limit reached, please try again in 2s')) &&
+      !isNonRetryableModelError(
+        new ModelHttpError(429, 'Rate limit reached, please try again in 2s')
+      ) &&
         !isNonRetryableModelError(new ModelHttpError(503, 'upstream temporarily unavailable')) &&
         !isNonRetryableModelError(new Error('ECONNRESET: socket hang up'))
     )
@@ -1852,7 +2454,7 @@ async function main(): Promise<void> {
 
     // streamTurn orchestration — fake the model call + skip the real backoff.
     const noDelay = async (): Promise<void> => {}
-    const ok = { text: 'done', toolCalls: [] as never[] }
+    const ok = { text: 'done', toolCalls: [] as never[], usage: null }
     const call = (
       signal: AbortSignal,
       deps: {
@@ -2002,6 +2604,63 @@ async function main(): Promise<void> {
       }
       const r = await call(ac.signal, { runOnce, delay: noDelay })
       check('streamTurn is a no-op when already aborted', r.text === '' && calls === 0)
+    }
+
+    // ---- AI SDK usage capture (Claude/Gemini report tokens in `finish`) ----
+    {
+      async function* parts(): AsyncGenerator<{
+        type: string
+        text?: string
+        totalUsage?: Record<string, number>
+      }> {
+        yield { type: 'text-delta', text: 'hi' }
+        yield {
+          type: 'finish',
+          // AI SDK's inputTokens INCLUDES cached; consume splits them out.
+          totalUsage: {
+            inputTokens: 1000,
+            outputTokens: 200,
+            cachedInputTokens: 300,
+            reasoningTokens: 50
+          }
+        }
+      }
+      const ac = new AbortController()
+      const out = await consumeAiSdkStream(
+        parts(),
+        ac.signal,
+        () => {},
+        () => {}
+      )
+      check(
+        'aisdk: captures real usage from finish',
+        out.usage !== null && out.usage.estimated === false
+      )
+      check(
+        'aisdk: splits cached out of input',
+        out.usage?.input === 700 && out.usage?.cacheRead === 300
+      )
+      check(
+        'aisdk: maps output + reasoning',
+        out.usage?.output === 200 && out.usage?.reasoning === 50
+      )
+    }
+    {
+      // No finish/usage frame → consume returns null (streamViaAiSdk estimates upstream).
+      async function* parts(): AsyncGenerator<{ type: string; text?: string }> {
+        yield { type: 'text-delta', text: 'hello world' }
+      }
+      const ac = new AbortController()
+      const out = await consumeAiSdkStream(
+        parts(),
+        ac.signal,
+        () => {},
+        () => {}
+      )
+      check(
+        'aisdk: usage null when provider omits finish',
+        out.usage === null && out.text === 'hello world'
+      )
     }
   } catch (e) {
     check('overnight resilience (streamTurn)', false, e instanceof Error ? e.message : String(e))

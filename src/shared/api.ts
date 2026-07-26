@@ -6,6 +6,7 @@ import type {
   AddMessageInput,
   AppSettings,
   AppVersions,
+  ActivityStats,
   Chat,
   ConnectedProvider,
   ConnectProviderInput,
@@ -19,6 +20,7 @@ import type {
   SessionKind,
   ToolDiff,
   ToolResult,
+  UsageStats,
   WorktreeIntent
 } from './types'
 import type { McpServerConfig } from './mcp'
@@ -223,9 +225,22 @@ export interface LlmResult {
 export type LlmEvent =
   | { type: 'text'; delta: string }
   | { type: 'reasoning'; delta: string }
-  | { type: 'tool-start'; callId: string; tool: string; title?: string; input?: Record<string, unknown> }
+  | {
+      type: 'tool-start'
+      callId: string
+      tool: string
+      title?: string
+      input?: Record<string, unknown>
+    }
   | { type: 'tool-delta'; callId: string; chunk: string }
-  | { type: 'tool-end'; callId: string; output: string; ok: boolean; image?: string; diff?: ToolDiff }
+  | {
+      type: 'tool-end'
+      callId: string
+      output: string
+      ok: boolean
+      image?: string
+      diff?: ToolDiff
+    }
 
 export interface LlmDelta {
   requestId: string
@@ -256,6 +271,20 @@ export interface ModelInfo {
   contextLimit?: number
   /** Max output tokens, when known. */
   outputLimit?: number
+  /** USD price per 1M tokens (from models.dev), when known — powers cost math. */
+  cost?: ModelCost
+}
+
+/** USD price per 1,000,000 tokens, split by kind (as models.dev reports it). */
+export interface ModelCost {
+  /** Fresh input (prompt) tokens. */
+  input?: number
+  /** Output (completion) tokens. */
+  output?: number
+  /** Cache-read (cached input) tokens — usually far cheaper than `input`. */
+  cacheRead?: number
+  /** Cache-write tokens. */
+  cacheWrite?: number
 }
 
 /** Navigation state of the Roxy browser, for the URL-bar toolbar. */
@@ -342,6 +371,21 @@ export interface RemoteStartInput {
   sessionId: string
 }
 
+/**
+ * A streamed step of a phone-driven turn, pushed to the desktop renderer (via
+ * `remote:delta`) so the PC mirrors the reply token-by-token — exactly like a
+ * local turn's `LlmDelta` — instead of only reloading from disk when it ends.
+ * Tagged with `sessionId` (not a requestId) since the renderer keys the live
+ * mirror by chat, and a phone turn isn't tied to a local llm request.
+ *
+ * `turn` frames bracket the stream so the desktop knows precisely when to open
+ * the live bubble and when to drop it (queue edits also bump `remote:state`, so
+ * turn boundaries can't be inferred from the rev alone).
+ */
+export type RemoteDelta =
+  | { sessionId: string; kind: 'event'; event: LlmEvent }
+  | { sessionId: string; kind: 'turn'; state: 'running' | 'idle' }
+
 /** Outcome of exporting the portable config bundle (skills + MCP servers). */
 export interface ConfigExportResult {
   /** True when a file was written; false when the user cancelled the dialog. */
@@ -371,7 +415,6 @@ export interface ConfigImportResult {
   summary: string
   error?: string
 }
-
 
 export interface RoxyApi {
   settings: {
@@ -486,6 +529,16 @@ export interface RoxyApi {
     remove(id: string): Promise<void>
     /** Reorder a chat's queue; `ids` is the full queue front-to-back. */
     reorder(chatId: string, ids: string[]): Promise<void>
+    /** Edit a queued item in place — new text + images, same queue position. */
+    update(id: string, content: string, images?: QueueImage[]): Promise<QueueItem | undefined>
+  }
+  usage: {
+    /** The token-usage + cost dashboard payload for the last 30 days. */
+    stats(): Promise<UsageStats>
+  }
+  activity: {
+    /** Per-day agent activity (assistant turns) for the Settings contribution graph. */
+    stats(): Promise<ActivityStats>
   }
   llm: {
     /** Stream a completion; text deltas arrive via onDelta. Resolves when done. */
@@ -570,5 +623,11 @@ export interface RoxyApi {
     status(): Promise<RemoteState>
     /** Subscribe to sharing status changes; returns an unsubscribe fn. */
     onState(callback: (state: RemoteState) => void): () => void
+    /**
+     * Subscribe to streamed events from a phone-driven turn, so the desktop can
+     * mirror the reply live (token-by-token) instead of only on turn end.
+     * Returns an unsubscribe fn.
+     */
+    onDelta(callback: (payload: RemoteDelta) => void): () => void
   }
 }

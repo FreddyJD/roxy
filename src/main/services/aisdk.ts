@@ -16,10 +16,17 @@
  * call boundary and maps `fullStream` parts back to our text/reasoning/tool
  * callbacks.
  */
-import { streamText, tool, jsonSchema, type ModelMessage, type LanguageModel, type ToolSet } from 'ai'
+import {
+  streamText,
+  tool,
+  jsonSchema,
+  type ModelMessage,
+  type LanguageModel,
+  type ToolSet
+} from 'ai'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
-import type { ProviderWire, ReasoningEffort } from '../../shared/types'
+import type { ProviderWire, ReasoningEffort, TokenUsage } from '../../shared/types'
 import type { OpenAiContentPart } from './llm'
 
 /** The wires this transport can drive with tools (the rest use the OpenAI SSE path). */
@@ -69,7 +76,6 @@ export interface AiSdkStreamOptions {
 
 /** Anthropic requires an explicit output cap; 8192 is universally safe across Claude models. */
 const ANTHROPIC_MAX_OUTPUT_TOKENS = 8192
-
 
 /** Collapse an OpenAI content value to plain text (drops image parts). */
 function asText(content: string | OpenAiContentPart[] | null): string {
@@ -193,13 +199,21 @@ export function toToolSet(tools: AiSdkToolSchema[]): ToolSet {
 }
 
 /** Build the AI SDK model instance for a wire, honoring a custom base URL. */
-function modelFor(wire: 'anthropic' | 'google', baseURL: string | undefined, apiKey: string | null, model: string): LanguageModel {
+function modelFor(
+  wire: 'anthropic' | 'google',
+  baseURL: string | undefined,
+  apiKey: string | null,
+  model: string
+): LanguageModel {
   const base = baseURL ? baseURL.replace(/\/+$/, '') : undefined
   if (wire === 'anthropic') {
     const provider = createAnthropic({ apiKey: apiKey ?? '', ...(base ? { baseURL: base } : {}) })
     return provider(model)
   }
-  const provider = createGoogleGenerativeAI({ apiKey: apiKey ?? '', ...(base ? { baseURL: base } : {}) })
+  const provider = createGoogleGenerativeAI({
+    apiKey: apiKey ?? '',
+    ...(base ? { baseURL: base } : {})
+  })
   return provider(model)
 }
 
@@ -228,22 +242,33 @@ export interface AiSdkStreamPart {
   toolName?: string
   input?: unknown
   error?: unknown
+  /** Present on the terminal `finish` part — cumulative token usage for the call. */
+  totalUsage?: {
+    inputTokens?: number
+    outputTokens?: number
+    cachedInputTokens?: number
+    reasoningTokens?: number
+    totalTokens?: number
+  }
 }
 
 /**
  * Consume an AI SDK `fullStream`, forwarding text/reasoning deltas and
  * collecting tool calls. Returns the accumulated prose + calls in the OpenAI
- * path's shape. A user stop (abort) resolves with whatever arrived so far.
- * Exported so the mapping can be exercised directly in tests.
+ * path's shape, plus real token usage from the terminal `finish` part (Anthropic
+ * / Gemini report it — no extra request). A user stop (abort) resolves with
+ * whatever arrived so far. Exported so the mapping can be exercised directly in
+ * tests.
  */
 export async function consumeAiSdkStream(
   parts: AsyncIterable<AiSdkStreamPart>,
   signal: AbortSignal,
   onText: (delta: string) => void,
   onReasoning: (delta: string) => void
-): Promise<{ text: string; toolCalls: AiSdkToolCall[] }> {
+): Promise<{ text: string; toolCalls: AiSdkToolCall[]; usage: TokenUsage | null }> {
   let text = ''
   const calls: AiSdkToolCall[] = []
+  let usage: TokenUsage | null = null
   try {
     for await (const part of parts) {
       switch (part.type) {
@@ -263,6 +288,22 @@ export async function consumeAiSdkStream(
             args: JSON.stringify(part.input ?? {})
           })
           break
+        case 'finish':
+          if (part.totalUsage) {
+            const tu = part.totalUsage
+            const cached = tu.cachedInputTokens ?? 0
+            usage = {
+              // AI SDK's inputTokens INCLUDES cached ones; split them out so cache
+              // reads price at their cheaper rate.
+              input: Math.max(0, (tu.inputTokens ?? 0) - cached),
+              output: tu.outputTokens ?? 0,
+              cacheRead: cached,
+              cacheWrite: 0,
+              reasoning: tu.reasoningTokens ?? 0,
+              estimated: false
+            }
+          }
+          break
         case 'error':
           throw part.error instanceof Error ? part.error : new Error(String(part.error))
         default:
@@ -271,20 +312,20 @@ export async function consumeAiSdkStream(
     }
   } catch (err) {
     // A user stop surfaces as an abort error — return what we have instead of throwing.
-    if (signal.aborted) return { text, toolCalls: calls.filter((c) => c.name) }
+    if (signal.aborted) return { text, toolCalls: calls.filter((c) => c.name), usage }
     throw err
   }
-  return { text, toolCalls: calls.filter((c) => c.name) }
+  return { text, toolCalls: calls.filter((c) => c.name), usage }
 }
 
 /**
  * Stream one model turn via the AI SDK, accumulating prose text and tool calls.
  * Returns the same `{ text, toolCalls }` shape as the OpenAI SSE path so the
- * agent loop is wire-agnostic.
+ * agent loop is wire-agnostic, plus `usage` (real Anthropic/Gemini token counts).
  */
 export async function streamViaAiSdk(
   opts: AiSdkStreamOptions
-): Promise<{ text: string; toolCalls: AiSdkToolCall[] }> {
+): Promise<{ text: string; toolCalls: AiSdkToolCall[]; usage: TokenUsage | null }> {
   // `reasoning`/`effort` are intentionally unused here — see outputSettings (extended
   // thinking is disabled on the tool path until Phase 5 can preserve thinking blocks).
   const { wire, baseURL, apiKey, model, messages, tools, signal, onText, onReasoning } = opts
@@ -301,5 +342,19 @@ export async function streamViaAiSdk(
     ...(maxOutputTokens ? { maxOutputTokens } : {})
   })
 
-  return consumeAiSdkStream(result.fullStream, signal, onText, onReasoning)
+  const out = await consumeAiSdkStream(result.fullStream, signal, onText, onReasoning)
+  // Anthropic/Gemini normally report usage in the `finish` part; if a proxy or
+  // an aborted stream drops it, estimate (~chars/4) so a row is still recorded.
+  if (!out.usage) {
+    const inputChars = messages.reduce((n, m) => n + asText(m.content).length, 0)
+    out.usage = {
+      input: Math.ceil(inputChars / 4),
+      output: Math.ceil(out.text.length / 4),
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning: 0,
+      estimated: true
+    }
+  }
+  return out
 }

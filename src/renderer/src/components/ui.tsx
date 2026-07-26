@@ -37,7 +37,7 @@ export function Button({
   return (
     <button
       className={cn(
-        'inline-flex items-center justify-center rounded-lg font-medium transition-colors focus:outline-none disabled:cursor-not-allowed disabled:opacity-40',
+        'press-scale inline-flex items-center justify-center rounded-lg font-medium focus:outline-none disabled:cursor-not-allowed disabled:opacity-40',
         BUTTON_VARIANTS[variant],
         BUTTON_SIZES[size],
         className
@@ -53,7 +53,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
       <input
         ref={ref}
         className={cn(
-          'h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-text outline-none transition placeholder:text-text-subtle focus:border-accent/70 focus:ring-2 focus:ring-accent/20',
+          'h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-text outline-none transition-[border-color,box-shadow] placeholder:text-text-subtle focus:border-accent/70 focus:ring-2 focus:ring-accent/20',
           className
         )}
         {...props}
@@ -68,7 +68,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
       <textarea
         ref={ref}
         className={cn(
-          'w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm text-text outline-none transition placeholder:text-text-subtle focus:border-accent/70 focus:ring-2 focus:ring-accent/20',
+          'w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm text-text outline-none transition-[border-color,box-shadow] placeholder:text-text-subtle focus:border-accent/70 focus:ring-2 focus:ring-accent/20',
           className
         )}
         {...props}
@@ -117,14 +117,14 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange?.(!checked)}
       className={cn(
-        'relative h-5 w-9 shrink-0 rounded-full transition-colors',
+        'relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150',
         checked ? 'bg-accent' : 'border border-border bg-surface-2',
         disabled && 'cursor-not-allowed opacity-40'
       )}
     >
       <span
         className={cn(
-          'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform',
+          'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]',
           checked ? 'translate-x-4' : 'translate-x-0.5'
         )}
       />

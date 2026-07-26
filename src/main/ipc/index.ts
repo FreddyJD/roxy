@@ -1,11 +1,30 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { CHANNELS } from '../../shared/ipc'
-import type { CreateChatInput, CreateLoopInput, CreateWorktreeInput, CreateWorktreeResult, GitStatusView, LlmStartInput, McpServerView, RemoteStartInput, SkillView, SkillWriteInput, UpsertMcpServerInput } from '../../shared/api'
-import type { AddMessageInput, ConnectProviderInput, QueueImage, ReasoningEffort } from '../../shared/types'
+import type {
+  CreateChatInput,
+  CreateLoopInput,
+  CreateWorktreeInput,
+  CreateWorktreeResult,
+  GitStatusView,
+  LlmStartInput,
+  McpServerView,
+  RemoteStartInput,
+  SkillView,
+  SkillWriteInput,
+  UpsertMcpServerInput
+} from '../../shared/api'
+import type {
+  AddMessageInput,
+  ConnectProviderInput,
+  QueueImage,
+  ReasoningEffort
+} from '../../shared/types'
 import * as repo from '../db/repo'
 import * as copilot from '../services/copilot'
 import * as browser from '../services/browser'
 import { listModels } from '../services/models'
+import { getUsageStats } from '../services/usage'
+import { getActivityStats } from '../services/activity'
 import { compactChat } from '../services/compaction'
 import {
   runTool,
@@ -26,7 +45,14 @@ import {
   listRunningBackgroundJobs
 } from '../services/background-tasks'
 import { mcpServerSummaries, reconnectMcpServer, disposeConnection } from '../services/mcp'
-import { listSkills, refreshSkills, readSkill, writeSkill, deleteSkill, installSkillFromSource } from '../services/skills'
+import {
+  listSkills,
+  refreshSkills,
+  readSkill,
+  writeSkill,
+  deleteSkill,
+  installSkillFromSource
+} from '../services/skills'
 import { runSessionTurn } from '../services/session-turn'
 import * as remote from '../services/remote'
 import { buildExport, applyImport } from '../services/portable'
@@ -60,7 +86,12 @@ function listMcpServersWithStatus(): McpServerView[] {
 async function discoverSkillViews(cwd?: string): Promise<SkillView[]> {
   const base = cwd || app.getPath('home')
   const skills = await listSkills(base)
-  return skills.map(({ name, description, location, source }) => ({ name, description, location, source }))
+  return skills.map(({ name, description, location, source }) => ({
+    name,
+    description,
+    location,
+    source
+  }))
 }
 
 /**
@@ -276,7 +307,12 @@ export function registerIpc(): void {
     }
     const result = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
     if (result.canceled || !result.filePath) {
-      return { ok: false, skills: built.skills, mcpServers: built.mcpServers, summary: built.summary }
+      return {
+        ok: false,
+        skills: built.skills,
+        mcpServers: built.mcpServers,
+        summary: built.summary
+      }
     }
     try {
       await fsp.writeFile(result.filePath, built.text, 'utf8')
@@ -314,7 +350,14 @@ export function registerIpc(): void {
     try {
       text = await fsp.readFile(result.filePaths[0], 'utf8')
     } catch (e) {
-      return { ok: false, skills: [], mcpServers: [], skipped: [], summary: '', error: (e as Error).message }
+      return {
+        ok: false,
+        skills: [],
+        mcpServers: [],
+        skipped: [],
+        summary: '',
+        error: (e as Error).message
+      }
     }
     return applyImport(text)
   })
@@ -347,11 +390,14 @@ export function registerIpc(): void {
   // Each mutation re-mirrors the shared queue to any paired phone (remote is a
   // no-op when nothing is shared), so desktop-side edits stay in sync on both ends.
   ipcMain.handle(CHANNELS.queueList, (_e, chatId: string) => repo.listQueue(chatId))
-  ipcMain.handle(CHANNELS.queueAdd, (_e, chatId: string, content: string, images?: QueueImage[]) => {
-    const item = repo.enqueue(chatId, content, images)
-    remote.notifyQueueChanged()
-    return item
-  })
+  ipcMain.handle(
+    CHANNELS.queueAdd,
+    (_e, chatId: string, content: string, images?: QueueImage[]) => {
+      const item = repo.enqueue(chatId, content, images)
+      remote.notifyQueueChanged()
+      return item
+    }
+  )
   ipcMain.handle(CHANNELS.queueRemove, (_e, id: string) => {
     repo.removeQueueItem(id)
     remote.notifyQueueChanged()
@@ -360,6 +406,17 @@ export function registerIpc(): void {
     repo.reorderQueue(chatId, ids)
     remote.notifyQueueChanged()
   })
+  ipcMain.handle(CHANNELS.queueUpdate, (_e, id: string, content: string, images?: QueueImage[]) => {
+    const item = repo.updateQueueItem(id, content, images)
+    remote.notifyQueueChanged()
+    return item
+  })
+
+  // ---- usage / cost dashboard ----
+  ipcMain.handle(CHANNELS.usageStats, () => getUsageStats())
+
+  // ---- activity (Settings contribution graph) ----
+  ipcMain.handle(CHANNELS.activityStats, () => getActivityStats())
 
   // ---- llm (streamed model completions) ----
   // The turn body lives in runSessionTurn so the remote host (phone-driven)
@@ -368,6 +425,12 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.llmStart, async (event, input: LlmStartInput) => {
     const controller = new AbortController()
     llmControllers.set(input.requestId, controller)
+    // If this session is shared to a phone, relay the turn there too so the phone
+    // streams a desktop-typed reply live (the mirror of a phone turn on the PC).
+    // The current prompt is the last user message; announce it so the phone shows
+    // the bubble it never echoed. `null` when nothing's shared → zero overhead.
+    const lastUser = [...input.messages].reverse().find((m) => m.role === 'user')
+    const relay = remote.relayLocalTurnStart(input.sessionId, lastUser?.content)
     try {
       return await runSessionTurn(
         input,
@@ -375,11 +438,13 @@ export function registerIpc(): void {
           if (!event.sender.isDestroyed()) {
             event.sender.send(CHANNELS.llmDelta, { requestId: input.requestId, event: llmEvent })
           }
+          if (relay) remote.relayLocalTurnEvent(relay, llmEvent)
         },
         controller.signal
       )
     } finally {
       llmControllers.delete(input.requestId)
+      if (relay) remote.relayLocalTurnEnd(relay)
     }
   })
   ipcMain.handle(CHANNELS.llmAbort, (_e, requestId: string) => {

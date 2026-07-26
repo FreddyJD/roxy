@@ -102,7 +102,7 @@ export function Composer({
                   type="button"
                   onClick={() => removeImage(img.id)}
                   title="Remove image"
-                  className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-white opacity-0 transition group-hover:opacity-100"
+                  className="press-scale absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-white opacity-0 transition-opacity group-hover:opacity-100"
                 >
                   <X className="h-2.5 w-2.5" />
                 </button>
@@ -130,7 +130,7 @@ export function Composer({
               type="button"
               onClick={() => fileRef.current?.click()}
               title="Attach images"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-text-muted transition hover:border-border-strong hover:text-text"
+              className="press-scale flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-text-muted hover:border-border-strong hover:text-text"
             >
               <Plus className="h-4 w-4" />
             </button>
@@ -144,7 +144,7 @@ export function Composer({
             <button
               onClick={onStop}
               title="Stop"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-black transition hover:bg-white/90"
+              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-black hover:bg-white/90"
             >
               <Square className="h-3 w-3 fill-current" />
             </button>
@@ -153,7 +153,7 @@ export function Composer({
               onClick={submit}
               disabled={!canSend}
               title={sending ? 'Add to queue' : 'Send'}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-black transition hover:bg-white/90 disabled:opacity-30"
+              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-black hover:bg-white/90 disabled:opacity-30"
             >
               <ArrowUp className="h-4 w-4" />
             </button>

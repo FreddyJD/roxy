@@ -46,11 +46,11 @@ export function NewLoopDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
+      className="animate-scrim-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-2xl border border-border bg-surface p-5"
+        className="animate-modal-in w-full max-w-md rounded-2xl border border-border bg-surface p-5"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-lg font-semibold">New loop</h2>
@@ -84,7 +84,7 @@ export function NewLoopDialog({
             <select
               value={intervalMinutes}
               onChange={(e) => setIntervalMinutes(Number(e.target.value))}
-              className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-text outline-none transition focus:border-accent/70"
+              className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-text outline-none transition-colors focus:border-accent/70"
             >
               {INTERVALS.map((m) => (
                 <option key={m} value={m}>

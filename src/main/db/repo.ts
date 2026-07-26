@@ -20,6 +20,8 @@ import type {
   SessionKind,
   SessionStatus,
   SessionTask,
+  TokenUsage,
+  UsageRecord,
   WorktreeIntent
 } from '../../shared/types'
 import type { CreateChatInput, CreateLoopInput } from '../../shared/api'
@@ -354,9 +356,9 @@ export function getChat(id: string): Chat | undefined {
  * anything that touches the filesystem.
  */
 export function getChatWorkspace(chatId: string): string | null {
-  const row = getDb()
-    .prepare('SELECT workspace_path FROM chats WHERE id = ?')
-    .get(chatId) as { workspace_path: string | null } | undefined
+  const row = getDb().prepare('SELECT workspace_path FROM chats WHERE id = ?').get(chatId) as
+    | { workspace_path: string | null }
+    | undefined
   return row?.workspace_path ?? null
 }
 
@@ -622,9 +624,11 @@ export function ensureProject(path: string): void {
   const { max } = db.prepare('SELECT MAX(sort_order) AS max FROM projects').get() as {
     max: number | null
   }
-  db
-    .prepare('INSERT INTO projects(path, sort_order, created_at) VALUES(?, ?, ?)')
-    .run(path, (max ?? -1) + 1, Date.now())
+  db.prepare('INSERT INTO projects(path, sort_order, created_at) VALUES(?, ?, ?)').run(
+    path,
+    (max ?? -1) + 1,
+    Date.now()
+  )
 }
 
 /** Forget a project once it has no more main sessions or loops. */
@@ -713,7 +717,14 @@ export function addMessage(input: AddMessageInput): Message {
     db.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').run(now, input.chatId)
   })
   tx()
-  return { id, chatId: input.chatId, role: input.role, content: input.content, parts, createdAt: now }
+  return {
+    id,
+    chatId: input.chatId,
+    role: input.role,
+    content: input.content,
+    parts,
+    createdAt: now
+  }
 }
 
 // ---- Loops -------------------------------------------------------------------
@@ -773,7 +784,9 @@ export function createLoop(input: CreateLoopInput): Loop {
 
 export function setLoopEnabled(id: string, enabled: boolean): void {
   if (enabled) {
-    getDb().prepare('UPDATE loops SET enabled = 1, next_run_at = ? WHERE id = ?').run(Date.now(), id)
+    getDb()
+      .prepare('UPDATE loops SET enabled = 1, next_run_at = ? WHERE id = ?')
+      .run(Date.now(), id)
   } else {
     getDb().prepare('UPDATE loops SET enabled = 0 WHERE id = ?').run(id)
   }
@@ -890,6 +903,28 @@ export function removeQueueItem(id: string): void {
   getDb().prepare('DELETE FROM queue WHERE id = ?').run(id)
 }
 
+/** Edit a queued item's text + images in place, keeping its `created_at` (so its
+ *  FIFO position never moves). No-op on an unknown id; returns the fresh item. */
+export function updateQueueItem(
+  id: string,
+  content: string,
+  images?: QueueImage[]
+): QueueItem | undefined {
+  const imagesJson = images && images.length ? JSON.stringify(images) : null
+  getDb()
+    .prepare('UPDATE queue SET content = ?, images = ? WHERE id = ?')
+    .run(content, imagesJson, id)
+  const row = getDb().prepare('SELECT * FROM queue WHERE id = ?').get(id) as QueueRow | undefined
+  if (!row) return undefined
+  return {
+    id: row.id,
+    chatId: row.chat_id,
+    content: row.content,
+    ...(row.images ? { images: JSON.parse(row.images) as QueueImage[] } : {}),
+    createdAt: row.created_at
+  }
+}
+
 /** Reorder a chat's queue to match `orderedIds` (front = runs next). Assigns
  *  small strictly-increasing sort keys (1,2,3…) — far below any real `Date.now()`
  *  so newly-enqueued items still append after. No-op unless the full set of the
@@ -986,5 +1021,170 @@ export function deleteMcpServer(id: string): void {
 }
 
 export function setMcpServerEnabled(id: string, enabled: boolean): void {
-  getDb().prepare('UPDATE mcp_servers SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id)
+  getDb()
+    .prepare('UPDATE mcp_servers SET enabled = ? WHERE id = ?')
+    .run(enabled ? 1 : 0, id)
+}
+
+// ---- Usage / cost ------------------------------------------------------------
+
+interface UsageRow {
+  id: string
+  chat_id: string | null
+  provider_id: string
+  model: string
+  input: number
+  output: number
+  cache_read: number
+  cache_write: number
+  reasoning: number
+  cost: number
+  estimated: number
+  created_at: number
+}
+
+function toUsageRecord(r: UsageRow): UsageRecord {
+  return {
+    id: r.id,
+    chatId: r.chat_id,
+    providerId: r.provider_id,
+    model: r.model,
+    input: r.input,
+    output: r.output,
+    cacheRead: r.cache_read,
+    cacheWrite: r.cache_write,
+    reasoning: r.reasoning,
+    cost: r.cost,
+    estimated: r.estimated === 1,
+    createdAt: r.created_at
+  }
+}
+
+/** Persist one model call's token usage + priced cost. Best-effort caller-side. */
+export function recordUsage(input: {
+  chatId: string | null
+  providerId: string
+  model: string
+  usage: TokenUsage
+  cost: number
+}): UsageRecord {
+  const id = randomUUID()
+  const now = Date.now()
+  const u = input.usage
+  getDb()
+    .prepare(
+      `INSERT INTO usage
+         (id, chat_id, provider_id, model, input, output, cache_read, cache_write, reasoning, cost, estimated, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      input.chatId,
+      input.providerId,
+      input.model,
+      Math.max(0, Math.round(u.input)),
+      Math.max(0, Math.round(u.output)),
+      Math.max(0, Math.round(u.cacheRead)),
+      Math.max(0, Math.round(u.cacheWrite)),
+      Math.max(0, Math.round(u.reasoning)),
+      input.cost,
+      u.estimated ? 1 : 0,
+      now
+    )
+  return toUsageRecord({
+    id,
+    chat_id: input.chatId,
+    provider_id: input.providerId,
+    model: input.model,
+    input: Math.round(u.input),
+    output: Math.round(u.output),
+    cache_read: Math.round(u.cacheRead),
+    cache_write: Math.round(u.cacheWrite),
+    reasoning: Math.round(u.reasoning),
+    cost: input.cost,
+    estimated: u.estimated ? 1 : 0,
+    created_at: now
+  })
+}
+
+/** All usage records at/after `since` (epoch ms), newest first. */
+export function listUsageSince(since: number): UsageRecord[] {
+  return (
+    getDb()
+      .prepare('SELECT * FROM usage WHERE created_at >= ? ORDER BY created_at DESC')
+      .all(since) as UsageRow[]
+  ).map(toUsageRecord)
+}
+
+/** Whether the usage table has any rows yet (drives one-time history backfill). */
+export function hasAnyUsage(): boolean {
+  return (getDb().prepare('SELECT 1 FROM usage LIMIT 1').get() as unknown) !== undefined
+}
+
+/**
+ * All chats with their provider/model, for the one-time backfill that seeds the
+ * usage table from pre-existing message history (so the dashboard isn't empty on
+ * first launch after upgrading).
+ */
+export function listChatsForBackfill(): {
+  id: string
+  providerId: string | null
+  model: string | null
+}[] {
+  return (
+    getDb().prepare('SELECT id, provider_id, model FROM chats').all() as {
+      id: string
+      provider_id: string | null
+      model: string | null
+    }[]
+  ).map((r) => ({ id: r.id, providerId: r.provider_id, model: r.model }))
+}
+
+/** Insert a backfilled usage row with an explicit timestamp (bypasses now()). */
+export function insertBackfilledUsage(input: {
+  chatId: string | null
+  providerId: string
+  model: string
+  usage: TokenUsage
+  cost: number
+  createdAt: number
+}): void {
+  const u = input.usage
+  getDb()
+    .prepare(
+      `INSERT INTO usage
+         (id, chat_id, provider_id, model, input, output, cache_read, cache_write, reasoning, cost, estimated, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      randomUUID(),
+      input.chatId,
+      input.providerId,
+      input.model,
+      Math.max(0, Math.round(u.input)),
+      Math.max(0, Math.round(u.output)),
+      Math.max(0, Math.round(u.cacheRead)),
+      Math.max(0, Math.round(u.cacheWrite)),
+      Math.max(0, Math.round(u.reasoning)),
+      input.cost,
+      1,
+      input.createdAt
+    )
+}
+
+// ---- Activity (contribution graph) -------------------------------------------
+
+/**
+ * Timestamps (epoch ms) of every agent turn — one per assistant message — at or
+ * after `since`, across all sessions (main, sub, and loop). Feeds the Settings
+ * contribution graph's per-day counts. Uses the existing (chat_id, created_at)
+ * index for a cheap scan.
+ */
+export function listAgentTurnTimestamps(since: number): number[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT created_at FROM messages WHERE role = 'assistant' AND created_at >= ? ORDER BY created_at ASC"
+    )
+    .all(since) as { created_at: number }[]
+  return rows.map((r) => r.created_at)
 }

@@ -9,6 +9,7 @@ import { Button } from '../components/ui'
 import { PageShell } from '../components/PageShell'
 import { McpServers } from '../components/McpServers'
 import { ConfigBackup } from '../components/ConfigBackup'
+import { ActivitySection } from '../components/ActivitySection'
 import { ProviderLogo } from '../lib/providerLogos'
 import { useRoxyStore } from '../lib/store'
 
@@ -81,6 +82,8 @@ export default function Settings(): JSX.Element {
 
   return (
     <PageShell title="Settings" onBack={() => navigate('/')}>
+      <ActivitySection />
+
       <section className="mb-8">
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
           Providers
@@ -97,7 +100,7 @@ export default function Settings(): JSX.Element {
           <button
             type="button"
             onClick={() => navigate('/onboarding')}
-            className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface/40 p-3.5 text-sm text-text-muted transition hover:border-border-strong hover:bg-surface hover:text-text"
+            className="press-scale flex items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface/40 p-3.5 text-sm text-text-muted hover:border-border-strong hover:bg-surface hover:text-text"
           >
             <Plus className="h-4 w-4" /> Add provider
           </button>
@@ -130,8 +133,8 @@ export default function Settings(): JSX.Element {
           <div className="min-w-0">
             <div className="text-sm font-medium text-text">Exa API key (optional)</div>
             <p className="mt-0.5 text-xs text-text-muted">
-              The <code>websearch</code> tool works out of the box on Exa&apos;s free public endpoint.
-              Add a key to lift rate limits.{' '}
+              The <code>websearch</code> tool works out of the box on Exa&apos;s free public
+              endpoint. Add a key to lift rate limits.{' '}
               <a
                 href="https://dashboard.exa.ai/api-keys"
                 target="_blank"
@@ -183,7 +186,7 @@ export default function Settings(): JSX.Element {
               another computer to set it up the same way. Importing overwrites skills/servers that
               share a name.{' '}
               <span className="text-text-subtle">
-                Heads up: the file includes any MCP secrets (headers/env) in plain text — keep it
+                Heads up: the file includes any MCP secrets (headers/env) in plain text â€” keep it
                 private.
               </span>
             </p>
@@ -193,7 +196,9 @@ export default function Settings(): JSX.Element {
       </section>
 
       <section>
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">About</h2>
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          About
+        </h2>
         <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -225,7 +230,9 @@ export default function Settings(): JSX.Element {
       </section>
 
       <section className="mt-8">
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-danger">Danger zone</h2>
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-danger">
+          Danger zone
+        </h2>
         <div className="flex flex-col gap-3 rounded-xl border border-danger/30 bg-danger/5 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="text-sm font-medium text-text">Reset everything</div>
@@ -236,7 +243,11 @@ export default function Settings(): JSX.Element {
           </div>
           {confirmingReset ? (
             <div className="flex shrink-0 items-center gap-2">
-              <Button variant="ghost" onClick={() => setConfirmingReset(false)} disabled={resetting}>
+              <Button
+                variant="ghost"
+                onClick={() => setConfirmingReset(false)}
+                disabled={resetting}
+              >
                 Cancel
               </Button>
               <Button variant="danger" onClick={resetEverything} disabled={resetting}>

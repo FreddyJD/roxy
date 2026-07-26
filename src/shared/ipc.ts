@@ -67,6 +67,12 @@ export const CHANNELS = {
   queueAdd: 'queue:add',
   queueRemove: 'queue:remove',
   queueReorder: 'queue:reorder',
+  queueUpdate: 'queue:update',
+
+  usageStats: 'usage:stats',
+
+  /** Per-day agent activity for the Settings contribution graph. */
+  activityStats: 'activity:stats',
 
   llmStart: 'llm:start',
   llmAbort: 'llm:abort',
@@ -127,7 +133,9 @@ export const CHANNELS = {
   remoteStop: 'remote:stop',
   remoteStatus: 'remote:status',
   /** main -> renderer: Remote Workspace sharing status changed */
-  remoteState: 'remote:state'
+  remoteState: 'remote:state',
+  /** main -> renderer: a streamed event from a phone-driven turn (live desktop mirror) */
+  remoteDelta: 'remote:delta'
 } as const
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS]

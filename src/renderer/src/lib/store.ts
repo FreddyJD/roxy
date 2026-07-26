@@ -8,13 +8,15 @@ import type {
   Message,
   MessagePart,
   QueueItem,
-  ReasoningEffort
+  ReasoningEffort,
+  UsageStats
 } from '@shared/types'
 import type {
   ChatMessage,
   CreateLoopInput,
   LlmEvent,
   ModelInfo,
+  RemoteDelta,
   RemoteState,
   TaskUpdate
 } from '@shared/api'
@@ -22,6 +24,7 @@ import { selectPromptName, buildEnvironment, assembleSystemPrompt } from '@share
 import { PROMPT_TEXT, AGENT_PROMPT_TEXT } from '@shared/prompt-text'
 import { reconstructTurn, REPLAY_OUTPUT_CAP } from '@shared/tool-history'
 import { isOverflow, pruneToolMessages, KEEP_RECENT_TOKENS } from '@shared/context'
+import { pickDefaultModel } from '@shared/models'
 import { uniqueSlug } from '@shared/slugs'
 import { api } from './api'
 import type { ComposerImage } from './images'
@@ -70,6 +73,8 @@ interface RoxyStore {
   worktrees: Record<string, WorktreeView[]>
   /** Branches per project folder, loaded lazily when the menu opens. */
   gitBranches: Record<string, string[]>
+  /** Token-usage + cost dashboard (last 30 days); null until first fetched. */
+  usageStats: UsageStats | null
 
   bootstrap: () => Promise<void>
   refreshChats: () => Promise<void>
@@ -102,6 +107,10 @@ interface RoxyStore {
   drainQueue: (chatId: string) => Promise<void>
   removeQueued: (id: string) => Promise<void>
   moveQueued: (id: string, direction: 'up' | 'down') => Promise<void>
+  /** Edit a queued prompt in place (text + images), keeping its queue position. */
+  editQueued: (id: string, content: string, images?: ComposerImage[]) => Promise<void>
+  /** Refresh the usage/cost dashboard (called on turn end + when the pill opens). */
+  refreshUsage: () => Promise<void>
   stop: () => void
   /** Start sharing the active session to a phone via the roxy.gg relay. */
   startRemote: () => Promise<void>
@@ -139,6 +148,7 @@ let loopTickSubscribed = false
 let llmDeltaSubscribed = false
 let taskUpdateSubscribed = false
 let remoteStateSubscribed = false
+let remoteDeltaSubscribed = false
 /** Routes streamed completion events to the in-flight send for a request id. */
 const deltaHandlers = new Map<string, (event: LlmEvent) => void>()
 /** The active llm request id per chat, so stop() can abort the right stream. */
@@ -147,6 +157,12 @@ const chatRequests = new Map<string, string>()
 const modelCatalogCache = new Map<string, ModelInfo[]>()
 /** Set when a remote turn lands while a local send streams into the shared chat. */
 const remoteMirror = { deferred: false }
+/**
+ * Live parts for the in-flight *phone-driven* turn per session, so the desktop
+ * mirrors a remote reply token-by-token (the twin of a local send's `parts`).
+ * A turn:idle frame clears the entry once the persisted reply takes over.
+ */
+const remoteTurns = new Map<string, { parts: MessagePart[]; callIndex: Map<string, number> }>()
 
 /**
  * Desktop live-mirror: reload the shared chat's transcript from disk after a
@@ -164,6 +180,106 @@ async function mirrorSharedChat(sessionId: string, rev: number): Promise<void> {
     return
   }
   useRoxyStore.setState({ messages })
+}
+
+/**
+ * Fold one phone-driven turn's streamed event (or turn boundary) into a live
+ * parts list and, when that session is on screen, reflect it into `streamingChats`
+ * so the desktop shows the reply token-by-token — the remote twin of a local
+ * send's delta handler. A `turn:idle` clears the live parts; the persisted reply
+ * (reconciled from disk by `mirrorSharedChat` on the state bump) then takes over,
+ * so there's no gap between the live bubble and the saved message.
+ */
+function applyRemoteDelta(payload: RemoteDelta): void {
+  const { sessionId } = payload
+  const reflect = (parts: MessagePart[] | null): void => {
+    if (useRoxyStore.getState().activeChatId !== sessionId) return
+    // Never clobber a local send streaming into the same chat — its own handler
+    // owns `streamingChats[sessionId]` until finishTurn reconciles.
+    if (useRoxyStore.getState().sendingChats[sessionId]) return
+    useRoxyStore.setState((s) => {
+      const next = { ...s.streamingChats }
+      if (parts === null) delete next[sessionId]
+      else next[sessionId] = parts
+      return { streamingChats: next }
+    })
+  }
+
+  if (payload.kind === 'turn') {
+    if (payload.state === 'running') {
+      // Open an empty live bubble (a "thinking" indicator) the moment the turn
+      // starts, so the desktop isn't blank while the first token is resolved.
+      remoteTurns.set(sessionId, { parts: [], callIndex: new Map() })
+      reflect([])
+    } else {
+      remoteTurns.delete(sessionId)
+      reflect(null)
+    }
+    return
+  }
+
+  // A stream event: fold it into this session's live parts (mirrors the main
+  // process's PartsAccumulator and the local send's delta handler).
+  const turn = remoteTurns.get(sessionId) ?? { parts: [], callIndex: new Map() }
+  remoteTurns.set(sessionId, turn)
+  const { event } = payload
+  let { parts } = turn
+  if (event.type === 'text') {
+    const last = parts[parts.length - 1]
+    if (last && last.type === 'text') {
+      parts = parts.map((p, i) =>
+        i === parts.length - 1 ? { type: 'text', text: last.text + event.delta } : p
+      )
+    } else {
+      parts = [...parts, { type: 'text', text: event.delta }]
+    }
+  } else if (event.type === 'reasoning') {
+    const last = parts[parts.length - 1]
+    if (last && last.type === 'reasoning') {
+      parts = parts.map((p, i) =>
+        i === parts.length - 1 ? { type: 'reasoning', text: last.text + event.delta } : p
+      )
+    } else {
+      parts = [...parts, { type: 'reasoning', text: event.delta }]
+    }
+  } else if (event.type === 'tool-start') {
+    turn.callIndex.set(event.callId, parts.length)
+    parts = [
+      ...parts,
+      {
+        type: 'tool',
+        tool: event.tool,
+        state: 'running',
+        title: event.title,
+        callId: event.callId,
+        input: event.input
+      }
+    ]
+  } else if (event.type === 'tool-delta') {
+    const idx = turn.callIndex.get(event.callId)
+    if (idx !== undefined) {
+      parts = parts.map((p, i) =>
+        i === idx && p.type === 'tool' ? { ...p, output: (p.output ?? '') + event.chunk } : p
+      )
+    }
+  } else if (event.type === 'tool-end') {
+    const idx = turn.callIndex.get(event.callId)
+    if (idx !== undefined) {
+      parts = parts.map((p, i) =>
+        i === idx && p.type === 'tool'
+          ? {
+              ...p,
+              state: event.ok ? 'done' : 'error',
+              output: event.output,
+              image: event.image,
+              diff: event.diff
+            }
+          : p
+      )
+    }
+  }
+  turn.parts = parts
+  reflect(parts)
 }
 
 export const useRoxyStore = create<RoxyStore>((set, get) => ({
@@ -190,6 +306,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   gitStatus: {},
   worktrees: {},
   gitBranches: {},
+  usageStats: null,
 
   bootstrap: async () => {
     const [settings, providers, chats, loops, projectOrder] = await Promise.all([
@@ -200,6 +317,8 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       api.projects.listOrder()
     ])
     set({ settings, providers, chats, loops, projectOrder, ready: true })
+    // Warm the usage/cost dashboard for the titlebar pill (best-effort, async).
+    void get().refreshUsage()
 
     if (!loopTickSubscribed) {
       loopTickSubscribed = true
@@ -276,6 +395,15 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       void get().refreshRemote()
     }
 
+    // Remote Workspace live stream: a phone-driven turn's tokens arrive here so
+    // the desktop mirrors the reply as it streams (not just on turn end). Kept
+    // separate from the state subscription because it fires far more often (once
+    // per token) and folds into `streamingChats` rather than reloading from disk.
+    if (!remoteDeltaSubscribed) {
+      remoteDeltaSubscribed = true
+      api.remote.onDelta((payload) => applyRemoteDelta(payload))
+    }
+
     const firstSession = chats.find((c) => c.kind === 'main')
     if (!get().activeChatId && firstSession) {
       await get().selectChat(firstSession.id)
@@ -285,10 +413,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   refreshChats: async () => {
     // Project order can change when a session/loop is created or deleted, so
     // pull it in the same round trip — one set, so the sidebar re-renders once.
-    const [chats, projectOrder] = await Promise.all([
-      api.chats.list(),
-      api.projects.listOrder()
-    ])
+    const [chats, projectOrder] = await Promise.all([api.chats.list(), api.projects.listOrder()])
     set({ chats, projectOrder })
   },
 
@@ -564,7 +689,10 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const text = content.trim()
     if (!text && (!images || images.length === 0)) return
     // This chat is busy → queue it (text + any images); otherwise send now.
-    if (get().sendingChats[chatId]) {
+    // "Busy" means a local send is streaming *or* a phone-driven turn is running
+    // into this same session (`remoteTurns`) — so a desktop prompt lands in the
+    // shared FIFO behind a phone turn instead of starting a second concurrent one.
+    if (get().sendingChats[chatId] || remoteTurns.has(chatId)) {
       await api.queue.add(
         chatId,
         text,
@@ -673,6 +801,9 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         void mirrorSharedChat(chatId, get().remote.rev)
       }
       await get().refreshChats()
+      // A turn just recorded usage rows — refresh the cost dashboard so the
+      // titlebar pill reflects the new spend without waiting for a manual open.
+      void get().refreshUsage()
       // Completed subagent sessions get pruned in main — if we were viewing one
       // (now gone), fall back to this turn's chat so the pane isn't left empty.
       const active = get().activeChatId
@@ -736,14 +867,19 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const provider =
       get().providers.find((p) => p.id === settings?.activeProviderId) ?? get().providers[0] ?? null
     if (provider && (provider.hasCredential || provider.auth === 'none')) {
-      const model =
-        settings?.activeModel ||
-        provider.defaultModel ||
-        (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
       // Resolve the model's capabilities (reasoning support + context window) so
       // we only send reasoning params when valid and cut history to the budget.
       await get().ensureModels(provider.id)
-      const info = get().modelCatalog[provider.id]?.find((m) => m.id === model)
+      const catalog = get().modelCatalog[provider.id] ?? []
+      // No model chosen? Take the provider's latest (tool-capable) model instead
+      // of a hardcoded id that may not exist on this provider — the user never
+      // has to type a model name for a connected provider to just work.
+      const model =
+        settings?.activeModel ||
+        provider.defaultModel ||
+        pickDefaultModel(catalog) ||
+        (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
+      const info = catalog.find((m) => m.id === model)
       const modelContext = info?.contextLimit ?? 128_000
       const contextBudget = Math.min(
         settings?.contextLimit ?? Math.min(modelContext, 200_000),
@@ -930,6 +1066,23 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     await get().refreshQueue()
   },
 
+  editQueued: async (id, content, images) => {
+    await api.queue.update(
+      id,
+      content,
+      images?.map(({ dataUrl, mediaType, name }) => ({ dataUrl, mediaType, name }))
+    )
+    await get().refreshQueue()
+  },
+
+  refreshUsage: async () => {
+    try {
+      set({ usageStats: await api.usage.stats() })
+    } catch {
+      // best-effort — a usage fetch failure must never disrupt the UI
+    }
+  },
+
   stop: () => {
     const id = get().activeChatId
     if (!id) return
@@ -945,9 +1098,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const provider =
       providers.find((p) => p.id === settings?.activeProviderId) ?? providers[0] ?? null
     if (!provider || !(provider.hasCredential || provider.auth === 'none')) return
+    await get().ensureModels(provider.id)
     const model =
       settings?.activeModel ||
       provider.defaultModel ||
+      pickDefaultModel(get().modelCatalog[provider.id] ?? []) ||
       (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
     set((s) => ({ compactingChats: { ...s.compactingChats, [chatId]: true } }))
     try {

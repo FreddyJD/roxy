@@ -73,13 +73,16 @@ export function QueueSectionTrigger({
         onClick?.(e)
       }}
       className={cn(
-        'flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition hover:bg-white/5',
+        'flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/5',
         className
       )}
       {...props}
     >
       <ChevronRight
-        className={cn('h-3.5 w-3.5 shrink-0 text-text-subtle transition-transform', open && 'rotate-90')}
+        className={cn(
+          'h-3.5 w-3.5 shrink-0 text-text-subtle transition-transform duration-200 ease-out-quart',
+          open && 'rotate-90'
+        )}
       />
       {children}
     </button>
@@ -139,7 +142,7 @@ export function QueueItem({ className, ...props }: LiHTMLAttributes<HTMLLIElemen
   return (
     <li
       className={cn(
-        'group flex items-start gap-2 rounded-lg border border-border bg-surface-2 px-2.5 py-2 transition hover:border-border-strong',
+        'group flex items-start gap-2 rounded-lg border border-border bg-surface-2 px-2.5 py-2 transition-colors hover:border-border-strong',
         className
       )}
       {...props}
@@ -198,7 +201,7 @@ export function QueueItemActions({ className, ...props }: HTMLAttributes<HTMLDiv
   return (
     <div
       className={cn(
-        'flex shrink-0 items-center gap-0.5 opacity-0 transition focus-within:opacity-100 group-hover:opacity-100',
+        'flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100',
         className
       )}
       {...props}
@@ -214,7 +217,7 @@ export function QueueItemAction({
     <button
       type="button"
       className={cn(
-        'flex h-6 w-6 items-center justify-center rounded-md text-text-subtle transition hover:bg-white/5 hover:text-text',
+        'press-scale flex h-6 w-6 items-center justify-center rounded-md text-text-subtle hover:bg-white/5 hover:text-text',
         className
       )}
       {...props}
