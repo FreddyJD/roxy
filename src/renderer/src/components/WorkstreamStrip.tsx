@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { LifecycleAction, LifecycleTone, ForgeKind } from '@shared/forge'
+import type { LifecycleAction, LifecycleTone, ForgeKind, SyncTarget } from '@shared/forge'
 import { FORGE_NAMES, relativeAge } from '@shared/forge'
 import { api } from '../lib/api'
-import { Check, ChevronDown, GitBranch, Plus, SquareStack } from 'lucide-react'
+import {
+  ArrowDownToLine,
+  Check,
+  ChevronDown,
+  GitBranch,
+  Plus,
+  RotateCcw,
+  SquareStack
+} from 'lucide-react'
 import type { Chat } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
 import { workstreamStripView, statusKeyForSession } from '@shared/workstream'
@@ -36,7 +44,8 @@ const POLL_MS = 5_000
  * away from hanging off an edge — the numbers must match the rendered widths.
  */
 const WORKSTREAM_MENU_W = 288
-const FORGE_PANEL_W = 320
+/** Wide enough to fit "Update from origin/some-branch" on one line. */
+const FORGE_PANEL_W = 340
 const HOST_MENU_W = 224
 
 export function WorkstreamStrip(): JSX.Element | null {
@@ -321,12 +330,24 @@ function StateDot({ tone, filled }: { tone: LifecycleTone; filled: boolean }): J
 }
 
 /**
- * The panel behind the chip: who the host is, what the PR is, and the single
- * most useful action for the current state.
+ * The panel behind the chip: who the host is, what the PR is, and what to do
+ * about it.
  *
- * Exactly one primary action is offered at a time. A panel with push, pull,
- * open-PR and view-PR all present would make the user decide what the app
- * already knows.
+ * It has two tiers, and the split is the whole design:
+ *
+ *   PRIMARY   one button, the obvious next step for the current state (push,
+ *             open a PR, view it). Never more than one — a panel offering push,
+ *             pull, open-PR and view-PR all at once makes the user decide
+ *             something the app already knows.
+ *
+ *   SYNC      "Update from origin/main" and "Reset to origin/main", shown only
+ *             when there is actually an upstream to sync with. These are the
+ *             answer to a chip that used to say "Behind origin" and then tell
+ *             you to go run git yourself — which is a status light pretending
+ *             to be a button.
+ *
+ * Reset is deliberately the quieter of the two and asks for a second click. It
+ * is the only control here that can throw away work.
  */
 function ForgePanel({
   ownerId,
@@ -343,24 +364,49 @@ function ForgePanel({
   const forgeStatus = useRoxyStore((s) => s.forgeStatus)
   const gitStatus = useRoxyStore((s) => s.gitStatus)
   const pushBranch = useRoxyStore((s) => s.pushBranch)
-  const [busy, setBusy] = useState(false)
+  const pullBranch = useRoxyStore((s) => s.pullBranch)
+  const resetBranch = useRoxyStore((s) => s.resetBranch)
+  const [busy, setBusy] = useState<null | 'action' | 'pull' | 'reset'>(null)
   const [error, setError] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+  /** Reset is armed by a first click and fires on the second. */
+  const [confirmReset, setConfirmReset] = useState(false)
 
   const view = statusKey ? forgeStatus[statusKey] : undefined
   const git = statusKey ? gitStatus[statusKey] : undefined
   const pull = view?.pull ?? null
   const action = view?.lifecycle.action ?? null
+  const sync = view?.syncTarget ?? null
+
+  // Disarm as soon as the panel's numbers move: an armed "Reset" that was aimed
+  // at "3 behind" must not silently fire at a different tree after a poll.
+  useEffect(() => {
+    setConfirmReset(false)
+  }, [sync?.upstream, sync?.behind, sync?.ahead, sync?.changed])
 
   const openUrl = (url: string): void => {
     void api.system.openExternal(url)
     onClose()
   }
 
-  const run = async (): Promise<void> => {
-    if (busy || !action) return
-    setBusy(true)
+  /** Wrap an action so every path reports through the same two lines. */
+  const perform = async (
+    kind: 'action' | 'pull' | 'reset',
+    fn: () => Promise<void>
+  ): Promise<void> => {
+    if (busy) return
+    setBusy(kind)
     setError(null)
+    setNote(null)
     try {
+      await fn()
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const runPrimary = (): Promise<void> =>
+    perform('action', async () => {
       if (action === 'view-pr' && pull) return openUrl(pull.url)
       if (action === 'open-pr') {
         const url = statusKey ? await api.forge.createUrl(statusKey) : null
@@ -371,18 +417,32 @@ function ForgePanel({
       }
       if (action === 'push') {
         const r = await pushBranch(ownerId)
-        if (!r.ok) return setError(r.error ?? 'Push failed.')
+        if (!r.ok) setError(r.error ?? 'Push failed.')
         return
       }
-      // `pull` is deliberately not automated: merging into a dirty worktree
-      // that an agent is actively editing is how work gets lost.
-      if (action === 'pull') {
-        setError('Run `git pull` in this workstream - Roxy will not merge under a running agent.')
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
+      // 'pull' has its own dedicated button below; the primary slot skips it.
+    })
+
+  const runPull = (): Promise<void> =>
+    perform('pull', async () => {
+      const r = await pullBranch(ownerId)
+      if (!r.ok) return setError(r.error ?? 'Could not update from origin.')
+      setNote(r.updated ? `Updated from ${r.upstream}.` : 'Already up to date.')
+    })
+
+  const runReset = (): Promise<void> =>
+    perform('reset', async () => {
+      const r = await resetBranch(ownerId)
+      setConfirmReset(false)
+      if (!r.ok) return setError(r.error ?? 'Reset failed.')
+      // Naming the stash is the point. A destructive action that hides the way
+      // back is indistinguishable from one that lost the work.
+      setNote(
+        r.stashed
+          ? `Reset to ${r.upstream}. Your changes are in the stash — \`git stash pop\` to get them back.`
+          : `Reset to ${r.upstream}.`
+      )
+    })
 
   return (
     <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={style}>
@@ -434,16 +494,76 @@ function ForgePanel({
             {error ?? view?.error?.message}
           </div>
         )}
+        {note && !error && (
+          <div className="border-t border-border px-3 py-1.5 text-[11px] text-text-muted">
+            {note}
+          </div>
+        )}
 
-        {action && (
+        {/* `pull` never reaches the primary slot — it has a labelled button of
+            its own below, where it sits next to the reset it might send you to. */}
+        {action && action !== 'pull' && (
           <div className="border-t border-border p-1.5">
             <button
               type="button"
-              onClick={() => void run()}
-              disabled={busy}
-              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-text transition hover:bg-white/5 disabled:opacity-50"
+              onClick={() => void runPrimary()}
+              disabled={!!busy}
+              className="press-scale flex w-full items-center justify-center gap-1.5 rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-white/5 disabled:opacity-50"
             >
-              {busy ? 'Working...' : ACTION_LABEL[action]}
+              {busy === 'action' ? 'Working...' : ACTION_LABEL[action]}
+            </button>
+          </div>
+        )}
+
+        {sync && (
+          <div className="flex flex-col gap-1 border-t border-border p-1.5">
+            <button
+              type="button"
+              onClick={() => void runPull()}
+              // Nothing to fast-forward, or a fast-forward that git would
+              // refuse. Disabled with a reason beats a button that fails.
+              disabled={!!busy || !sync.canFastForward}
+              title={fastForwardHint(sync)}
+              className="press-scale flex w-full items-center justify-center gap-1.5 rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-white/5 disabled:opacity-40"
+            >
+              <ArrowDownToLine className="h-3.5 w-3.5 opacity-70" />
+              {/* Two labels, because they are two different promises. With
+                  commits known to be waiting it says what it will DO; with none
+                  it says what it will LOOK FOR, since the count is only as
+                  fresh as the last fetch and clicking is how you refresh it. */}
+              {busy === 'pull'
+                ? 'Updating...'
+                : sync.behind > 0
+                  ? `Update from ${sync.upstream}`
+                  : `Check ${sync.upstream}`}
+              {sync.behind > 0 && (
+                <span className="text-text-subtle tabular-nums">({sync.behind})</span>
+              )}
+            </button>
+
+            {/* Two clicks, not a dialog. The panel already shows the counts this
+                would discard, so a modal would only re-state what is on screen
+                two inches above the cursor — while a single click on a button
+                that throws away work is how people learn to distrust an app. */}
+            <button
+              type="button"
+              onClick={() => (confirmReset ? void runReset() : setConfirmReset(true))}
+              onBlur={() => setConfirmReset(false)}
+              disabled={!!busy}
+              title={`Discard local state and make this branch identical to ${sync.upstream}`}
+              className={cn(
+                'press-scale flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs disabled:opacity-40',
+                confirmReset
+                  ? 'bg-danger/15 text-danger'
+                  : 'text-text-subtle hover:bg-white/5 hover:text-text-muted'
+              )}
+            >
+              <RotateCcw className="h-3.5 w-3.5 opacity-70" />
+              {busy === 'reset'
+                ? 'Resetting...'
+                : confirmReset
+                  ? resetConfirmLabel(sync)
+                  : `Reset to ${sync.upstream}`}
             </button>
           </div>
         )}
@@ -452,9 +572,39 @@ function ForgePanel({
   )
 }
 
+/**
+ * What "Update" will do, or why it can't — shown on the button, before the
+ * click rather than as an error after it.
+ */
+function fastForwardHint(sync: SyncTarget): string {
+  if (!sync.canFastForward) {
+    return sync.behind > 0
+      ? `Diverged from ${sync.upstream} — merge or rebase it yourself, or reset to discard the local commits`
+      : `${sync.ahead} unpushed commit${sync.ahead === 1 ? '' : 's'} — push them, or reset to discard them`
+  }
+  // No count means the last fetch found nothing; clicking fetches again, so
+  // this doubles as "check for new commits".
+  return sync.behind > 0
+    ? `Fast-forward this branch onto ${sync.upstream}`
+    : `Check ${sync.upstream} for new commits`
+}
+
+/**
+ * The armed label spells out the damage in units the user can weigh: commits
+ * are gone for good (well, reflog), edits are merely stashed. "Are you sure?"
+ * says nothing; "Discard 2 commits + stash 5 changes" is a decision.
+ */
+function resetConfirmLabel(sync: SyncTarget): string {
+  const bits: string[] = []
+  if (sync.ahead > 0) bits.push(`discard ${sync.ahead} commit${sync.ahead === 1 ? '' : 's'}`)
+  if (sync.changed > 0) bits.push(`stash ${sync.changed} change${sync.changed === 1 ? '' : 's'}`)
+  if (!bits.length) return 'Click again to reset'
+  return `Click again to ${bits.join(' + ')}`
+}
+
 const ACTION_LABEL: Record<LifecycleAction, string> = {
   push: 'Push to origin',
-  pull: 'Behind origin',
+  pull: 'Update from origin',
   'open-pr': 'Open a pull request',
   'view-pr': 'View on the web'
 }

@@ -147,6 +147,8 @@ export const CHANNELS = {
   /** Forge = the git host (GitHub/Azure DevOps/GitLab/Bitbucket) behind `origin`. */
   forgeStatus: 'forge:status',
   forgePush: 'forge:push',
+  forgePull: 'forge:pull',
+  forgeReset: 'forge:reset',
   forgeCreateUrl: 'forge:create-url',
   forgeListHosts: 'forge:list-hosts',
   forgeSetHostKind: 'forge:set-host-kind',

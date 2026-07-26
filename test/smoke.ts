@@ -1701,6 +1701,167 @@ async function main(): Promise<void> {
 
       repo.removeChat(wtChat.id)
       repo.removeChat(lazy.id)
+
+      // ---- getting back in sync with a real remote ----
+      // A bare repo plus two clones is the only honest way to test this: the
+      // whole feature is about what happens when someone ELSE pushed, and
+      // faking that with local refs would test our mock, not git.
+      {
+        const bare = path.join(tmp, 'sync-origin.git')
+        const mine = path.join(tmp, 'sync-mine')
+        const theirs = path.join(tmp, 'sync-theirs')
+        await runGit(['init', '--bare', '-q', '--initial-branch=main', bare], tmp)
+
+        const setup = async (dir: string): Promise<void> => {
+          await runGit(['clone', '-q', bare, dir], tmp)
+          await runGit(['config', 'user.email', 'smoke@roxy.test'], dir)
+          await runGit(['config', 'user.name', 'Roxy Smoke'], dir)
+          await runGit(['config', 'commit.gpgsign', 'false'], dir)
+        }
+        await setup(mine)
+        await fs.writeFile(path.join(mine, 'base.txt'), 'base\n')
+        await runGit(['add', '.'], mine)
+        await runGit(['commit', '-q', '-m', 'base'], mine)
+        await runGit(['push', '-q', '-u', 'origin', 'main'], mine)
+        await setup(theirs)
+
+        check(
+          'status reports the upstream ref by name',
+          (await git.status(mine))?.upstream === 'origin/main',
+          String((await git.status(mine))?.upstream)
+        )
+
+        // Nothing to do is a SUCCESS that reports `updated: false`, not an
+        // error - the button must not cry wolf when the user is already current.
+        const noop = await git.pullFastForward(mine)
+        check('pull: already up to date succeeds', noop.ok, noop.error ?? '')
+        check('pull: ...and reports nothing moved', noop.updated === false)
+
+        // Someone else pushes.
+        await fs.writeFile(path.join(theirs, 'theirs.txt'), 'theirs\n')
+        await runGit(['add', '.'], theirs)
+        await runGit(['commit', '-q', '-m', 'their work'], theirs)
+        await runGit(['push', '-q', 'origin', 'main'], theirs)
+
+        const ff = await git.pullFastForward(mine)
+        check('pull: fast-forwards onto the upstream', ff.ok, ff.error ?? '')
+        check('pull: ...and says it moved', ff.updated === true)
+        check('pull: ...bringing the new file with it', existsSync(path.join(mine, 'theirs.txt')))
+        check('pull: ...leaving nothing behind', (await git.status(mine))?.behind === 0)
+
+        // A fast-forward must survive an untracked file that has nothing to do
+        // with the incoming commit - an agent mid-task always has some.
+        await fs.writeFile(path.join(theirs, 'more.txt'), 'more\n')
+        await runGit(['add', '.'], theirs)
+        await runGit(['commit', '-q', '-m', 'more work'], theirs)
+        await runGit(['push', '-q', 'origin', 'main'], theirs)
+        await fs.writeFile(path.join(mine, 'scratch.txt'), 'agent scratch\n')
+        const ffDirty = await git.pullFastForward(mine)
+        check('pull: an unrelated dirty file does not block it', ffDirty.ok, ffDirty.error ?? '')
+        check(
+          'pull: ...and the local file is untouched',
+          (await fs.readFile(path.join(mine, 'scratch.txt'), 'utf8')) === 'agent scratch\n'
+        )
+
+        // DIVERGED: a local commit plus a remote one. This is the case where a
+        // naive `git pull` would merge (or rebase, or open an editor) depending
+        // on config - we refuse instead, and must leave the tree exactly as it
+        // was so the user still has both sides.
+        await runGit(['add', '.'], mine)
+        await runGit(['commit', '-q', '-m', 'my local work'], mine)
+        await fs.writeFile(path.join(theirs, 'conflict-free.txt'), 'x\n')
+        await runGit(['add', '.'], theirs)
+        await runGit(['commit', '-q', '-m', 'their later work'], theirs)
+        await runGit(['push', '-q', 'origin', 'main'], theirs)
+
+        const localHead = await git.currentBranch(mine)
+        const diverged = await git.pullFastForward(mine)
+        check('pull: refuses to merge a diverged branch', !diverged.ok)
+        check(
+          'pull: ...and never leaves a merge behind',
+          (await git.status(mine))?.ahead === 1,
+          JSON.stringify(await git.status(mine))
+        )
+        check('pull: ...still on the same branch', (await git.currentBranch(mine)) === localHead)
+
+        // RESET: the escape hatch. Both the local commit and the uncommitted
+        // work must end up recoverable, not merely gone.
+        await fs.writeFile(path.join(mine, 'uncommitted.txt'), 'in progress\n')
+        const before = await git.status(mine)
+        check('reset: the tree is dirty going in', before?.dirty === true)
+
+        const reset = await git.resetToUpstream(mine)
+        check('reset: succeeds', reset.ok, reset.error ?? '')
+        check('reset: reports the ref it synced to', reset.upstream === 'origin/main')
+        check('reset: says it stashed the dirty work', reset.stashed === true)
+
+        const after = await git.status(mine)
+        check('reset: the branch is level with origin', after?.ahead === 0 && after?.behind === 0)
+        check('reset: the tree is clean', after?.dirty === false)
+        check(
+          'reset: the incoming file is present',
+          existsSync(path.join(mine, 'conflict-free.txt'))
+        )
+
+        // The promise the confirm step makes: the work is in the stash, and one
+        // `git stash pop` brings it back. If this ever breaks, the button is
+        // lying to the user about a destructive action.
+        const stashList = await new Promise<string>((resolve) => {
+          const c = spawn('git', ['stash', 'list'], { cwd: mine, shell: false, windowsHide: true })
+          let out = ''
+          c.stdout?.on('data', (d: Buffer) => (out += d.toString()))
+          c.on('close', () => resolve(out))
+          c.on('error', () => resolve(''))
+        })
+        check('reset: the stash entry names roxy', /roxy: before reset/.test(stashList), stashList)
+        await runGit(['stash', 'pop'], mine)
+        check(
+          'reset: the stashed work comes back with `git stash pop`',
+          existsSync(path.join(mine, 'uncommitted.txt'))
+        )
+
+        // A clean tree must NOT claim a stash exists - that would send the user
+        // to `git stash pop` for an entry that isn't there.
+        await runGit(['checkout', '-q', '--', '.'], mine)
+        await fs.rm(path.join(mine, 'uncommitted.txt'), { force: true })
+        const cleanReset = await git.resetToUpstream(mine)
+        check('reset: a clean tree resets fine', cleanReset.ok, cleanReset.error ?? '')
+        check('reset: ...and reports no stash', cleanReset.stashed !== true)
+
+        // The "check for updates" path: clicking Update with nothing known to
+        // be waiting must still fetch and then answer honestly, because the
+        // behind count on screen is only as fresh as the last fetch. This is
+        // why `canFastForward` keys off `ahead === 0` rather than `behind > 0`.
+        {
+          await runGit(['checkout', '-q', 'main'], mine)
+          const before = await git.status(mine)
+          check('check: nothing is known to be waiting', before?.behind === 0)
+          await fs.writeFile(path.join(theirs, 'surprise.txt'), 'surprise\n')
+          await runGit(['add', '.'], theirs)
+          await runGit(['commit', '-q', '-m', 'pushed behind our back'], theirs)
+          await runGit(['push', '-q', 'origin', 'main'], theirs)
+          // Still 0 locally - we have not fetched, which is exactly the state a
+          // greyed-out button would strand the user in.
+          check(
+            'check: ...and the stale count still says 0',
+            (await git.status(mine))?.behind === 0
+          )
+
+          const found = await git.pullFastForward(mine)
+          check('check: clicking anyway fetches and updates', found.ok, found.error ?? '')
+          check('check: ...and picks up the surprise commit', found.updated === true)
+          check('check: ...bringing its file along', existsSync(path.join(mine, 'surprise.txt')))
+        }
+
+        // No upstream at all: both actions must decline with a reason rather
+        // than guess at `origin/<something>`.
+        await runGit(['checkout', '-q', '-b', 'orphan-branch'], mine)
+        const noUp = await git.pullFastForward(mine)
+        check('pull: declines a branch with no upstream', !noUp.ok)
+        check('pull: ...with a reason naming the branch', /orphan-branch/.test(noUp.error ?? ''))
+        const noUpReset = await git.resetToUpstream(mine)
+        check('reset: declines a branch with no upstream', !noUpReset.ok)
+      }
     }
   }
 

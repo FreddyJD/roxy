@@ -168,6 +168,22 @@ export interface CreateWorktreeResult {
 }
 
 /** What `worktrees.prune` found and (when not a dry run) removed. */
+/** The result of a sync action (`forge.pull` / `forge.reset`). */
+export interface SyncOutcome {
+  ok: boolean
+  error?: string
+  /** The ref we synced to, e.g. `origin/main`. */
+  upstream?: string
+  /** False when the branch was already in sync and nothing moved. */
+  updated?: boolean
+  /**
+   * Set by `reset` when it parked uncommitted work in the stash. The UI says so
+   * out loud - a destructive action that silently hides the escape route is
+   * indistinguishable from one that lost the work.
+   */
+  stashed?: boolean
+}
+
 export interface PruneWorktreesResult {
   ok: boolean
   candidates: { path: string; branch: string | null }[]
@@ -683,6 +699,16 @@ export interface RoxyApi {
     status(cwd: string, force?: boolean): Promise<ForgeStatusView>
     /** Push the current branch to origin, setting upstream when it has none. */
     push(cwd: string): Promise<{ ok: boolean; error?: string }>
+    /**
+     * Fast-forward the branch onto its upstream. Never merges or rebases: when
+     * the branch has local commits git refuses and nothing is touched.
+     */
+    pull(cwd: string): Promise<SyncOutcome>
+    /**
+     * Hard-reset the branch onto its upstream, stashing uncommitted work first
+     * (including untracked files) so nothing is unrecoverable.
+     */
+    reset(cwd: string): Promise<SyncOutcome>
     /** The host's "create a pull request" URL, pre-filled for this branch. */
     createUrl(cwd: string): Promise<string | null>
     /**

@@ -37,7 +37,7 @@ import { uniqueSlug } from '@shared/slugs'
 import { shouldAutoWorkstream } from '@shared/workstream'
 import { api } from './api'
 import type { ComposerImage } from './images'
-import type { GitStatusView, ServiceView, WorktreeView } from '@shared/api'
+import type { GitStatusView, ServiceView, SyncOutcome, WorktreeView } from '@shared/api'
 import type { ForgeStatusView } from '@shared/forge'
 
 interface RoxyStore {
@@ -180,6 +180,14 @@ interface RoxyStore {
   refreshGitStatus: (chatId: string) => Promise<void>
   /** Push this session's branch to origin, then refresh its status. */
   pushBranch: (chatId: string) => Promise<{ ok: boolean; error?: string }>
+  /**
+   * Fast-forward this session's branch onto its upstream. Refuses (rather than
+   * merges) when the branch has local commits, and refuses outright while a
+   * turn is running - see `syncBranch`.
+   */
+  pullBranch: (chatId: string) => Promise<SyncOutcome>
+  /** Hard-reset onto the upstream, stashing uncommitted work first. */
+  resetBranch: (chatId: string) => Promise<SyncOutcome>
   /** Load the worktrees + branches for a project (menu open). */
   refreshWorktrees: (workspacePath: string) => Promise<void>
   /**
@@ -429,6 +437,54 @@ async function hydrateSubagent(subChatId: string): Promise<void> {
     runningSubagents: { ...s.runningSubagents, [subChatId]: true },
     streamingChats: { ...s.streamingChats, [subChatId]: fold.parts }
   }))
+}
+
+/**
+ * The shared body of `pullBranch` and `resetBranch`.
+ *
+ * Both carry the same two guards, and they are the reason this is worth
+ * writing once:
+ *
+ *  1. NEVER while a turn is running. Both operations rewrite files under the
+ *     agent's feet - it may be mid-edit, holding a file it read three tool
+ *     calls ago, with a dev server watching the tree. The failure is silent and
+ *     the resulting diff is nonsense, so this refuses outright rather than
+ *     racing. Waiting for the turn to end is a few seconds; untangling a
+ *     half-reset worktree is not.
+ *  2. Sub-sessions act on their PARENT's workstream, because that is the tree
+ *     they actually run in. Resolving the owner here means a subagent's panel
+ *     can't quietly sync a different checkout than the one it displays.
+ */
+async function syncBranch(
+  get: () => RoxyStore,
+  chatId: string,
+  mode: 'pull' | 'reset'
+): Promise<SyncOutcome> {
+  const state = get()
+  const chat = state.chats.find((c) => c.id === chatId)
+  const owner =
+    chat?.kind === 'sub' && chat.parentId
+      ? (state.chats.find((c) => c.id === chat.parentId) ?? chat)
+      : chat
+  const key = owner?.worktreePath ?? owner?.workspacePath
+  if (!owner || !key) return { ok: false, error: 'No workspace for this session.' }
+
+  const busy =
+    !!state.sendingChats[owner.id] || remoteTurns.has(owner.id) || subagentTurns.has(owner.id)
+  if (busy) {
+    return {
+      ok: false,
+      error: 'This session is mid-turn - stop it or let it finish first.'
+    }
+  }
+
+  const r = mode === 'pull' ? await api.forge.pull(key) : await api.forge.reset(key)
+  // Refresh on FAILURE too: a fetch happened either way, so the behind count on
+  // screen is now stale even when the merge was refused. Leaving "3 behind"
+  // under an error message that says the update didn't happen is confusing in
+  // exactly the moment the user needs to trust the number.
+  await get().refreshGitStatus(owner.id)
+  return r
 }
 
 export const useRoxyStore = create<RoxyStore>((set, get) => ({
@@ -714,6 +770,9 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     if (r.ok) await get().refreshGitStatus(chatId)
     return r
   },
+
+  pullBranch: (chatId) => syncBranch(get, chatId, 'pull'),
+  resetBranch: (chatId) => syncBranch(get, chatId, 'reset'),
 
   refreshWorktrees: async (workspacePath) => {
     if (!workspacePath || !get().gitAvailable) return

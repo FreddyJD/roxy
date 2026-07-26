@@ -12,6 +12,7 @@ import type {
   RemoteStartInput,
   SkillView,
   SkillWriteInput,
+  SyncOutcome,
   UpsertMcpServerInput
 } from '../../shared/api'
 import type {
@@ -641,6 +642,27 @@ export function registerIpc(): void {
     const r = await git.pushBranch(cwd, branch, { setUpstream: !st?.hasUpstream })
     // The remote just changed, so every cached PR answer is suspect - drop it
     // rather than let the chip show pre-push state for up to a minute.
+    if (r.ok) forge.invalidate()
+    return r
+  })
+
+  // Update + reset are separate channels rather than one `sync(mode)` because
+  // they are separate promises: one can only ever move the branch forward, the
+  // other can throw away local work. Collapsing them into a parameter is how a
+  // caller ends up destructive by typo.
+  ipcMain.handle(CHANNELS.forgePull, async (_e, cwd: string): Promise<SyncOutcome> => {
+    if (!cwd || !(await git.isGitAvailable()))
+      return { ok: false, error: 'Git isn\u2019t installed.' }
+    return git.pullFastForward(cwd)
+  })
+
+  ipcMain.handle(CHANNELS.forgeReset, async (_e, cwd: string): Promise<SyncOutcome> => {
+    if (!cwd || !(await git.isGitAvailable()))
+      return { ok: false, error: 'Git isn\u2019t installed.' }
+    const r = await git.resetToUpstream(cwd)
+    // The local branch just moved to whatever the server has, so anything we
+    // cached about "this branch vs its PR" describes a commit that is no longer
+    // HEAD. Drop it rather than show pre-reset state until the TTL expires.
     if (r.ok) forge.invalidate()
     return r
   })

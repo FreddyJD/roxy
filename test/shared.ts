@@ -3109,6 +3109,30 @@ async function main(): Promise<void> {
       return v.phase === 'behind' && v.action === 'pull' && v.tone === 'warning'
     })()
   )
+  // Diverged has to beat BOTH single-sided branches, and it has to offer no
+  // action: every action available here is one git would refuse.
+  check(
+    'lifecycle: diverged beats ahead and offers nothing',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true, ahead: 2, behind: 3 },
+        pr: null,
+        forgeKnown: true
+      })
+      return v.phase === 'diverged' && v.action === null && v.tone === 'warning'
+    })()
+  )
+  check(
+    'lifecycle: diverged shows both counts',
+    (() => {
+      const v = branchLifecycle({
+        sync: { ...noSync, hasUpstream: true, ahead: 2, behind: 3 },
+        pr: null,
+        forgeKnown: true
+      })
+      return v.label === '\u21912 \u21933'
+    })()
+  )
   check(
     'lifecycle: synced + forge known offers a PR',
     (() => {

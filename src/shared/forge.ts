@@ -373,6 +373,31 @@ export interface BranchSync {
   dirty: boolean
 }
 
+/**
+ * What a "get back in sync" action would do, resolved to concrete nouns.
+ *
+ * Every field here exists to let the UI write a sentence instead of a verb.
+ * "Update from origin/main" and "Reset to origin/main, stashing 4 changes" are
+ * checkable claims; "Pull" and "Reset" are things the user has to take on
+ * faith — and one of them can throw away an afternoon.
+ */
+export interface SyncTarget {
+  /** The upstream ref, e.g. `origin/main`. */
+  upstream: string
+  /** Commits the upstream has that this branch doesn't. */
+  behind: number
+  /** Commits this branch has that the upstream doesn't. */
+  ahead: number
+  /** Uncommitted entries a reset would stash first. */
+  changed: number
+  /**
+   * Whether a fast-forward can succeed. False once the branch has commits of
+   * its own: git would have to merge or rebase, and the chip refuses to pick
+   * one on the user's behalf.
+   */
+  canFastForward: boolean
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
@@ -389,6 +414,7 @@ export type LifecyclePhase =
   | 'unpublished'
   | 'ahead'
   | 'behind'
+  | 'diverged'
   | 'synced'
   | 'draft'
   | 'open'
@@ -478,6 +504,21 @@ export function branchLifecycle(input: {
       title: 'Not pushed yet',
       pr: null,
       action: 'push'
+    }
+  }
+  // Diverged FIRST: both counts are non-zero, and either single-sided answer is
+  // a lie that ends in a failed command. Offering "push" here produces git's
+  // non-fast-forward rejection; offering an update produces its own refusal. So
+  // the honest chip offers neither and says what happened - choosing merge or
+  // rebase on the user's behalf is not this button's call to make.
+  if (sync.ahead > 0 && sync.behind > 0) {
+    return {
+      phase: 'diverged',
+      label: `↑${sync.ahead} ↓${sync.behind}`,
+      tone: 'warning',
+      title: `Diverged: ${sync.ahead} to push, ${sync.behind} to pull`,
+      pr: null,
+      action: null
     }
   }
   if (sync.ahead > 0) {
@@ -590,6 +631,12 @@ export interface ForgeStatusView {
   lifecycle: LifecycleView
   /** The pull request for this branch, when the forge knows of one. */
   pull: PullRequestView | null
+  /**
+   * What an update-or-reset would do, or null when there is no upstream to sync
+   * with. Resolved in the main process so the UI never has to guess a ref name
+   * or infer whether a fast-forward is possible.
+   */
+  syncTarget: SyncTarget | null
   /** Set when the last lookup failed. Advisory: the chip still renders. */
   error: ForgeError | null
   /** True while a background refresh is in flight. */

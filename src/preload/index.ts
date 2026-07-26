@@ -208,6 +208,8 @@ const roxy: RoxyApi = {
   forge: {
     status: (cwd, force) => ipcRenderer.invoke(CHANNELS.forgeStatus, cwd, force),
     push: (cwd) => ipcRenderer.invoke(CHANNELS.forgePush, cwd),
+    pull: (cwd) => ipcRenderer.invoke(CHANNELS.forgePull, cwd),
+    reset: (cwd) => ipcRenderer.invoke(CHANNELS.forgeReset, cwd),
     createUrl: (cwd) => ipcRenderer.invoke(CHANNELS.forgeCreateUrl, cwd),
     listHosts: () => ipcRenderer.invoke(CHANNELS.forgeListHosts),
     setHostKind: (host, kind) => ipcRenderer.invoke(CHANNELS.forgeSetHostKind, host, kind)
