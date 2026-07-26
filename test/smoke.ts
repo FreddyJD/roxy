@@ -23,6 +23,8 @@ import {
   restartService
 } from '../src/main/harness'
 import { sessionCwd } from '../src/main/services/workspace'
+import Database from 'better-sqlite3'
+import { MIGRATIONS } from '../src/main/db/migrations'
 import * as git from '../src/main/services/git'
 import {
   materializePendingWorktree,
@@ -480,6 +482,75 @@ async function main(): Promise<void> {
 
     repo.removeChat(sessA.id)
     repo.removeChat(sessB.id)
+  }
+
+  // ---- migration repair (two branches, two different "v14"s) ----
+  // The version is a POSITION, so a database that ran another branch's v14
+  // advanced past ours and never got the worktree columns — every worktree
+  // write then failed with "no such column: worktree_path". The reconcile step
+  // must fix that, be idempotent, and leave the other branch's tables alone.
+  {
+    const brokenDir = path.join(tmp, 'broken-db')
+    await fs.mkdir(brokenDir, { recursive: true })
+    const brokenFile = path.join(brokenDir, 'roxy.db')
+    const broken = new Database(brokenFile)
+    for (let i = 0; i < 13; i++) broken.exec(MIGRATIONS[i] as string)
+    // Another branch's v14: a table of its own, not our columns.
+    broken.exec('CREATE TABLE usage (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);')
+    broken.pragma('user_version = 14')
+    // Our v15 then ran at position 14, skipping our v14 entirely.
+    broken.exec('ALTER TABLE chats ADD COLUMN worktree_pending TEXT')
+    broken.pragma('user_version = 15')
+    broken
+      .prepare(
+        `INSERT INTO chats(id, title, kind, workspace_path, created_at, updated_at, sort_order)
+         VALUES('mig1','pre-existing','main','/proj',1,1,1)`
+      )
+      .run()
+    const beforeCols = (broken.prepare('PRAGMA table_info(chats)').all() as { name: string }[]).map(
+      (c) => c.name
+    )
+    check('migration repro: the broken DB lacks worktree_path', !beforeCols.includes('worktree_path'))
+    broken.close()
+
+    // Re-open and run the ladder, exactly as database.ts does.
+    const repaired = new Database(brokenFile)
+    for (let v = repaired.pragma('user_version', { simple: true }) as number; v < MIGRATIONS.length; v++) {
+      const step = MIGRATIONS[v]
+      if (typeof step === 'string') repaired.exec(step)
+      else step(repaired)
+      repaired.pragma(`user_version = ${v + 1}`)
+    }
+    const afterCols = (repaired.prepare('PRAGMA table_info(chats)').all() as { name: string }[]).map(
+      (c) => c.name
+    )
+    for (const col of ['worktree_path', 'branch', 'dev_port', 'worktree_pending']) {
+      check(`migration repair: adds ${col}`, afterCols.includes(col))
+    }
+    // The write from the bug report.
+    repaired.prepare('UPDATE chats SET worktree_path = ? WHERE id = ?').run('/wt', 'mig1')
+    const row = repaired.prepare('SELECT * FROM chats WHERE id = ?').get('mig1') as {
+      title: string
+      worktree_path: string | null
+    }
+    check('migration repair: the failing write now succeeds', row.worktree_path === '/wt')
+    check('migration repair: existing rows survive', row.title === 'pre-existing')
+    const tables = (
+      repaired.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
+    ).map((t) => t.name)
+    check("migration repair: the other branch's table is untouched", tables.includes('usage'))
+
+    // Idempotent — it runs on healthy databases too.
+    const reconcile = MIGRATIONS[MIGRATIONS.length - 1]
+    if (typeof reconcile !== 'string') {
+      reconcile(repaired)
+      reconcile(repaired)
+    }
+    const twice = repaired.prepare('SELECT * FROM chats WHERE id = ?').get('mig1') as {
+      worktree_path: string | null
+    }
+    check('migration repair: re-running changes nothing', twice.worktree_path === '/wt')
+    repaired.close()
   }
 
   // ---- sessionCwd (the one working-directory resolver) ----

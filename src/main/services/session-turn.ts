@@ -19,6 +19,26 @@ import { materializePendingWorktree } from './worktree'
 import path from 'node:path'
 
 /**
+ * Resolve a session's working directory, degrading to '' rather than throwing.
+ *
+ * Same reasoning as the materialize guard above: cwd resolution reads the DB and
+ * touches the filesystem, and a turn that can't resolve a worktree should still
+ * run — just without one.
+ */
+function safeSessionCwd(sessionId: string): string {
+  try {
+    return sessionCwd(sessionId)
+  } catch (e) {
+    console.warn('[worktree] cwd resolution failed; falling back:', e)
+    try {
+      return repo.getChatWorkspace(sessionId) ?? ''
+    } catch {
+      return ''
+    }
+  }
+}
+
+/**
  * Run one agent turn for a session. `emit` receives every streamed `LlmEvent`;
  * `signal` aborts the in-flight turn. Returns `{ ok: true }` on success, or
  * `{ ok: false, error }` on failure (a caller-triggered abort reports "Stopped.").
@@ -29,16 +49,21 @@ export async function runSessionTurn(
   signal: AbortSignal
 ): Promise<LlmResult> {
   // If this session asked for a worktree, build it now — on the first turn,
-  // not at create time, so an abandoned composer leaves nothing on disk. Soft
-  // by design: a git failure downgrades to working in the project folder and
-  // reports itself, but must never stop the turn from running.
-  const materialized = await materializePendingWorktree(input.sessionId)
-  if (materialized.error) {
-    emit({ type: 'text', delta: `_${materialized.error}_\n\n` })
+  // not at create time, so an abandoned composer leaves nothing on disk.
+  //
+  // Wrapped because this MUST NOT be able to stop a turn. Everything inside is
+  // best-effort infrastructure (git, the filesystem, a schema that might be
+  // mid-upgrade); if any of it throws, the right outcome is a session that runs
+  // in its project folder, not a chat that refuses to answer.
+  try {
+    const materialized = await materializePendingWorktree(input.sessionId)
+    if (materialized.error) emit({ type: 'text', delta: `_${materialized.error}_\n\n` })
+  } catch (e) {
+    console.warn('[worktree] materialize failed; running in the project folder:', e)
   }
   // Where this session's tools run — its worktree when it has one, else the
   // project folder. The single resolver; never read workspace_path directly.
-  const cwd = sessionCwd(input.sessionId)
+  const cwd = safeSessionCwd(input.sessionId)
   // Name this session's browser window after its project so concurrent windows
   // are tellable apart (a no-op until/unless the agent opens the browser).
   if (cwd) setBrowserLabel(input.sessionId, path.basename(cwd))

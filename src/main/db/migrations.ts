@@ -1,9 +1,42 @@
+import type { Database } from 'better-sqlite3'
+
 /**
- * SQL migrations, applied in order. The array index + 1 is the schema version
+ * A migration is either raw SQL or a function, for steps that must INSPECT the
+ * database before acting (SQLite has no `ADD COLUMN IF NOT EXISTS`).
+ */
+export type Migration = string | ((db: Database) => void)
+
+/** Whether a table already has a column — SQLite can't express this in DDL. */
+export function hasColumn(db: Database, table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  return cols.some((c) => c.name === column)
+}
+
+/**
+ * Add a column only if it's missing. Idempotent, so a repair step can run
+ * against a database that's already correct.
+ */
+export function addColumnIfMissing(
+  db: Database,
+  table: string,
+  column: string,
+  type: string
+): void {
+  if (!hasColumn(db, table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`)
+}
+
+/**
+ * Migrations, applied in order. The array index + 1 is the schema version
  * tracked via SQLite's `PRAGMA user_version`. Append new migrations; never edit
  * an existing one once shipped.
+ *
+ * CAUTION: the version is a POSITION, so two branches that each append a "v14"
+ * describe different schemas by the same number. A database that ran one
+ * branch's v14 will skip the other's forever, because its user_version already
+ * says 14. That happened between the usage-dashboard and worktree branches —
+ * see the reconcile step at the end, which repairs it.
  */
-export const MIGRATIONS: string[] = [
+export const MIGRATIONS: Migration[] = [
   // ---- v1: initial schema ----
   /* sql */ `
     CREATE TABLE settings (
@@ -176,5 +209,20 @@ export const MIGRATIONS: string[] = [
   // project folder).
   /* sql */ `
     ALTER TABLE chats ADD COLUMN worktree_pending TEXT;
-  `
+  `,
+
+  // ---- v16: reconcile the worktree columns ----
+  // Repairs databases that skipped an earlier migration because two branches
+  // both numbered one "v14": a DB that took the other branch's v14 advanced its
+  // user_version past ours, so our columns were never added and every worktree
+  // write failed with "no such column: worktree_path".
+  //
+  // Written as a function because it must be idempotent — it runs on healthy
+  // databases too, where every column already exists and it does nothing.
+  (db) => {
+    addColumnIfMissing(db, 'chats', 'worktree_path', 'TEXT')
+    addColumnIfMissing(db, 'chats', 'branch', 'TEXT')
+    addColumnIfMissing(db, 'chats', 'dev_port', 'INTEGER')
+    addColumnIfMissing(db, 'chats', 'worktree_pending', 'TEXT')
+  }
 ]

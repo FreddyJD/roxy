@@ -22,9 +22,12 @@ export function getDb(): Database.Database {
 function migrate(db: Database.Database): void {
   const current = db.pragma('user_version', { simple: true }) as number
   for (let version = current; version < MIGRATIONS.length; version++) {
-    const sql = MIGRATIONS[version]
+    const step = MIGRATIONS[version]
     const apply = db.transaction(() => {
-      db.exec(sql)
+      // A step is raw SQL, or a function for one that must inspect the schema
+      // first (SQLite has no ADD COLUMN IF NOT EXISTS).
+      if (typeof step === 'string') db.exec(step)
+      else step(db)
       db.pragma(`user_version = ${version + 1}`)
     })
     apply()
