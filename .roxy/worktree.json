@@ -1,0 +1,24 @@
+{
+  "$comment": [
+    "Run once in each new git worktree Roxy creates for a session.",
+    "",
+    "A worktree is a fresh checkout: git only materializes tracked files, so",
+    "node_modules is EMPTY and any untracked .env is absent. Without this, the",
+    "first thing an agent does in a new workstream is discover that tsc reports",
+    "'Cannot use JSX unless the --jsx flag is provided' on every file, because",
+    "the base tsconfig it extends lives in node_modules.",
+    "",
+    "npm ci (not install) so the lockfile is honoured exactly, and",
+    "--prefer-offline so it comes from the local npm cache: ~30s rather than a",
+    "cold network install.",
+    "",
+    "Deliberately NOT a junction/symlink to the main checkout's node_modules.",
+    "It looks free (0.02s vs 30s) and it is a trap: writes go THROUGH a junction",
+    "to the real directory, so one workstream running an install or a native",
+    "rebuild mutates every other session's dependencies -- destroying exactly the",
+    "isolation worktrees exist to provide. 30 seconds is worth not debugging that.",
+    "",
+    "Available: ROXY_PROJECT_ROOT, ROXY_WORKTREE_PATH, ROXY_PORT."
+  ],
+  "setup": "npm ci --prefer-offline --no-audit --no-fund"
+}

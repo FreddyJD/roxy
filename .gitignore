@@ -13,5 +13,17 @@ test/.out/
 # TypeScript incremental build info
 *.tsbuildinfo
 
-# Roxy agent scratch (browser screenshots, etc.)
-.roxy/
+# Roxy agent scratch (browser screenshots, spilled tool output, ...).
+# Ignore the CONTENTS rather than the directory: git never descends into an
+# excluded directory, so `.roxy/` would make the un-ignores below dead rules.
+.roxy/*
+# `.roxy/*` only matches the top level, so scratch SUBdirectories need their own
+# rule or their files get picked up anyway.
+.roxy/screenshots/
+.roxy/tool-output/
+
+# Project config under .roxy IS meant to be shared: worktree.json tells Roxy how
+# to prepare a new worktree (install deps, copy .env) and only helps if every
+# clone has it; mcp.json declares the project's tool servers.
+!.roxy/worktree.json
+!.roxy/mcp.json
