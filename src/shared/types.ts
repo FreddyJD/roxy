@@ -99,6 +99,16 @@ export interface SessionTask {
 export interface WorktreeIntent {
   mode: 'new' | 'fromBranch' | 'attach'
   branch?: string
+  /**
+   * For `new`: the commit the fresh branch starts from, instead of the usual
+   * `origin/<default>`. Set when a session is FORKED, so the copy continues
+   * from the code its inherited transcript is actually about — branching a fork
+   * off main would hand it a history describing files that aren't there.
+   *
+   * Advisory: a ref that no longer resolves (the source branch was deleted in
+   * between) falls back to the normal base rather than failing the first turn.
+   */
+  baseRef?: string
 }
 
 export interface Chat {

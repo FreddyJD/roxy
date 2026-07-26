@@ -274,6 +274,21 @@ export async function currentBranch(cwd: string): Promise<string | null> {
 }
 
 /**
+ * Resolve `rev` to a commit sha in `cwd`, or null when it doesn't exist.
+ *
+ * The null is the point: callers use this to check that a ref they recorded
+ * earlier (a fork's base commit, say) is still there, so a branch deleted in
+ * the meantime degrades to a different base instead of a `fatal:` on the path
+ * that was going to use it. Defaults to HEAD.
+ */
+export async function resolveCommit(cwd: string, rev = 'HEAD'): Promise<string | null> {
+  if (!cwd) return null
+  const r = await git(['rev-parse', '--verify', '--quiet', `${rev}^{commit}`], cwd)
+  const sha = r.stdout.trim()
+  return r.ok && sha ? sha : null
+}
+
+/**
  * Local branches plus remote-tracking branches, deduped and sorted.
  *
  * `origin/feature` collapses to `feature` so the picker shows one entry per

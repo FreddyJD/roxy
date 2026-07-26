@@ -121,6 +121,37 @@ export function menuMaxHeight(
   return Math.max(MIN_MENU_H, Math.floor(room))
 }
 
+/**
+ * Where a menu opened AT A POINT (a right-click) should sit.
+ *
+ * Different problem from `alignMenu` above, which lines a menu up with a
+ * trigger box it can measure. Here the anchor is the cursor, and the rule that
+ * matters is that the pointer must not end up sitting ON the menu: so when
+ * there isn't room in the natural down-right direction, the box FLIPS to the
+ * other side of the point rather than sliding under it. Clamping is the last
+ * resort, for a menu too big to fit on either side.
+ *
+ * Returns viewport coordinates (the menu is `fixed`, portalled out of the
+ * scroll container it was summoned from) plus the `transform-origin` that makes
+ * it scale out of the cursor rather than out of the void.
+ */
+export function placeContextMenu(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  vw: number,
+  vh: number
+): { left: number; top: number; origin: string } {
+  const flipX = x + w + MARGIN > vw && x - w >= MARGIN
+  const flipY = y + h + MARGIN > vh && y - h >= MARGIN
+  return {
+    left: clamp(flipX ? x - w : x, MARGIN, Math.max(MARGIN, vw - MARGIN - w)),
+    top: clamp(flipY ? y - h : y, MARGIN, Math.max(MARGIN, vh - MARGIN - h)),
+    origin: `${flipX ? 'right' : 'left'} ${flipY ? 'bottom' : 'top'}`
+  }
+}
+
 /** Largest the image can be drawn inside `availW`×`availH`, or null if it can't. */
 function fit(
   natW: number,

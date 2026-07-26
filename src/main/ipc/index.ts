@@ -6,6 +6,7 @@ import type {
   CreateLoopInput,
   CreateWorktreeInput,
   CreateWorktreeResult,
+  ForkChatInput,
   GitStatusView,
   LlmStartInput,
   McpServerView,
@@ -147,6 +148,43 @@ export function registerIpc(): void {
   // ---- chats ----
   ipcMain.handle(CHANNELS.chatsList, () => repo.listChats())
   ipcMain.handle(CHANNELS.chatsCreate, (_e, input?: CreateChatInput) => repo.createChat(input))
+  ipcMain.handle(CHANNELS.chatsFork, async (_e, id: string, input?: ForkChatInput) => {
+    const source = repo.getChat(id)
+    if (!source) throw new Error('Chat not found')
+
+    // The fork's CODE has to match the transcript it inherits. If the source runs
+    // in a workstream, the fork gets its own worktree branched off the commit
+    // that workstream is sitting on RIGHT NOW - not off origin/main, which would
+    // hand the copy a history describing files that aren't in its checkout.
+    //
+    // Read through the ROOT session: a subagent owns no worktree of its own but
+    // works inside its parent's, and forking one is a normal thing to want (it
+    // is often where the interesting exploration happened).
+    //
+    // A source with no worktree at all - auto-workstream off, or a folder that
+    // isn't a repo - forks in place and shares the project checkout, exactly as
+    // the source does. Inventing an isolated tree for the copy would put it
+    // somewhere the user's editor isn't.
+    //
+    // A source whose workstream is still PENDING (created but never run) counts:
+    // it will get a tree on its first turn, and a fork that quietly opted out of
+    // one would then be editing the project folder its parent is about to stop
+    // using. There is no commit to inherit yet - both will branch off the
+    // default - so the baseRef is simply absent, not wrong.
+    const root = repo.getChat(repo.rootSessionId(id))
+    const wantsWorktree =
+      input?.worktree !== false && !!(root?.worktreePath || root?.worktreePending)
+    const baseRef = root?.worktreePath
+      ? await git.resolveCommit(sessionCwd(id)).catch(() => null)
+      : null
+
+    const chat = repo.forkChat(id, { title: input?.title })
+    if (!wantsWorktree) return chat
+    // Parked, not created: like any new session, the worktree is materialized on
+    // the first turn, so a fork that is opened and abandoned costs nothing.
+    repo.setChatWorktreePending(chat.id, { mode: 'new', ...(baseRef ? { baseRef } : {}) })
+    return repo.getChat(chat.id) ?? chat
+  })
   ipcMain.handle(CHANNELS.chatsRename, (_e, id: string, title: string) =>
     repo.renameChat(id, title)
   )
