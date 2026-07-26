@@ -60,6 +60,12 @@ import {
   statusKeyForSession,
   type StripSession
 } from '../src/shared/workstream'
+import {
+  isServiceFailure,
+  serviceStatusLabel,
+  servicesSummary,
+  type ServiceOutcome
+} from '../src/shared/services'
 import { posix as posixPath, win32 as win32Path } from 'node:path'
 import type { Message, MessagePart } from '../src/shared/types'
 import type { ChatMessage } from '../src/shared/api'
@@ -2217,6 +2223,76 @@ async function main(): Promise<void> {
       statusKeyForSession(mk({ worktreePath: '/wt/auth' })) === '/wt/auth'
     )
     check('poll key: a sub-session never polls', statusKeyForSession(sub) === null)
+  }
+
+  // ---- services panel labels (process facts -> human outcomes) ----
+  // Both bugs guarded here shipped once: a worktree's `npm ci` that SUCCEEDED
+  // reported "1 stopped", and stopping a service on purpose reported a failure
+  // because taskkill /f necessarily exits non-zero.
+  {
+    const svc = (over: Partial<ServiceOutcome> = {}): ServiceOutcome => ({
+      status: 'exited',
+      exitCode: 0,
+      state: 'exited (exit 0)',
+      ...over
+    })
+
+    check('services: a clean exit is done, not "exited"', serviceStatusLabel(svc()) === 'done')
+    check('services: ...and is not a failure', isServiceFailure(svc()) === false)
+    check(
+      'services: a non-zero exit is a failure, with the code',
+      serviceStatusLabel(svc({ exitCode: 1, state: 'exited (exit 1)' })) === 'failed (exit 1)'
+    )
+    check('services: ...and is flagged as one', isServiceFailure(svc({ exitCode: 1 })))
+    check(
+      'services: a spawn error is a failure',
+      serviceStatusLabel(svc({ status: 'error', exitCode: null })) === 'failed' &&
+        isServiceFailure(svc({ status: 'error', exitCode: null }))
+    )
+    check(
+      'services: an exit with no code at all still reads as failed',
+      serviceStatusLabel(svc({ exitCode: null, state: 'exited' })) === 'failed'
+    )
+
+    // A deliberate stop is never an error, whatever code the kill produced.
+    const killed = svc({ status: 'killed', exitCode: 1, state: 'killed (exit 1)' })
+    check('services: a stopped service reads as stopped', serviceStatusLabel(killed) === 'stopped')
+    check('services: ...and is NOT painted as a failure', isServiceFailure(killed) === false)
+    check(
+      'services: ...even when Windows taskkill reports its own code',
+      isServiceFailure(svc({ status: 'killed', exitCode: 137 })) === false
+    )
+
+    // Running keeps bash_list's label — the elapsed time is the useful part.
+    const running = svc({ status: 'running', exitCode: null, state: 'running 12s' })
+    check(
+      'services: a running service keeps its elapsed label',
+      serviceStatusLabel(running) === 'running 12s'
+    )
+    check('services: ...and is not a failure', isServiceFailure(running) === false)
+
+    // The collapsed summary is the only line most people read.
+    check(
+      'services: summary reports a clean install as done',
+      servicesSummary([svc()]) === '1 done'
+    )
+    check(
+      'services: summary leads with what is live',
+      servicesSummary([running, svc()]) === '1 running'
+    )
+    check(
+      'services: ...and always surfaces failures',
+      servicesSummary([running, svc({ exitCode: 1 })]) === '1 running · 1 failed'
+    )
+    check(
+      'services: a stopped service counts as settled, not failed',
+      servicesSummary([killed]) === '1 done'
+    )
+    check(
+      'services: mixed outcomes read failures first among settled',
+      servicesSummary([svc(), svc({ exitCode: 2 })]) === '1 failed · 1 done'
+    )
+    check('services: an empty list never renders a bare count', servicesSummary([]) === '0 done')
   }
 
   // ---- <env> dev port (parallel sessions must not fight over :3000) ----

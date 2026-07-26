@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronRight, ExternalLink, Play, RotateCw, ScrollText, Square } from 'lucide-react'
 import type { ServiceView } from '@shared/api'
+import { isServiceFailure, serviceStatusLabel, servicesSummary } from '@shared/services'
 import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
 import { TerminalOutput } from './TerminalOutput'
@@ -21,8 +22,16 @@ import { TerminalOutput } from './TerminalOutput'
  * scrollback buffer is the right model for one.
  */
 
-/** How often to refresh while the panel is OPEN. Closed, it doesn't poll at all. */
+/** How often to refresh while the panel is OPEN, or while anything is running. */
 const POLL_MS = 2_000
+/**
+ * Cadence when COLLAPSED. Deliberately not "never": a worktree's setup script is
+ * spawned on the session's first turn, long after the one-shot load on mount, so
+ * polling only on session switch left the panel invisible until you clicked away
+ * and back — exactly the case it exists for. The handler reads an in-memory Map,
+ * so this is close to free.
+ */
+const IDLE_POLL_MS = 10_000
 /** Log refresh while a log pane is open — faster, since it's the focus. */
 const LOG_POLL_MS = 1_000
 
@@ -33,18 +42,21 @@ export function ServicesPanel(): JSX.Element | null {
   const [open, setOpen] = useState(false)
   const [logsFor, setLogsFor] = useState<string | null>(null)
 
-  // One cheap load on session switch tells us whether to show the header at all;
-  // the interval only runs while expanded.
+  // One cheap load on session switch tells us whether to show the header at all.
   useEffect(() => {
     if (!activeChatId) return
     void refreshServices(activeChatId)
   }, [activeChatId, refreshServices])
 
+  // Keep polling when collapsed too, just slowly: a setup script that starts (or
+  // finishes) mid-session has to be able to reach the panel on its own.
+  const anyRunning = services.some((s) => s.status === 'running')
   useEffect(() => {
-    if (!open || !activeChatId) return
-    const timer = setInterval(() => void refreshServices(activeChatId), POLL_MS)
+    if (!activeChatId) return
+    const every = open || anyRunning ? POLL_MS : IDLE_POLL_MS
+    const timer = setInterval(() => void refreshServices(activeChatId), every)
     return () => clearInterval(timer)
-  }, [open, activeChatId, refreshServices])
+  }, [open, anyRunning, activeChatId, refreshServices])
 
   // Collapsing closes any open log pane, so reopening starts clean.
   useEffect(() => {
@@ -53,11 +65,14 @@ export function ServicesPanel(): JSX.Element | null {
 
   if (!activeChatId || services.length === 0) return null
 
-  const running = services.filter((s) => s.status === 'running').length
+  const failed = services.filter(isServiceFailure).length
 
   return (
+    // Same px-4 gutter + centered max-w-3xl column as the composer and the
+    // workstream strip, so the panel reads as part of that stack instead of a
+    // full-bleed bar stretched across a wide window.
     <div className="shrink-0 px-4 pb-1">
-      <div className="overflow-hidden rounded-lg border border-border bg-elevated/40">
+      <div className="mx-auto max-w-3xl overflow-hidden rounded-lg border border-border bg-elevated/40">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
@@ -65,8 +80,13 @@ export function ServicesPanel(): JSX.Element | null {
         >
           <ChevronRight className={cn('h-3 w-3 transition', open && 'rotate-90')} />
           <span>SERVICES</span>
-          <span className="text-text-subtle">
-            {running > 0 ? `${running} running` : `${services.length} stopped`}
+          {/* Collapsed, this line is the ONLY thing most people read, so it has
+              to state the outcome. "1 stopped" for a clean install was a lie by
+              omission: a setup script that succeeded looked identical to one
+              that died. Failures stay tinted so a broken worktree setup is
+              visible without expanding. */}
+          <span className={cn(failed > 0 ? 'text-danger' : 'text-text-subtle')}>
+            {servicesSummary(services)}
           </span>
         </button>
 
@@ -102,7 +122,7 @@ function ServiceRow({
   const refreshServices = useRoxyStore((s) => s.refreshServices)
   const [busy, setBusy] = useState(false)
   const isRunning = service.status === 'running'
-  const failed = service.status === 'error' || (service.exitCode != null && service.exitCode !== 0)
+  const failed = isServiceFailure(service)
 
   const act = async (fn: () => Promise<unknown>): Promise<void> => {
     if (busy) return
@@ -132,7 +152,12 @@ function ServiceRow({
         {service.port != null && isRunning && (
           <span className="shrink-0 tabular-nums text-text-subtle">:{service.port}</span>
         )}
-        <span className="shrink-0 tabular-nums text-text-subtle">{service.state}</span>
+        <span
+          className={cn('shrink-0 tabular-nums', failed ? 'text-danger' : 'text-text-subtle')}
+          title={service.state}
+        >
+          {serviceStatusLabel(service)}
+        </span>
 
         <div className="flex shrink-0 items-center gap-0.5">
           <RowAction onClick={onToggleLogs} label="Logs" active={logsOpen}>
@@ -221,7 +246,7 @@ function ServiceLogs({
 }
 
 function failedState(s: ServiceView): 'done' | 'error' {
-  return s.status === 'error' || (s.exitCode != null && s.exitCode !== 0) ? 'error' : 'done'
+  return isServiceFailure(s) ? 'error' : 'done'
 }
 
 function RowAction({
