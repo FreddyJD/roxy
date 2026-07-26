@@ -24,10 +24,14 @@ import {
   Trash2
 } from 'lucide-react'
 import type { Chat, Loop } from '@shared/types'
+import type { LifecycleView } from '@shared/forge'
+import { isPullRequestPhase } from '@shared/forge'
+import { statusKeyForSession } from '@shared/workstream'
 import { formatInterval } from '@shared/format'
 import { useRoxyStore } from '../lib/store'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
+import { TONE_BG, TONE_TEXT_STATIC } from '../lib/lifecycle'
 import { HeartbeatDot, NewLoopDialog } from './LoopsSection'
 import { RemoteWorkspaceDialog } from './RemoteWorkspaceDialog'
 import { BrailleSpinner } from './ThinkingIndicator'
@@ -37,6 +41,16 @@ import roxy from '../assets/roxy.png'
 const MIN_WIDTH = 220
 const MAX_WIDTH = 480
 const DEFAULT_WIDTH = 288
+/**
+ * How often to re-read git + PR state for EVERY session.
+ *
+ * Far slower than the strip's 5s, and deliberately so. The strip polls one
+ * session; this sweeps all of them, and each one costs a git spawn. Pull
+ * request state also changes on the order of minutes - the forge answer is
+ * cached for 60s in the main process, so polling faster than this would spawn
+ * git for a number that cannot have moved.
+ */
+const SWEEP_MS = 30_000
 const WIDTH_KEY = 'roxy.sidebar.width'
 const COLLAPSED_KEY = 'roxy.sidebar.collapsed'
 const clampWidth = (n: number): number => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, n))
@@ -48,12 +62,32 @@ interface Project {
   loops: Loop[]
 }
 
+/**
+ * The row's hover text: title, branch, and whatever the row could not say in
+ * the space it had.
+ *
+ * The badge is ~40px of `merged` or `#42`, so the full sentence the lifecycle
+ * already computed (`#42 merged into main`, `#42 -> main - checks failing`)
+ * has nowhere to live on the row itself. It lives here, on the tooltip that
+ * covers the WHOLE row - which is also why the dirty dot has no `title` of its
+ * own: a 4px target is too small to hover deliberately.
+ */
+function sessionRowTitle(chat: Chat, dirty: boolean, pull: LifecycleView | undefined): string {
+  const bits = [chat.title]
+  if (chat.branch) bits.push(chat.branch)
+  if (pull) bits.push(pull.title)
+  if (dirty) bits.push('uncommitted changes')
+  return bits.join(' - ')
+}
+
 export function Sidebar(): JSX.Element {
   const navigate = useNavigate()
   const chats = useRoxyStore((s) => s.chats)
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const selectChat = useRoxyStore((s) => s.selectChat)
   const gitStatus = useRoxyStore((s) => s.gitStatus)
+  const forgeStatus = useRoxyStore((s) => s.forgeStatus)
+  const refreshAllGitStatus = useRoxyStore((s) => s.refreshAllGitStatus)
   const runningSubagents = useRoxyStore((s) => s.runningSubagents)
   const newSession = useRoxyStore((s) => s.newSession)
   const newSessionInProject = useRoxyStore((s) => s.newSessionInProject)
@@ -274,6 +308,59 @@ export function Sidebar(): JSX.Element {
     }
     return ids
   }, [chats, gitStatus])
+
+  // The PR badge on a row, when that row's branch HAS a pull request. Anything
+  // earlier in the lifecycle (`local`, `up-3`, `pushed`) is filtered out by
+  // `isPullRequestPhase`: those are true of most rows most of the time, and a
+  // column of them would bury the one row that says `merged`.
+  //
+  // Keyed by WORKTREE path only, matching `dirtyById` above, and for the same
+  // reason: sessions without a worktree share the project checkout with each
+  // other and with the user's editor, so a PR found there belongs to the branch
+  // rather than to any one of those sessions. The strip still shows it for
+  // whichever session is open, where there is exactly one and no ambiguity.
+  const pullById = useMemo(() => {
+    const map = new Map<string, LifecycleView>()
+    for (const c of chats) {
+      const key = c.worktreePath
+      if (!key) continue
+      const lifecycle = forgeStatus[key]?.lifecycle
+      if (lifecycle && isPullRequestPhase(lifecycle.phase)) map.set(c.id, lifecycle)
+    }
+    return map
+  }, [chats, forgeStatus])
+
+  // Keep every row's status current, not just the open session's - the whole
+  // point is answering "what happened to my PR?" without clicking into each one.
+  //
+  // Depends on the COUNT of pollable sessions rather than on `chats`, which is
+  // replaced on every streamed message: with the array in the deps this timer
+  // would restart continuously and, at a 30s period, effectively never fire.
+  // The count moves only when a session is created, deleted, or gains a
+  // worktree - exactly when a fresh sweep is actually warranted.
+  const pollableCount = useMemo(
+    () => chats.reduce((n, c) => (statusKeyForSession(c) ? n + 1 : n), 0),
+    [chats]
+  )
+  useEffect(() => {
+    if (!pollableCount) return
+    void refreshAllGitStatus()
+    const timer = setInterval(() => {
+      // A backgrounded window has nobody reading the sidebar, and this sweep
+      // spawns git once per workstream. Skipping it while hidden is the
+      // difference between a status indicator and a battery drain.
+      if (document.hidden) return
+      void refreshAllGitStatus()
+    }, SWEEP_MS)
+    // Regaining focus is the highest-value moment to refresh: the user has most
+    // likely just come back from merging the PR in a browser.
+    const onFocus = (): void => void refreshAllGitStatus()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [pollableCount, refreshAllGitStatus])
 
   // Subagent sessions grouped by the main chat that spawned them.
   const subsByParent = useMemo(() => {
@@ -579,6 +666,8 @@ export function Sidebar(): JSX.Element {
                             // right now — so a COLLAPSED parent still shows that
                             // something is happening underneath it.
                             const liveSubs = subs.filter((x) => runningSubagents[x.id]).length
+                            // Undefined until this branch has a PR on the host.
+                            const pull = pullById.get(chat.id)
                             return (
                               <li
                                 key={chat.id}
@@ -653,13 +742,7 @@ export function Sidebar(): JSX.Element {
                                     <button
                                       onClick={() => selectChat(chat.id)}
                                       onDoubleClick={() => beginRename(chat)}
-                                      title={
-                                        chat.branch
-                                          ? dirtyById.has(chat.id)
-                                            ? `${chat.title} - ${chat.branch} (uncommitted changes)`
-                                            : `${chat.title} - ${chat.branch}`
-                                          : chat.title
-                                      }
+                                      title={sessionRowTitle(chat, dirtyById.has(chat.id), pull)}
                                       className="min-w-0 flex-1 text-left"
                                     >
                                       <span className="block truncate">{chat.title}</span>
@@ -675,6 +758,40 @@ export function Sidebar(): JSX.Element {
                                               never be seen. */}
                                           {dirtyById.has(chat.id) && (
                                             <span className="h-1 w-1 shrink-0 rounded-full bg-warning" />
+                                          )}
+                                          {/* Where the branch ended up on the host: `#42`,
+                                              `#42 draft`, `merged`, `closed`. Same dot-plus-label
+                                              grammar and the same colours as the strip's chip, from
+                                              the one shared tone map.
+
+                                              `ml-auto` parks it in a column down the right edge so
+                                              the states are scannable vertically, instead of landing
+                                              at a different x on every row. `shrink-0` is the
+                                              load-bearing part: a status that gets truncated away
+                                              behind a long branch name is one you can't rely on, and
+                                              an unreliable status is worse than none. The branch
+                                              name yields instead - it's the thing you can still
+                                              recover from the tooltip.
+
+                                              Deliberately NOT a link. It sits inside the row's
+                                              button, so a nested button would be invalid HTML and
+                                              would swallow the click that opens the session; the
+                                              strip's chip is where "view on the web" lives. */}
+                                          {pull && (
+                                            <span
+                                              className={cn(
+                                                'ml-auto flex shrink-0 items-center gap-1',
+                                                TONE_TEXT_STATIC[pull.tone]
+                                              )}
+                                            >
+                                              <span
+                                                className={cn(
+                                                  'h-1.5 w-1.5 rounded-full',
+                                                  TONE_BG[pull.tone]
+                                                )}
+                                              />
+                                              <span className="tabular-nums">{pull.label}</span>
+                                            </span>
                                           )}
                                         </span>
                                       )}
