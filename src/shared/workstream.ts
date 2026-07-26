@@ -61,6 +61,11 @@ export interface StripView {
  * or the folder isn't a repository — most folders aren't repos, and a permanent
  * disabled row would just be a nag. Also hidden until the first status arrives,
  * so it doesn't flash on and back off.
+ *
+ * NOTE: the strip also hosts the Services segment, which is NOT git-scoped —
+ * a dev server runs in any folder. So the row itself can outlive a null view;
+ * see `WorkstreamStrip`, which renders the services segment alone when this
+ * returns null.
  */
 export function workstreamStripView(input: {
   chat: StripSession | null

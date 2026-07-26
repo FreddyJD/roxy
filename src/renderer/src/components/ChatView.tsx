@@ -8,7 +8,6 @@ import { Composer } from './Composer'
 import { LoopDetailsPane } from './LoopDetailsPane'
 import { SessionInfo } from './SessionInfo'
 import { WorkstreamStrip } from './WorkstreamStrip'
-import { ServicesPanel } from './ServicesPanel'
 import { QueuedMessage } from './QueuedMessage'
 import { UsageMeter } from './UsageMeter'
 import {
@@ -254,8 +253,6 @@ export function ChatView(): JSX.Element {
           </div>
         </div>
       )}
-
-      <ServicesPanel />
 
       <Composer onSend={submit} sending={sending} onStop={stop} />
 

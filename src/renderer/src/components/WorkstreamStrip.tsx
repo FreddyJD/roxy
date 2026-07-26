@@ -4,6 +4,7 @@ import type { Chat } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
 import { workstreamStripView, statusKeyForSession } from '@shared/workstream'
 import { branchNameError } from '@shared/branch'
+import { ServicesSegment, useServices } from './ServicesSegment'
 import { cn } from '../lib/cn'
 
 /**
@@ -30,6 +31,9 @@ export function WorkstreamStrip(): JSX.Element | null {
   const gitAvailable = useRoxyStore((s) => s.gitAvailable)
   const gitStatus = useRoxyStore((s) => s.gitStatus)
   const refreshGitStatus = useRoxyStore((s) => s.refreshGitStatus)
+  // Hooked unconditionally: services exist outside git repos too, and this
+  // keeps the list warm for the segment below.
+  const { services, sessionId: serviceSessionId } = useServices()
 
   const chat = chats.find((c) => c.id === activeChatId) ?? null
   // Which session's workstream to show, and whether to show anything at all,
@@ -64,50 +68,80 @@ export function WorkstreamStrip(): JSX.Element | null {
     }
   }, [ownerId, refreshGitStatus])
 
-  if (!view || !owner) return null
+  // Services are NOT git-scoped — a dev server runs in any folder — so when
+  // there is no repo to describe, the row still appears for them alone rather
+  // than taking the processes down with it.
+  if (!view || !owner) {
+    if (!services.length || !serviceSessionId) return null
+    return (
+      <StripRow>
+        <ServicesSegment services={services} sessionId={serviceSessionId} />
+      </StripRow>
+    )
+  }
+
   const { branch, dirty, readOnly, pending } = view
   const changed = (statusKey ? gitStatus[statusKey]?.changed : 0) ?? 0
 
   return (
-    // Same px-4 gutter + centered max-w-3xl column as the composer, so the strip
-    // reads as the composer's footer rather than a stray row pinned to the left.
-    <div className="shrink-0 px-4 pb-2.5 text-xs">
-      <div className="mx-auto flex max-w-3xl items-center gap-1 px-1">
-        <WorkstreamSegment chat={owner} readOnly={readOnly} label={view.label} pending={pending} />
+    <StripRow>
+      <WorkstreamSegment chat={owner} readOnly={readOnly} label={view.label} pending={pending} />
 
-        <Divider />
+      <Divider />
 
-        {/* Segment 2 — the branch, renameable in place. Generated names
+      {/* Segment 2 — the branch, renameable in place. Generated names
             (`roxy/6fdc60b8`) say nothing about the work, and the name is what
             ends up on the PR, so renaming has to be reachable from where you
             read it rather than from a terminal. Switching branches is still
             NOT offered here: that is the workstream menu's job, and doing it in
             the default workstream would mutate the checkout every other session
             and the user's editor share. */}
-        <BranchSegment
-          sessionId={owner.id}
-          branch={branch}
-          pending={pending}
-          dirty={dirty}
-          changed={changed}
-          readOnly={readOnly}
-        />
+      <BranchSegment
+        sessionId={owner.id}
+        branch={branch}
+        pending={pending}
+        dirty={dirty}
+        changed={changed}
+        readOnly={readOnly}
+      />
 
-        <Divider />
+      <Divider />
 
-        {/* Segment 3 — TODO: this becomes the branch lifecycle, and each state is
+      {/* Segment 3 — TODO: this becomes the branch lifecycle, and each state is
             reachable with plain git except the last two:
               ○ local  →  ↑N to push  →  pushed  →  PR #N  →  merged
             Clicking it should open a panel with the remote, ahead/behind, and
             commit/push actions. Left static here so the layout is final. */}
-        <span
-          className="flex items-center gap-1.5 px-1.5 py-1 text-text-subtle"
-          title={pending ? 'Created when this session starts' : 'Not pushed yet'}
-        >
-          <span className="h-1.5 w-1.5 rounded-full border border-text-subtle/70" />
-          {pending ? 'not created' : 'local'}
-        </span>
-      </div>
+      <span
+        className="flex items-center gap-1.5 px-1.5 py-1 text-text-subtle"
+        title={pending ? 'Created when this session starts' : 'Not pushed yet'}
+      >
+        <span className="h-1.5 w-1.5 rounded-full border border-text-subtle/70" />
+        {pending ? 'not created' : 'local'}
+      </span>
+
+      {/* Last, and only when there is something to say. Processes are the most
+          volatile thing in the row, so they sit at the end where a changing
+          width cannot shove the branch name around. */}
+      {services.length > 0 && serviceSessionId && (
+        <>
+          <Divider />
+          <ServicesSegment services={services} sessionId={serviceSessionId} />
+        </>
+      )}
+    </StripRow>
+  )
+}
+
+/**
+ * The row itself: same px-4 gutter and centered max-w-3xl column as the
+ * composer, so the strip reads as the composer's footer rather than a stray
+ * row pinned to the left.
+ */
+function StripRow({ children }: { children: React.ReactNode }): JSX.Element {
+  return (
+    <div className="shrink-0 px-4 pb-2.5 text-xs">
+      <div className="mx-auto flex max-w-3xl items-center gap-1 px-1">{children}</div>
     </div>
   )
 }
