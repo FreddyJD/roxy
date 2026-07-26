@@ -687,10 +687,18 @@ export function Sidebar(): JSX.Element {
                                         liveSubs > 0 ? ` (${liveSubs} working)` : ''
                                       } — tap to ${subsOpen ? 'hide' : 'view'}`}
                                       className={cn(
-                                        'flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums transition-colors',
+                                        'flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums transition-[opacity,color,background-color]',
                                         liveSubs > 0
                                           ? 'bg-accent/10 text-accent'
-                                          : 'bg-surface-2 text-text-subtle hover:text-text'
+                                          : 'bg-surface-2 text-text-subtle hover:text-text',
+                                        // Idle and collapsed, this pill is just noise parked on
+                                        // every row - so reveal it on hover, like the delete button
+                                        // beside it. It stays pinned only when it carries state:
+                                        // a subagent is working, or the list is expanded.
+                                        // Fading opacity (not unmounting) keeps the row stable.
+                                        liveSubs > 0 || subsOpen
+                                          ? 'opacity-100'
+                                          : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100'
                                       )}
                                     >
                                       {subs.length}
