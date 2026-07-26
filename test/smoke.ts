@@ -160,6 +160,95 @@ async function main(): Promise<void> {
   repo.setWebSearchApiKey('   ')
   check('setWebSearchApiKey blanks to null', repo.getSettings().webSearchApiKey === null)
 
+  // ---- per-session inference config ----
+  //
+  // The two behaviours users expect at once: a NEW session starts from what you
+  // last picked, and changing one session never touches another. Exercised
+  // against the real DB because both halves live in SQL (createChat stamps the
+  // seed; setChatConfig writes one row).
+  repo.setActiveProvider('anthropic', 'claude-opus-5')
+  repo.setActiveAgent('plan')
+  repo.setReasoningEffort('max')
+  repo.setContextLimit(1_000_000)
+  check('setActiveAgent persists', repo.getSettings().activeAgentId === 'plan')
+
+  const cfgA = repo.createChat({ title: 'cfg A', kind: 'main', workspacePath: ws })
+  check(
+    'a new session inherits the last-used model',
+    cfgA.providerId === 'anthropic' && cfgA.model === 'claude-opus-5'
+  )
+  check(
+    'a new session inherits the last-used mode/effort/context',
+    cfgA.agentId === 'plan' && cfgA.reasoningEffort === 'max' && cfgA.contextLimit === 1_000_000
+  )
+
+  // Change session A. The GLOBAL template is written separately by the store
+  // (dual-write), so at this layer only A moves.
+  repo.setChatConfig(cfgA.id, { providerId: 'openai', model: 'gpt-5' })
+  repo.setChatConfig(cfgA.id, { reasoningEffort: 'low', contextLimit: 64_000 })
+  check(
+    'setChatConfig pins the session',
+    repo.getChat(cfgA.id)?.model === 'gpt-5' &&
+      repo.getChat(cfgA.id)?.reasoningEffort === 'low' &&
+      repo.getChat(cfgA.id)?.contextLimit === 64_000
+  )
+  check(
+    'setChatConfig does NOT touch the global template',
+    repo.getSettings().activeModel === 'claude-opus-5' &&
+      repo.getSettings().reasoningEffort === 'max'
+  )
+
+  // The isolation guarantee: a second session created from the same template is
+  // unaffected by anything session A did to itself.
+  const cfgB = repo.createChat({ title: 'cfg B', kind: 'main', workspacePath: ws })
+  check(
+    "a sibling session is unaffected by another session's model change",
+    cfgB.model === 'claude-opus-5' && cfgB.reasoningEffort === 'max'
+  )
+  repo.setChatConfig(cfgB.id, { agentId: 'build' })
+  check(
+    "changing one session's mode leaves its sibling alone",
+    repo.getChat(cfgB.id)?.agentId === 'build' && repo.getChat(cfgA.id)?.agentId === 'plan'
+  )
+
+  // A later template change reaches only sessions created AFTER it: the seed is
+  // a snapshot, so tuning a picker never rewrites sessions already in flight.
+  repo.setActiveProvider('google', 'gemini-3')
+  const cfgC = repo.createChat({ title: 'cfg C', kind: 'main', workspacePath: ws })
+  check(
+    'the next new session picks up the newest template',
+    cfgC.providerId === 'google' && cfgC.model === 'gemini-3'
+  )
+  check(
+    'existing sessions are NOT rewritten by a later template change',
+    repo.getChat(cfgA.id)?.model === 'gpt-5' && repo.getChat(cfgB.id)?.model === 'claude-opus-5'
+  )
+
+  // Clearing an override returns that field to the global default (null column).
+  repo.setChatConfig(cfgA.id, { contextLimit: null })
+  check(
+    'setChatConfig clears an override back to inherit',
+    repo.getChat(cfgA.id)?.contextLimit === null
+  )
+
+  // An explicit provider must never be paired with the seeded model id.
+  const cfgD = repo.createChat({
+    title: 'cfg D',
+    kind: 'main',
+    workspacePath: ws,
+    providerId: 'openai'
+  })
+  check(
+    'an explicitly-provided provider does not inherit the template model',
+    cfgD.providerId === 'openai' && cfgD.model === null
+  )
+
+  // Restore the template the rest of the suite expects.
+  repo.setActiveProvider('openai', 'gpt-test')
+  repo.setReasoningEffort('high')
+  repo.setContextLimit(null)
+  for (const id of [cfgA.id, cfgB.id, cfgC.id, cfgD.id]) repo.removeChat(id)
+
   // ---- chats / sessions ----
   const chat = repo.createChat({ title: 'smoke', kind: 'main', workspacePath: ws })
   check('createChat (main + workspace)', chat.kind === 'main' && chat.workspacePath === ws)
@@ -612,7 +701,10 @@ async function main(): Promise<void> {
     const sessA = repo.createChat({ title: 'bg A', kind: 'main', workspacePath: ws })
     const sessB = repo.createChat({ title: 'bg B', kind: 'main', workspacePath: ws })
     const subOfA = repo.createChat({ title: 'sub of A', kind: 'sub', parentId: sessA.id })
-    check('rootSessionId: a main session is its own root', repo.rootSessionId(sessA.id) === sessA.id)
+    check(
+      'rootSessionId: a main session is its own root',
+      repo.rootSessionId(sessA.id) === sessA.id
+    )
     check('rootSessionId: a sub resolves to its parent', repo.rootSessionId(subOfA.id) === sessA.id)
     check('rootSessionId: an unknown id is returned as-is', repo.rootSessionId('nope') === 'nope')
 
@@ -639,7 +731,11 @@ async function main(): Promise<void> {
     check("session B cannot READ session A's process output", !bOut.ok, bOut.output)
 
     const aList = await inSession(sessA.id, 'bash_list', {})
-    check('session A still sees its own process', aList.ok && aList.output.includes(aId), aList.output)
+    check(
+      'session A still sees its own process',
+      aList.ok && aList.output.includes(aId),
+      aList.output
+    )
 
     // A subagent's process is registered under the PARENT, so the parent's
     // bash_list sees it (and deleting the parent will stop it).
@@ -668,7 +764,10 @@ async function main(): Promise<void> {
       aList3.ok && !aList3.output.includes(aId) && !aList3.output.includes(subId),
       aList3.output
     )
-    check('killSessionBackground on an unknown session is a no-op', killSessionBackground('nope') === 0)
+    check(
+      'killSessionBackground on an unknown session is a no-op',
+      killSessionBackground('nope') === 0
+    )
     check('killSessionBackground ignores an empty id', killSessionBackground('') === 0)
 
     repo.removeChat(sessA.id)
@@ -684,7 +783,11 @@ async function main(): Promise<void> {
   {
     /** Open a database the way database.ts does: migrate, then repair. */
     const runLadder = (db: InstanceType<typeof Database>): void => {
-      for (let v = db.pragma('user_version', { simple: true }) as number; v < MIGRATIONS.length; v++) {
+      for (
+        let v = db.pragma('user_version', { simple: true }) as number;
+        v < MIGRATIONS.length;
+        v++
+      ) {
         const step = MIGRATIONS[v]
         if (typeof step === 'string') db.exec(step)
         else step(db)
@@ -697,9 +800,9 @@ async function main(): Promise<void> {
     const colsOf = (db: InstanceType<typeof Database>): string[] =>
       (db.prepare('PRAGMA table_info(chats)').all() as { name: string }[]).map((c) => c.name)
     const tablesOf = (db: InstanceType<typeof Database>): string[] =>
-      (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(
-        (t) => t.name
-      )
+      (
+        db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
+      ).map((t) => t.name)
     /** Apply the first `upTo` migrations, then seed a session. */
     const seeded = async (name: string, upTo: number): Promise<InstanceType<typeof Database>> => {
       const dir = path.join(tmp, name)
@@ -731,8 +834,11 @@ async function main(): Promise<void> {
       } catch (e) {
         reported = e instanceof Error ? e.message : String(e)
       }
-      check('migration repro: reproduces the reported error',
-        /no such column: worktree_path/.test(reported), reported)
+      check(
+        'migration repro: reproduces the reported error',
+        /no such column: worktree_path/.test(reported),
+        reported
+      )
 
       runLadder(db)
       for (const col of ['worktree_path', 'branch', 'dev_port', 'worktree_pending']) {
@@ -743,18 +849,28 @@ async function main(): Promise<void> {
         title: string
         worktree_path: string | null
       }
-      check('migration repair (usage-first): the failing write now succeeds', row.worktree_path === '/wt')
+      check(
+        'migration repair (usage-first): the failing write now succeeds',
+        row.worktree_path === '/wt'
+      )
       check('migration repair (usage-first): existing rows survive', row.title === 'pre-existing')
       check('migration repair (usage-first): usage table intact', tablesOf(db).includes('usage'))
 
       // Idempotent — it runs on every open, including healthy databases.
       repairSchema(db)
       repairSchema(db)
-      check('migration repair: re-running changes nothing',
-        (db.prepare('SELECT worktree_path AS w FROM chats WHERE id = ?').get('mig1') as { w: string }).w ===
-          '/wt')
-      check('migration repair: no duplicate columns',
-        colsOf(db).filter((c) => c === 'worktree_path').length === 1)
+      check(
+        'migration repair: re-running changes nothing',
+        (
+          db.prepare('SELECT worktree_path AS w FROM chats WHERE id = ?').get('mig1') as {
+            w: string
+          }
+        ).w === '/wt'
+      )
+      check(
+        'migration repair: no duplicate columns',
+        colsOf(db).filter((c) => c === 'worktree_path').length === 1
+      )
       db.close()
     }
 
@@ -771,16 +887,23 @@ async function main(): Promise<void> {
       check('migration repro: the usage table is missing', !tablesOf(db).includes('usage'))
 
       runLadder(db)
-      check('migration repair (worktree-first): creates the usage table', tablesOf(db).includes('usage'))
-      check('migration repair (worktree-first): keeps the worktree columns',
-        colsOf(db).includes('worktree_path'))
-      check('migration repair (worktree-first): existing rows survive',
-        (db.prepare('SELECT title FROM chats WHERE id = ?').get('mig1') as { title: string }).title ===
-          'pre-existing')
+      check(
+        'migration repair (worktree-first): creates the usage table',
+        tablesOf(db).includes('usage')
+      )
+      check(
+        'migration repair (worktree-first): keeps the worktree columns',
+        colsOf(db).includes('worktree_path')
+      )
+      check(
+        'migration repair (worktree-first): existing rows survive',
+        (db.prepare('SELECT title FROM chats WHERE id = ?').get('mig1') as { title: string })
+          .title === 'pre-existing'
+      )
       // The usage table must be the REAL one, not a stub.
-      const usageCols = (
-        db.prepare('PRAGMA table_info(usage)').all() as { name: string }[]
-      ).map((c) => c.name)
+      const usageCols = (db.prepare('PRAGMA table_info(usage)').all() as { name: string }[]).map(
+        (c) => c.name
+      )
       for (const col of ['provider_id', 'model', 'cost', 'estimated']) {
         check(`migration repair (worktree-first): usage.${col} exists`, usageCols.includes(col))
       }
@@ -831,7 +954,8 @@ async function main(): Promise<void> {
       check(`self-heal: ${table} is restored`, tablesOf(db).includes(table))
       check(
         `self-heal: data survives the ${table} repair`,
-        (db.prepare('SELECT title AS t FROM chats WHERE id = ?').get('h1') as { t: string }).t === 'seeded'
+        (db.prepare('SELECT title AS t FROM chats WHERE id = ?').get('h1') as { t: string }).t ===
+          'seeded'
       )
       db.close()
     }
@@ -846,7 +970,11 @@ async function main(): Promise<void> {
       } catch (e) {
         before = e instanceof Error ? e.message : String(e)
       }
-      check('self-heal: reproduces "no such table: projects"', /no such table: projects/.test(before), before)
+      check(
+        'self-heal: reproduces "no such table: projects"',
+        /no such table: projects/.test(before),
+        before
+      )
       repairSchema(db)
       let after = ''
       try {
@@ -866,12 +994,19 @@ async function main(): Promise<void> {
     // A hand-ordered project list must never be clobbered by that re-seed.
     {
       const db = healthy()
-      db.prepare('INSERT INTO projects(path, sort_order, created_at) VALUES(?,?,?)').run('/proj', 7, 1)
+      db.prepare('INSERT INTO projects(path, sort_order, created_at) VALUES(?,?,?)').run(
+        '/proj',
+        7,
+        1
+      )
       repairSchema(db)
       check(
         'self-heal: an existing project order is preserved',
-        (db.prepare('SELECT sort_order AS s FROM projects WHERE path = ?').get('/proj') as { s: number })
-          .s === 7
+        (
+          db.prepare('SELECT sort_order AS s FROM projects WHERE path = ?').get('/proj') as {
+            s: number
+          }
+        ).s === 7
       )
       db.close()
     }
@@ -923,9 +1058,7 @@ async function main(): Promise<void> {
     const wired = repo.getChat(plain.id)
     check(
       'setChatWorktree persists path/branch/port',
-      wired?.worktreePath === wtDir &&
-        wired?.branch === 'roxy/a1b2c3d4' &&
-        wired?.devPort === 3101
+      wired?.worktreePath === wtDir && wired?.branch === 'roxy/a1b2c3d4' && wired?.devPort === 3101
     )
     // `ws` has no .git, so findGitRoot finds nothing and we stay put — this is
     // the deliberate "can't trust the mapping" fallback.
@@ -939,7 +1072,11 @@ async function main(): Promise<void> {
     const pkgDir = path.join(repoRoot, 'apps', 'web')
     await fs.mkdir(pkgDir, { recursive: true })
     await fs.mkdir(path.join(repoRoot, '.git'), { recursive: true })
-    const subFolder = repo.createChat({ title: 'cwd subfolder', kind: 'main', workspacePath: pkgDir })
+    const subFolder = repo.createChat({
+      title: 'cwd subfolder',
+      kind: 'main',
+      workspacePath: pkgDir
+    })
     repo.setChatWorktree(subFolder.id, { worktreePath: wtDir, branch: 'roxy/deadbeef' })
     check(
       'sessionCwd: a project inside a repo keeps its subpath in the worktree',
@@ -960,7 +1097,10 @@ async function main(): Promise<void> {
 
     // Clearing the worktree returns the session to the project folder.
     repo.setChatWorktree(subFolder.id, { worktreePath: null })
-    check('sessionCwd: clearing the worktree restores the project folder', sessionCwd(subFolder.id) === pkgDir)
+    check(
+      'sessionCwd: clearing the worktree restores the project folder',
+      sessionCwd(subFolder.id) === pkgDir
+    )
 
     repo.removeChat(plain.id)
     repo.removeChat(noWs.id)
@@ -996,7 +1136,10 @@ async function main(): Promise<void> {
       check('git.repoRoot finds the repo', !!root, String(root))
       check('git.repoRoot is null outside a repo', (await git.repoRoot(tmp)) === null)
       check('git.currentBranch reads the branch', (await git.currentBranch(gitRepo)) === 'main')
-      check('git.defaultBranch falls back to local main', (await git.defaultBranch(gitRepo)) === 'main')
+      check(
+        'git.defaultBranch falls back to local main',
+        (await git.defaultBranch(gitRepo)) === 'main'
+      )
       const branches = await git.listBranches(gitRepo)
       check('git.listBranches includes main', branches.includes('main'), branches.join(','))
 
@@ -1013,10 +1156,17 @@ async function main(): Promise<void> {
 
       // ---- branch naming ----
       const tmpBranch = git.temporaryBranchName()
-      check('temporaryBranchName looks like roxy/<8 hex>', /^roxy\/[0-9a-f]{8}$/.test(tmpBranch), tmpBranch)
+      check(
+        'temporaryBranchName looks like roxy/<8 hex>',
+        /^roxy\/[0-9a-f]{8}$/.test(tmpBranch),
+        tmpBranch
+      )
       check('isTemporaryBranch accepts a generated name', git.isTemporaryBranch(tmpBranch))
       check('isTemporaryBranch rejects a user branch', !git.isTemporaryBranch('fix-auth'))
-      check('isTemporaryBranch rejects a roxy-prefixed real name', !git.isTemporaryBranch('roxy/fix-auth'))
+      check(
+        'isTemporaryBranch rejects a roxy-prefixed real name',
+        !git.isTemporaryBranch('roxy/fix-auth')
+      )
       check('isTemporaryBranch rejects null', !git.isTemporaryBranch(null))
 
       // ---- create ----
@@ -1030,29 +1180,52 @@ async function main(): Promise<void> {
         wtPath
       )
       check('the worktree has the repo content', existsSync(path.join(wtPath, 'README.md')))
-      check('createWorktree records the PR base in git config',
-        (await git.baseBranchFor(gitRepo, tmpBranch)) === 'main')
+      check(
+        'createWorktree records the PR base in git config',
+        (await git.baseBranchFor(gitRepo, tmpBranch)) === 'main'
+      )
       const wt1 = await git.listWorktrees(root!)
       check('listWorktrees now sees two trees', wt1.length === 2, String(wt1.length))
-      check('the new worktree is not flagged main', wt1.some((w) => w.path === wtPath && !w.isMain))
+      check(
+        'the new worktree is not flagged main',
+        wt1.some((w) => w.path === wtPath && !w.isMain)
+      )
 
       // Asking for the same branch again ATTACHES rather than failing — git
       // refuses to check one branch out twice.
       const again = await git.createWorktree({ repoRoot: root!, branch: tmpBranch })
-      check('createWorktree on a checked-out branch attaches instead of failing',
-        again.ok && again.attached === true && again.worktree?.path === wtPath, again.error ?? '')
+      check(
+        'createWorktree on a checked-out branch attaches instead of failing',
+        again.ok && again.attached === true && again.worktree?.path === wtPath,
+        again.error ?? ''
+      )
 
       // ---- sessionCwd resolves into the worktree ----
-      const wtChat = repo.createChat({ title: 'worktree session', kind: 'main', workspacePath: gitRepo })
+      const wtChat = repo.createChat({
+        title: 'worktree session',
+        kind: 'main',
+        workspacePath: gitRepo
+      })
       repo.setChatWorktree(wtChat.id, { worktreePath: wtPath, branch: tmpBranch })
-      check('sessionCwd resolves into the worktree', sessionCwd(wtChat.id) === wtPath, sessionCwd(wtChat.id))
+      check(
+        'sessionCwd resolves into the worktree',
+        sessionCwd(wtChat.id) === wtPath,
+        sessionCwd(wtChat.id)
+      )
 
       // A tool run in that session must actually land in the worktree.
-      const wrote = await runTool('write', { path: 'from-agent.txt', content: 'hi' }, {
-        cwd: sessionCwd(wtChat.id),
-        sessionId: wtChat.id
-      })
-      check('a tool writes inside the worktree', wrote.ok && existsSync(path.join(wtPath, 'from-agent.txt')))
+      const wrote = await runTool(
+        'write',
+        { path: 'from-agent.txt', content: 'hi' },
+        {
+          cwd: sessionCwd(wtChat.id),
+          sessionId: wtChat.id
+        }
+      )
+      check(
+        'a tool writes inside the worktree',
+        wrote.ok && existsSync(path.join(wtPath, 'from-agent.txt'))
+      )
       check('...and NOT in the main checkout', !existsSync(path.join(gitRepo, 'from-agent.txt')))
 
       // ---- lazy materialization ----
@@ -1062,24 +1235,42 @@ async function main(): Promise<void> {
         workspacePath: gitRepo,
         worktree: { mode: 'new' }
       })
-      check('a pending worktree intent is persisted', repo.getChat(lazy.id)?.worktreePending?.mode === 'new')
+      check(
+        'a pending worktree intent is persisted',
+        repo.getChat(lazy.id)?.worktreePending?.mode === 'new'
+      )
       check('...and no worktree exists yet', repo.getChat(lazy.id)?.worktreePath === null)
       const mat = await materializePendingWorktree(lazy.id)
-      check('materialize creates the worktree on first turn', mat.ok && !!mat.worktreePath, mat.error ?? '')
+      check(
+        'materialize creates the worktree on first turn',
+        mat.ok && !!mat.worktreePath,
+        mat.error ?? ''
+      )
       check('the intent is cleared afterwards', repo.getChat(lazy.id)?.worktreePending === null)
-      check('the session now points at its worktree', repo.getChat(lazy.id)?.worktreePath === mat.worktreePath)
+      check(
+        'the session now points at its worktree',
+        repo.getChat(lazy.id)?.worktreePath === mat.worktreePath
+      )
       // Second call: the intent is gone, so it reports "nothing to do" and must
       // leave the existing worktree alone rather than making another.
       const wtCountBefore = (await git.listWorktrees(root!)).length
       const redo = await materializePendingWorktree(lazy.id)
       check('materialize does nothing on a second call', redo.ok === false)
-      check('...and the session keeps its worktree', repo.getChat(lazy.id)?.worktreePath === mat.worktreePath)
-      check('...and no extra worktree was created',
-        (await git.listWorktrees(root!)).length === wtCountBefore)
+      check(
+        '...and the session keeps its worktree',
+        repo.getChat(lazy.id)?.worktreePath === mat.worktreePath
+      )
+      check(
+        '...and no extra worktree was created',
+        (await git.listWorktrees(root!)).length === wtCountBefore
+      )
 
       // Materializing a worktree also reserves a dev port for the session.
-      check('a materialized worktree gets a dev port',
-        typeof repo.getChat(lazy.id)?.devPort === 'number', String(repo.getChat(lazy.id)?.devPort))
+      check(
+        'a materialized worktree gets a dev port',
+        typeof repo.getChat(lazy.id)?.devPort === 'number',
+        String(repo.getChat(lazy.id)?.devPort)
+      )
 
       // The setup script runs in the NEW worktree, through the background path,
       // so it is owned by the session and visible in bash_list.
@@ -1116,9 +1307,15 @@ async function main(): Promise<void> {
         const [gotRoot, gotWt, gotPort] = setupOut.trim().split('|')
         check('ROXY_PROJECT_ROOT points at the project', gotRoot === gitRepo, gotRoot)
         check('ROXY_WORKTREE_PATH points at the worktree', gotWt === sm.worktreePath, gotWt)
-        check('ROXY_PORT is the session port', gotPort === String(repo.getChat(withSetup.id)?.devPort), gotPort)
-        check('the setup script did NOT run in the main checkout',
-          !existsSync(path.join(gitRepo, marker)))
+        check(
+          'ROXY_PORT is the session port',
+          gotPort === String(repo.getChat(withSetup.id)?.devPort),
+          gotPort
+        )
+        check(
+          'the setup script did NOT run in the main checkout',
+          !existsSync(path.join(gitRepo, marker))
+        )
         await fs.rm(path.join(gitRepo, '.roxy'), { recursive: true, force: true })
         await removeWorktreeForChat(withSetup.id, { force: true })
         repo.removeChat(withSetup.id)
@@ -1140,32 +1337,59 @@ async function main(): Promise<void> {
       const orphan = await git.createWorktree({ repoRoot: root!, branch: 'roxy/aaaaaaaa' })
       check('created an orphan worktree for prune', orphan.ok, orphan.error ?? '')
       const dry = await pruneWorktrees(gitRepo, { dryRun: true })
-      check('prune (dry run) finds the orphan',
-        dry.ok && dry.candidates.some((c) => c.path === orphan.worktree!.path), JSON.stringify(dry.candidates))
-      check('prune (dry run) does NOT list a session-owned worktree',
-        !dry.candidates.some((c) => c.path === wtPath))
-      check('prune (dry run) removes nothing', dry.removed.length === 0 && existsSync(orphan.worktree!.path))
+      check(
+        'prune (dry run) finds the orphan',
+        dry.ok && dry.candidates.some((c) => c.path === orphan.worktree!.path),
+        JSON.stringify(dry.candidates)
+      )
+      check(
+        'prune (dry run) does NOT list a session-owned worktree',
+        !dry.candidates.some((c) => c.path === wtPath)
+      )
+      check(
+        'prune (dry run) removes nothing',
+        dry.removed.length === 0 && existsSync(orphan.worktree!.path)
+      )
       const wet = await pruneWorktrees(gitRepo, { dryRun: false, force: true })
-      check('prune removes the orphan', wet.removed.includes(orphan.worktree!.path),
-        JSON.stringify(wet.failed))
+      check(
+        'prune removes the orphan',
+        wet.removed.includes(orphan.worktree!.path),
+        JSON.stringify(wet.failed)
+      )
       check('...and the directory is gone', !existsSync(orphan.worktree!.path))
-      check('prune never touches the main working tree', existsSync(path.join(gitRepo, 'README.md')))
+      check(
+        'prune never touches the main working tree',
+        existsSync(path.join(gitRepo, 'README.md'))
+      )
 
       // ---- remove ----
-      const shared = repo.createChat({ title: 'shares the worktree', kind: 'main', workspacePath: gitRepo })
+      const shared = repo.createChat({
+        title: 'shares the worktree',
+        kind: 'main',
+        workspacePath: gitRepo
+      })
       repo.setChatWorktree(shared.id, { worktreePath: wtPath, branch: tmpBranch })
       const blocked = await removeWorktreeForChat(wtChat.id)
-      check('a worktree shared with another session is NOT removed', blocked.ok && blocked.removed === false)
+      check(
+        'a worktree shared with another session is NOT removed',
+        blocked.ok && blocked.removed === false
+      )
       check('...and it still exists', existsSync(wtPath))
       repo.removeChat(shared.id)
 
       const removed = await removeWorktreeForChat(wtChat.id, { force: true })
-      check('removeWorktreeForChat removes an unshared worktree', removed.ok && removed.removed, removed.error ?? '')
+      check(
+        'removeWorktreeForChat removes an unshared worktree',
+        removed.ok && removed.removed,
+        removed.error ?? ''
+      )
       check('the worktree directory is gone', !existsSync(wtPath))
       const wt2 = await git.listWorktrees(root!)
       check('git no longer lists the removed worktree', !wt2.some((w) => w.path === wtPath))
-      check('removeWorktreeForChat is a no-op without a worktree',
-        (await removeWorktreeForChat(shared.id)).removed === false)
+      check(
+        'removeWorktreeForChat is a no-op without a worktree',
+        (await removeWorktreeForChat(shared.id)).removed === false
+      )
 
       repo.removeChat(wtChat.id)
       repo.removeChat(lazy.id)
@@ -1180,10 +1404,14 @@ async function main(): Promise<void> {
 
     check('listServices is empty for a fresh session', listServices(svcA.id).length === 0)
 
-    const started = await runTool('bash', { command: bgCmd, background: true }, {
-      cwd: ws,
-      sessionId: svcA.id
-    })
+    const started = await runTool(
+      'bash',
+      { command: bgCmd, background: true },
+      {
+        cwd: ws,
+        sessionId: svcA.id
+      }
+    )
     const svcId = started.output.match(/bg_\d+/)?.[0] ?? ''
     check('a background process appears in listServices', listServices(svcA.id).length === 1)
 
@@ -1209,8 +1437,11 @@ async function main(): Promise<void> {
     check('serviceOutput returns the buffered output', logs.includes(bgCmd), logs.slice(0, 80))
     check('serviceOutput is stable when read twice', serviceOutput(svcId, svcA.id) === logs)
     const agentRead = await runTool('bash_output', { id: svcId }, { cwd: ws, sessionId: svcA.id })
-    check("the UI's read did not consume the agent's new output",
-      agentRead.ok && agentRead.output.includes('roxy-bg-ok'), agentRead.output)
+    check(
+      "the UI's read did not consume the agent's new output",
+      agentRead.ok && agentRead.output.includes('roxy-bg-ok'),
+      agentRead.output
+    )
     check('serviceOutput refuses another session', serviceOutput(svcId, svcB.id) === '')
 
     // Restart replaces the row rather than accumulating a dead one per restart.
@@ -1218,15 +1449,22 @@ async function main(): Promise<void> {
     check('restartService succeeds', restarted.ok && !!restarted.id, restarted.error ?? '')
     check('...with a NEW process id', restarted.id !== svcId)
     check('...and does not leave the old row behind', listServices(svcA.id).length === 2)
-    check('the restarted service runs the same command',
-      listServices(svcA.id).some((s) => s.id === restarted.id && s.command === bgCmd))
-    check('restartService refuses another session', (await restartService(restarted.id!, svcB.id)).ok === false)
+    check(
+      'the restarted service runs the same command',
+      listServices(svcA.id).some((s) => s.id === restarted.id && s.command === bgCmd)
+    )
+    check(
+      'restartService refuses another session',
+      (await restartService(restarted.id!, svcB.id)).ok === false
+    )
 
     // Stop is idempotent.
     const stopped = stopService(restarted.id!, svcA.id)
     check('stopService succeeds', stopped.ok)
-    check('...and the service is no longer running',
-      listServices(svcA.id).find((s) => s.id === restarted.id)?.status !== 'running')
+    check(
+      '...and the service is no longer running',
+      listServices(svcA.id).find((s) => s.id === restarted.id)?.status !== 'running'
+    )
     check('stopService twice is fine', stopService(restarted.id!, svcA.id).ok)
     check('stopService refuses an unknown id', stopService('bg_nope', svcA.id).ok === false)
 
@@ -1242,7 +1480,11 @@ async function main(): Promise<void> {
 
     check('a new session starts with no port', repo.getChat(pA.id)?.devPort === null)
     const portA = await ensureDevPort(pA.id)
-    check('ensureDevPort allocates a port', typeof portA === 'number' && portA! >= 3100, String(portA))
+    check(
+      'ensureDevPort allocates a port',
+      typeof portA === 'number' && portA! >= 3100,
+      String(portA)
+    )
     check('...and persists it', repo.getChat(pA.id)?.devPort === portA)
 
     // Stability is the whole point: a bookmarked localhost:<port>, an open tab
@@ -1252,27 +1494,44 @@ async function main(): Promise<void> {
 
     const portB = await ensureDevPort(pB.id)
     check('a second session gets a DIFFERENT port', portB !== portA, `${portA} vs ${portB}`)
-    check('listDevPorts reports both', repo.listDevPorts().includes(portA!) && repo.listDevPorts().includes(portB!))
+    check(
+      'listDevPorts reports both',
+      repo.listDevPorts().includes(portA!) && repo.listDevPorts().includes(portB!)
+    )
 
     // An already-claimed port is skipped even when nothing is listening on it.
     const fresh = await allocateDevPort()
-    check('allocateDevPort skips ports claimed by other sessions',
-      fresh !== portA && fresh !== portB, String(fresh))
+    check(
+      'allocateDevPort skips ports claimed by other sessions',
+      fresh !== portA && fresh !== portB,
+      String(fresh)
+    )
 
     // The port reaches spawned commands as PORT + ROXY_PORT.
     const echoCmd =
-      process.platform === 'win32' ? 'Write-Output "P=$env:PORT R=$env:ROXY_PORT"' : 'echo "P=$PORT R=$ROXY_PORT"'
+      process.platform === 'win32'
+        ? 'Write-Output "P=$env:PORT R=$env:ROXY_PORT"'
+        : 'echo "P=$PORT R=$ROXY_PORT"'
     const envRes = await runTool('bash', { command: echoCmd }, { cwd: ws, sessionId: pA.id })
-    check('PORT is exported to spawned commands',
-      envRes.ok && envRes.output.includes(`P=${portA}`), envRes.output)
-    check('ROXY_PORT is exported too',
-      envRes.ok && envRes.output.includes(`R=${portA}`), envRes.output)
+    check(
+      'PORT is exported to spawned commands',
+      envRes.ok && envRes.output.includes(`P=${portA}`),
+      envRes.output
+    )
+    check(
+      'ROXY_PORT is exported too',
+      envRes.ok && envRes.output.includes(`R=${portA}`),
+      envRes.output
+    )
 
     // A session with no port must NOT get a blank PORT clobbering an inherited one.
     const noPort = repo.createChat({ title: 'no port', kind: 'main', workspacePath: ws })
     const noPortRes = await runTool('bash', { command: echoCmd }, { cwd: ws, sessionId: noPort.id })
-    check('a session without a port does not set PORT',
-      noPortRes.ok && !/P=\d/.test(noPortRes.output), noPortRes.output)
+    check(
+      'a session without a port does not set PORT',
+      noPortRes.ok && !/P=\d/.test(noPortRes.output),
+      noPortRes.output
+    )
 
     // Subagents share the parent's port (they share its tree and its servers).
     const subPort = repo.createChat({ title: 'sub port', kind: 'sub', parentId: pA.id })

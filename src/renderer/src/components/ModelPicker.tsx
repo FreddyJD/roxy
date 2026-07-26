@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Brain, Check, ChevronsUpDown, Search, Wrench } from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
+import { resolveSessionConfig } from '@shared/session-config'
 import { ProviderLogo } from '../lib/providerLogos'
 import { cn } from '../lib/cn'
 
@@ -12,6 +13,8 @@ import { cn } from '../lib/cn'
 export function ModelPicker(): JSX.Element {
   const providers = useRoxyStore((s) => s.providers)
   const settings = useRoxyStore((s) => s.settings)
+  const chats = useRoxyStore((s) => s.chats)
+  const activeChatId = useRoxyStore((s) => s.activeChatId)
   const selectModel = useRoxyStore((s) => s.selectModel)
   const models = useRoxyStore((s) => s.modelCatalog)
   const ensureModels = useRoxyStore((s) => s.ensureModels)
@@ -20,9 +23,20 @@ export function ModelPicker(): JSX.Element {
   const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLDivElement>(null)
 
-  const activeProvider =
-    providers.find((p) => p.id === settings?.activeProviderId) ?? providers[0] ?? null
-  const activeModel = settings?.activeModel ?? null
+  // The model shown is the OPEN SESSION's, not a global one: two sessions can
+  // sit on different models at once, and each remembers its own across
+  // restarts. A session with nothing pinned falls back to the last-used pair.
+  const config = resolveSessionConfig(
+    chats.find((c) => c.id === activeChatId),
+    settings
+  )
+  const activeProvider = providers.find((p) => p.id === config.providerId) ?? providers[0] ?? null
+  // Only show the session's model when it belongs to the provider we resolved.
+  // A session pinned to a provider that was since disconnected falls back to
+  // another one, and labelling that fallback with the old model would claim a
+  // pairing the turn will not actually use (the send path picks the fallback
+  // provider's own default instead).
+  const activeModel = activeProvider?.id === config.providerId ? config.model : null
   const loading = providers.some((p) => !models[p.id])
 
   // Lazy-load every connected provider's models into the shared catalog.
@@ -71,7 +85,9 @@ export function ModelPicker(): JSX.Element {
         onClick={() => setOpen((o) => !o)}
         className="press-scale flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted hover:border-border-strong hover:text-text"
       >
-        {activeProvider && <ProviderLogo id={activeProvider.id} name={activeProvider.name} size={14} />}
+        {activeProvider && (
+          <ProviderLogo id={activeProvider.id} name={activeProvider.name} size={14} />
+        )}
         <span className="max-w-[200px] truncate">{triggerLabel}</span>
         <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-60" />
       </button>
@@ -128,7 +144,8 @@ export function ModelPicker(): JSX.Element {
               })}
             {!loading && Object.values(models).every((l) => l.length === 0) && (
               <div className="px-3 py-3 text-xs text-text-subtle">
-                Couldn&apos;t load models from models.dev — you can still send with the current model.
+                Couldn&apos;t load models from models.dev — you can still send with the current
+                model.
               </div>
             )}
           </div>

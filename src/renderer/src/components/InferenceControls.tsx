@@ -4,6 +4,12 @@ import type { MessagePart, ReasoningEffort } from '@shared/types'
 import type { ModelInfo } from '@shared/api'
 import { PRIMARY_AGENTS, getAgent, DEFAULT_AGENT_ID } from '@shared/agents'
 import { buildSystemPrompt, useRoxyStore } from '../lib/store'
+import {
+  contextBudgetFor,
+  effectiveContextMax,
+  resolveSessionConfig,
+  type SessionConfig
+} from '@shared/session-config'
 import { cn } from '../lib/cn'
 
 /** Close-on-outside-click / Escape for a small popover. */
@@ -32,20 +38,41 @@ function usePopover(): {
   return { open, setOpen, ref }
 }
 
-/** Resolve the active model's capabilities (reasoning + context window). */
+/**
+ * The OPEN SESSION's resolved inference config. Subscribes to the pieces that
+ * feed it (`chats`, `activeChatId`, `settings`) so every picker re-renders the
+ * moment the session changes or another value is picked - reading it through
+ * the store's getter alone would not re-render, since a getter isn't state.
+ */
+function useSessionConfig(): SessionConfig {
+  const chats = useRoxyStore((s) => s.chats)
+  const activeChatId = useRoxyStore((s) => s.activeChatId)
+  const settings = useRoxyStore((s) => s.settings)
+  return useMemo(
+    () =>
+      resolveSessionConfig(
+        chats.find((c) => c.id === activeChatId),
+        settings
+      ),
+    [chats, activeChatId, settings]
+  )
+}
+
+/** Resolve the open session's model capabilities (reasoning + context window). */
 function useActiveModelInfo(): ModelInfo | undefined {
   const providers = useRoxyStore((s) => s.providers)
-  const settings = useRoxyStore((s) => s.settings)
   const modelCatalog = useRoxyStore((s) => s.modelCatalog)
   const ensureModels = useRoxyStore((s) => s.ensureModels)
-  const activeProvider =
-    providers.find((p) => p.id === settings?.activeProviderId) ?? providers[0] ?? null
-  const activeModel = settings?.activeModel ?? null
+  const config = useSessionConfig()
+  const activeProvider = providers.find((p) => p.id === config.providerId) ?? providers[0] ?? null
   useEffect(() => {
     if (activeProvider) void ensureModels(activeProvider.id)
   }, [activeProvider, ensureModels])
-  if (!activeProvider || !activeModel) return undefined
-  return modelCatalog[activeProvider.id]?.find((m) => m.id === activeModel)
+  if (!activeProvider || !config.model) return undefined
+  // Only match within the resolved provider, so a session pinned to a model
+  // from another provider doesn't borrow its capabilities.
+  if (config.providerId && config.providerId !== activeProvider.id) return undefined
+  return modelCatalog[activeProvider.id]?.find((m) => m.id === config.model)
 }
 
 const triggerClass =
@@ -65,12 +92,12 @@ const EFFORTS: { value: ReasoningEffort; label: string }[] = [
 
 export function ThinkingPicker(): JSX.Element | null {
   const info = useActiveModelInfo()
-  const settings = useRoxyStore((s) => s.settings)
+  const config = useSessionConfig()
   const setReasoningEffort = useRoxyStore((s) => s.setReasoningEffort)
   const { open, setOpen, ref } = usePopover()
 
   if (!info?.reasoning) return null
-  const current = settings?.reasoningEffort ?? 'high'
+  const current = config.reasoningEffort
   const currentLabel = EFFORTS.find((e) => e.value === current)?.label ?? 'High'
 
   return (
@@ -166,7 +193,7 @@ export function AgentPicker(): JSX.Element {
                   key={a.id}
                   type="button"
                   onClick={() => {
-                    setActiveAgent(a.id)
+                    void setActiveAgent(a.id)
                     setOpen(false)
                   }}
                   className={cn(
@@ -211,21 +238,9 @@ function contextOptions(max: number): number[] {
   return Array.from(new Set(opts))
 }
 
-/**
- * The window the model can actually use. models.dev reports Claude's *base*
- * 200K, but the model (and VS Code's Copilot client) expose a 1M window —
- * Anthropic via the `context-1m` beta, Copilot server-side. Raise the ceiling
- * for these large reasoning models so the picker matches what they can do.
- */
-function effectiveContextMax(info: ModelInfo): number {
-  const base = info.contextLimit ?? 0
-  if (info.reasoning && base >= 180_000 && base <= 264_000) return 1_000_000
-  return base
-}
-
 export function ContextPicker(): JSX.Element | null {
   const info = useActiveModelInfo()
-  const settings = useRoxyStore((s) => s.settings)
+  const config = useSessionConfig()
   const setContextLimit = useRoxyStore((s) => s.setContextLimit)
   const { open, setOpen, ref } = usePopover()
 
@@ -233,7 +248,7 @@ export function ContextPicker(): JSX.Element | null {
   if (!max) return null
   const options = contextOptions(max)
   const defaultBudget = Math.min(max, 200_000)
-  const current = settings?.contextLimit ?? defaultBudget
+  const current = config.contextLimit ?? defaultBudget
 
   return (
     <div ref={ref} className="relative">
@@ -304,7 +319,7 @@ interface Category {
  */
 export function ContextMeter(): JSX.Element {
   const info = useActiveModelInfo()
-  const settings = useRoxyStore((s) => s.settings)
+  const config = useSessionConfig()
   const messages = useRoxyStore((s) => s.messages)
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const streaming = useRoxyStore((s) =>
@@ -350,9 +365,7 @@ export function ContextMeter(): JSX.Element {
   const used = messagesTokens + toolTokens + otherTokens + systemTokens + toolDefsTokens
 
   const modelCtx = info ? effectiveContextMax(info) : undefined
-  const total = modelCtx
-    ? Math.min(settings?.contextLimit ?? Math.min(modelCtx, 200_000), modelCtx)
-    : null
+  const total = modelCtx ? contextBudgetFor(config.contextLimit, modelCtx) : null
   const reserve = total ? Math.min(info?.outputLimit ?? 4096, Math.round(total * 0.25)) : 0
   const pct = total ? Math.min(100, Math.round((used / total) * 100)) : 0
   const reservePct = total ? Math.min(100 - pct, Math.round((reserve / total) * 100)) : 0

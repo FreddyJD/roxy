@@ -105,8 +105,25 @@ export interface Chat {
   id: string
   title: string
   kind: SessionKind
+  /**
+   * This session's own inference config. Sessions are CONFIG-ISOLATED: each row
+   * pins the provider/model/mode/effort/context it runs with, stamped from the
+   * global `AppSettings` at create time, so changing the model in one session
+   * never disturbs another. Null means "never chosen" - inherit the global
+   * default, which is what every session created before this existed does.
+   *
+   * `providerId` + `model` resolve as a PAIR (a provider pins its own model, so
+   * a fallback can never cross one provider with another's model id). Read them
+   * only through `resolveSessionConfig` in shared/session-config.ts.
+   */
   providerId: string | null
   model: string | null
+  /** Primary agent (mode) id, e.g. 'build' / 'plan'. Null = the default agent. */
+  agentId: string | null
+  /** Thinking effort for reasoning models. Null = inherit the global default. */
+  reasoningEffort: ReasoningEffort | null
+  /** Context budget in tokens. Null = inherit the global default. */
+  contextLimit: number | null
   workspacePath: string | null
   /**
    * This session's git worktree — an isolated checkout of the project's repo on
@@ -314,10 +331,21 @@ export interface SkillDef {
 /** Thinking/reasoning effort, mapped per provider (reasoning models only). */
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
+/**
+ * Global app settings.
+ *
+ * For the inference fields (`activeProviderId`, `activeModel`, `activeAgentId`,
+ * `reasoningEffort`, `contextLimit`) this is the LAST-USED TEMPLATE, not the
+ * live config of any session: each session pins its own copy (see `Chat`), and
+ * changing a picker updates both the open session and this template, so the
+ * next new session starts where you left off.
+ */
 export interface AppSettings {
   onboardingCompleted: boolean
   activeProviderId: string | null
   activeModel: string | null
+  /** Last-used primary agent (mode) id, e.g. 'build' / 'plan'. */
+  activeAgentId: string | null
   /** Thinking effort applied to reasoning-capable models. */
   reasoningEffort: ReasoningEffort
   /** Chosen context-window budget in tokens; null = use the model default. */

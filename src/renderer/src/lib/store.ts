@@ -27,6 +27,12 @@ import { reconstructTurn, REPLAY_OUTPUT_CAP } from '@shared/tool-history'
 import { PartsFold, partsToContent } from '@shared/parts'
 import { isOverflow, pruneToolMessages, KEEP_RECENT_TOKENS } from '@shared/context'
 import { pickDefaultModel } from '@shared/models'
+import {
+  contextBudgetFor,
+  resolveSessionConfig,
+  type SessionConfig,
+  type SessionConfigPatch
+} from '@shared/session-config'
 import { uniqueSlug } from '@shared/slugs'
 import { api } from './api'
 import type { ComposerImage } from './images'
@@ -46,7 +52,12 @@ interface RoxyStore {
   sendingChats: Record<string, boolean>
   /** In-progress assistant parts per chat while a reply streams in. */
   streamingChats: Record<string, MessagePart[]>
-  /** Active agent (mode) for the open session. */
+  /**
+   * The open session's mode, mirrored from its `chat.agentId` for synchronous
+   * reads (the composer + the context meter re-render on every keystroke, and
+   * a store lookup is cheaper than finding the chat each time). `selectChat`
+   * loads it from the session; `setActiveAgent` writes both back.
+   */
   activeAgentId: string
   /** Project instruction blocks (AGENTS.md etc.) cached per workspace path. */
   projectInstructions: Record<string, string[]>
@@ -97,6 +108,21 @@ interface RoxyStore {
   refreshLoops: () => Promise<void>
   refreshQueue: () => Promise<void>
   refreshProviders: () => Promise<void>
+  /**
+   * The config the OPEN session runs with: its own pinned values, falling back
+   * to the global last-used ones. The single read path for the composer
+   * pickers and the send path - never read `settings.activeModel` directly.
+   */
+  sessionConfig: () => SessionConfig
+  /**
+   * Change part of the open session's config.
+   *
+   * Writes TWICE, on purpose: the session row (so the change is scoped to this
+   * session and survives a restart) and the matching global setting (so the
+   * next NEW session inherits it). That is the whole feature - sessions are
+   * independent, and new ones start from whatever you last picked.
+   */
+  setSessionConfig: (patch: SessionConfigPatch) => Promise<void>
   selectModel: (providerId: string, model: string) => Promise<void>
   ensureModels: (providerId: string) => Promise<void>
   setReasoningEffort: (level: ReasoningEffort) => Promise<void>
@@ -109,7 +135,7 @@ interface RoxyStore {
   createLoop: (input: CreateLoopInput) => Promise<void>
   setLoopEnabled: (id: string, enabled: boolean) => Promise<void>
   removeLoop: (id: string) => Promise<void>
-  setActiveAgent: (id: string) => void
+  setActiveAgent: (id: string) => Promise<void>
   /** Load + cache a workspace's instruction files (AGENTS.md etc.) for sizing. */
   ensureProjectInstructions: (workspacePath: string) => Promise<void>
   deleteChat: (id: string) => Promise<void>
@@ -191,6 +217,40 @@ const remoteTurns = new Map<string, PartsFold>()
  * whole transcript so far instead of resuming from whatever arrives next.
  */
 const subagentTurns = new Map<string, PartsFold>()
+
+/**
+ * Record a config change as the new GLOBAL default - the template every new
+ * session is stamped from.
+ *
+ * The session itself is written separately (`api.chats.setConfig`); this half is
+ * what makes "the next session remembers what I last picked" true. Returns the
+ * refreshed settings, or null when the patch touched nothing global.
+ *
+ * Best-effort by design: a session whose config was saved must not appear to
+ * have failed because the template write did. The session row is what the
+ * turn actually runs on.
+ */
+async function persistGlobalConfig(patch: SessionConfigPatch): Promise<AppSettings | null> {
+  let latest: AppSettings | null = null
+  try {
+    if ('providerId' in patch && patch.providerId) {
+      latest = await api.settings.setActiveProvider(patch.providerId, patch.model ?? null)
+    }
+    if ('agentId' in patch && patch.agentId) {
+      latest = await api.settings.setActiveAgent(patch.agentId)
+    }
+    if ('reasoningEffort' in patch && patch.reasoningEffort) {
+      latest = await api.settings.setReasoningEffort(patch.reasoningEffort)
+    }
+    if ('contextLimit' in patch) {
+      latest = await api.settings.setContextLimit(patch.contextLimit ?? null)
+    }
+  } catch {
+    // The session keeps its own copy either way; only the inherited default
+    // for the *next* session is lost, which self-heals on the next change.
+  }
+  return latest
+}
 
 /**
  * Desktop live-mirror: reload the shared chat's transcript from disk after a
@@ -685,9 +745,42 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     }
   },
 
+  sessionConfig: () => {
+    const { chats, activeChatId, settings } = get()
+    return resolveSessionConfig(
+      chats.find((c) => c.id === activeChatId),
+      settings
+    )
+  },
+
+  setSessionConfig: async (patch) => {
+    const chatId = get().activeChatId
+    // Optimistic: the picker closes on click, so the trigger must already show
+    // the new value - a round-trip of visible lag reads as a dropped click.
+    // `undefined` is stripped so a partial patch can't blank a field the caller
+    // never named (the DB layer keys off `in`; null explicitly means "clear").
+    const applied = Object.fromEntries(
+      Object.entries(patch).filter(([, v]) => v !== undefined)
+    ) as SessionConfigPatch
+    if (chatId) {
+      set((s) => ({
+        chats: s.chats.map((c) => (c.id === chatId ? { ...c, ...applied } : c))
+      }))
+    }
+    // Persist to the session, and remember it globally for the next new one.
+    const [chat, settings] = await Promise.all([
+      chatId ? api.chats.setConfig(chatId, patch) : Promise.resolve(null),
+      persistGlobalConfig(patch)
+    ])
+    set((s) => ({
+      ...(settings ? { settings } : {}),
+      ...(chat ? { chats: s.chats.map((c) => (c.id === chat.id ? chat : c)) } : {})
+    }))
+  },
+
   selectModel: async (providerId, model) => {
-    const settings = await api.settings.setActiveProvider(providerId, model)
-    set({ settings })
+    // Provider + model always move together (see resolveSessionConfig).
+    await get().setSessionConfig({ providerId, model })
   },
 
   ensureModels: async (providerId) => {
@@ -698,13 +791,11 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   },
 
   setReasoningEffort: async (level) => {
-    const settings = await api.settings.setReasoningEffort(level)
-    set({ settings })
+    await get().setSessionConfig({ reasoningEffort: level })
   },
 
   setContextLimit: async (limit) => {
-    const settings = await api.settings.setContextLimit(limit)
-    set({ settings })
+    await get().setSessionConfig({ contextLimit: limit })
   },
 
   setWebSearchApiKey: async (key) => {
@@ -715,8 +806,18 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   selectChat: async (id) => {
     // Per-chat send state survives switching — just swap which chat is shown.
     // Clear messages/queue first so the previous chat's content never flashes.
-    set({ activeChatId: id, messages: [], queue: [], activeAgentId: DEFAULT_AGENT_ID })
+    //
+    // The mode comes from the session being opened, NOT a reset to 'build':
+    // config is per-session, so a session left in Plan mode is still in Plan
+    // mode when you come back to it. The model/effort/context pickers read the
+    // chat row directly via `resolveSessionConfig`, so they need no mirror here.
     const chat = get().chats.find((c) => c.id === id)
+    set({
+      activeChatId: id,
+      messages: [],
+      queue: [],
+      activeAgentId: chat?.agentId ?? DEFAULT_AGENT_ID
+    })
     const workspace = chat?.workspacePath
     if (workspace) void get().ensureProjectInstructions(workspace)
     // Tell main which sub session is on screen so the end-of-turn prune spares
@@ -737,7 +838,12 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       activeAgentId: DEFAULT_AGENT_ID
     }),
 
-  setActiveAgent: (id) => set({ activeAgentId: id }),
+  setActiveAgent: async (id) => {
+    // Mirror first so the picker updates instantly, then persist to the session
+    // (+ the global template for the next new one).
+    set({ activeAgentId: id })
+    await get().setSessionConfig({ agentId: id })
+  },
 
   ensureProjectInstructions: async (workspacePath) => {
     if (!workspacePath || get().projectInstructions[workspacePath]) return
@@ -1001,8 +1107,15 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     }
 
     // Real model: a connected provider with a usable credential streams the reply.
+    // Everything below resolves from THIS SESSION's pinned config (falling back
+    // to the global last-used values), so a turn always runs on the model the
+    // session shows - even if another session changed its picker mid-reply.
+    const config = resolveSessionConfig(
+      get().chats.find((c) => c.id === chatId),
+      settings
+    )
     const provider =
-      get().providers.find((p) => p.id === settings?.activeProviderId) ?? get().providers[0] ?? null
+      get().providers.find((p) => p.id === config.providerId) ?? get().providers[0] ?? null
     if (provider && (provider.hasCredential || provider.auth === 'none')) {
       // Resolve the model's capabilities (reasoning support + context window) so
       // we only send reasoning params when valid and cut history to the budget.
@@ -1011,24 +1124,24 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       // No model chosen? Take the provider's latest (tool-capable) model instead
       // of a hardcoded id that may not exist on this provider — the user never
       // has to type a model name for a connected provider to just work.
+      // Only trust the session's model when it belongs to the provider we
+      // actually resolved, so a stale pin can never cross providers.
       const model =
-        settings?.activeModel ||
+        (config.providerId === provider.id ? config.model : null) ||
         provider.defaultModel ||
         pickDefaultModel(catalog) ||
         (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')
       const info = catalog.find((m) => m.id === model)
       const modelContext = info?.contextLimit ?? 128_000
-      const contextBudget = Math.min(
-        settings?.contextLimit ?? Math.min(modelContext, 200_000),
-        modelContext
-      )
+      const contextBudget = contextBudgetFor(config.contextLimit, modelContext)
+      const agentId = config.agentId
       // Auto-compact before the window overflows the model's *real* budget:
       // trigger once used tokens pass contextBudget minus the larger of the
       // reserved reply size or a safety buffer (mirrors opencode's
       // `context - max(output, buffer)` rather than a flat 80%). Compaction
       // summarizes older turns; buildChatMessages then sends summary + recent.
       if (!get().compactingChats[chatId]) {
-        const used = await estimateUsedTokens(chatId, model, get().activeAgentId)
+        const used = await estimateUsedTokens(chatId, model, agentId)
         if (isOverflow(used, contextBudget, info?.outputLimit ?? 4096)) {
           await get().compactConversation(chatId)
         }
@@ -1039,7 +1152,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         contextBudget,
         info?.outputLimit ?? 4096,
         model,
-        get().activeAgentId
+        agentId
       )
       // Build parts live from the agent's event stream through the shared fold:
       // text grows the current text part, each tool call adds a card that flips
@@ -1094,9 +1207,9 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         providerId: provider.id,
         model,
         messages: chatMessages,
-        agentId: get().activeAgentId,
+        agentId,
         reasoning: info?.reasoning ?? false,
-        reasoningEffort: settings?.reasoningEffort ?? 'high',
+        reasoningEffort: config.reasoningEffort,
         contextLimit: contextBudget
       })
       deltaHandlers.delete(requestId)
@@ -1189,12 +1302,17 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const chatId = targetChatId ?? get().activeChatId
     if (!chatId || get().compactingChats[chatId]) return
     const { settings, providers } = get()
-    const provider =
-      providers.find((p) => p.id === settings?.activeProviderId) ?? providers[0] ?? null
+    // Compact with the SESSION's own model: compacting must not route a
+    // session's history through whatever model another session has selected.
+    const config = resolveSessionConfig(
+      get().chats.find((c) => c.id === chatId),
+      settings
+    )
+    const provider = providers.find((p) => p.id === config.providerId) ?? providers[0] ?? null
     if (!provider || !(provider.hasCredential || provider.auth === 'none')) return
     await get().ensureModels(provider.id)
     const model =
-      settings?.activeModel ||
+      (config.providerId === provider.id ? config.model : null) ||
       provider.defaultModel ||
       pickDefaultModel(get().modelCatalog[provider.id] ?? []) ||
       (provider.id === 'github-copilot' ? 'gpt-4o' : 'gpt-4o-mini')

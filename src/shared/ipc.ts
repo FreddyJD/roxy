@@ -2,6 +2,7 @@
 export const CHANNELS = {
   settingsGetAll: 'settings:getAll',
   settingsSetActiveProvider: 'settings:setActiveProvider',
+  settingsSetActiveAgent: 'settings:setActiveAgent',
   settingsSetReasoningEffort: 'settings:setReasoningEffort',
   settingsSetContextLimit: 'settings:setContextLimit',
   settingsSetWebSearchApiKey: 'settings:setWebSearchApiKey',
@@ -17,6 +18,8 @@ export const CHANNELS = {
   chatsRename: 'chats:rename',
   chatsRemove: 'chats:remove',
   chatsReorder: 'chats:reorder',
+  /** Pin part of a single session's inference config (model/mode/effort/context). */
+  chatsSetConfig: 'chats:setConfig',
 
   /** Project (workspace) display order — read + drag-to-reorder. */
   projectsListOrder: 'projects:listOrder',
