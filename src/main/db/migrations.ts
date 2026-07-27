@@ -40,6 +40,10 @@ export function addColumnIfMissing(
  * ahead of what they actually contain.
  */
 const REPAIR_SCHEMA_SQL = /* sql */ `
+  CREATE TABLE IF NOT EXISTS activity (
+        day   TEXT PRIMARY KEY,
+        turns INTEGER NOT NULL DEFAULT 0
+      );
   CREATE TABLE IF NOT EXISTS chats (
         id          TEXT PRIMARY KEY,
         title       TEXT NOT NULL,
@@ -367,7 +371,34 @@ export const MIGRATIONS: Migration[] = [
     addColumnIfMissing(db, 'chats', 'agent_id', 'TEXT')
     addColumnIfMissing(db, 'chats', 'reasoning_effort', 'TEXT')
     addColumnIfMissing(db, 'chats', 'context_limit', 'INTEGER')
-  }
+  },
+
+  // ---- v18: durable activity ledger (the contribution graph's own memory) ----
+  // The graph used to COUNT assistant messages live. But messages are ON DELETE
+  // CASCADE from chats, so deleting a session - or removing a folder, which
+  // deletes every session under it - silently erased months of green squares.
+  // Activity is a record of what you DID, not a view over what you still keep,
+  // and the two must not share a lifetime.
+  //
+  // So: one append-only row per local calendar day, incremented as turns happen
+  // and never cascaded from anything. Tiny (365 rows/year), independent of
+  // session retention, and the only history that has to survive a cleanup.
+  //
+  // The backfill re-derives the ledger from the messages still present, using
+  // SQLite's 'localtime' so the buckets match `localDay` in the renderer. Turns
+  // already deleted before this upgrade are gone for good - nothing recorded
+  // them - but everything still on disk is preserved on the way in.
+  /* sql */ `
+    CREATE TABLE IF NOT EXISTS activity (
+      day   TEXT PRIMARY KEY,
+      turns INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT OR IGNORE INTO activity(day, turns)
+      SELECT date(created_at / 1000, 'unixepoch', 'localtime') AS day, COUNT(*)
+      FROM messages
+      WHERE role = 'assistant'
+      GROUP BY day;
+  `
 ]
 
 /**
@@ -417,6 +448,20 @@ export function repairSchema(db: Database): void {
         FROM chats
         WHERE workspace_path IS NOT NULL
         GROUP BY workspace_path;
+    `)
+  }
+  // The activity ledger is append-only and CANNOT be rebuilt once its source
+  // messages are deleted, so it is only ever seeded (never reconciled) - and
+  // only when completely empty, which means the table itself was just restored
+  // by the DDL above. A ledger with any row in it is the record of record.
+  const led = db.prepare('SELECT COUNT(*) AS n FROM activity').get() as { n: number }
+  if (led.n === 0) {
+    db.exec(`
+      INSERT OR IGNORE INTO activity(day, turns)
+        SELECT date(created_at / 1000, 'unixepoch', 'localtime') AS day, COUNT(*)
+        FROM messages
+        WHERE role = 'assistant'
+        GROUP BY day;
     `)
   }
 }

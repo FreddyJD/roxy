@@ -34,12 +34,26 @@ export function activityLevel(count: number, max: number): ActivityDay['level'] 
  * deterministic. `days` is the window length (e.g. 182 ≈ 26 weeks).
  */
 export function aggregateActivity(timestamps: number[], now: number, days = 182): ActivityStats {
-  const span = Math.max(1, Math.floor(days))
   const byDay = new Map<string, number>()
   for (const ts of timestamps) {
     const key = localDay(ts)
     byDay.set(key, (byDay.get(key) ?? 0) + 1)
   }
+  return aggregateActivityDays(byDay, now, days)
+}
+
+/**
+ * The same aggregation, but from per-day counts tallied ELSEWHERE - the
+ * `activity` ledger, which outlives the sessions those turns happened in and so
+ * has no timestamps left to re-bucket. Keys are local YYYY-MM-DD, exactly what
+ * `localDay` produces, so both entry points describe the same calendar.
+ */
+export function aggregateActivityDays(
+  byDay: ReadonlyMap<string, number>,
+  now: number,
+  days = 182
+): ActivityStats {
+  const span = Math.max(1, Math.floor(days))
 
   // The window runs [now - (span-1) days .. now], oldest → newest, so the last
   // cell is always today and the grid fills left-to-right like GitHub's.

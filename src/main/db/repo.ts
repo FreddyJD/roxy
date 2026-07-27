@@ -31,6 +31,7 @@ import {
   seedSessionConfig,
   type SessionConfigPatch
 } from '../../shared/session-config'
+import { localDay } from '../../shared/cost'
 import { getDb } from './database'
 import { decryptSecret, encryptSecret } from '../services/secure'
 
@@ -232,6 +233,7 @@ export function resetAll(): void {
        DELETE FROM providers;
        DELETE FROM integrations;
        DELETE FROM mcp_servers;
+       DELETE FROM activity;
        DELETE FROM settings;`
     )
   })
@@ -945,6 +947,12 @@ export function addMessage(input: AddMessageInput): Message {
       'INSERT INTO messages(id, chat_id, role, content, parts, created_at) VALUES(?, ?, ?, ?, ?, ?)'
     ).run(id, input.chatId, input.role, input.content, partsJson, now)
     db.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').run(now, input.chatId)
+    // One assistant message = one agent turn. Credited to the durable ledger in
+    // the SAME transaction as the message, so the graph can never disagree with
+    // what was actually persisted - and, unlike the message, the credit stays
+    // when the session is later deleted. Counts sub and loop sessions too, which
+    // is what the previous message-counting query did.
+    if (input.role === 'assistant') recordActivityTurn(localDay(now))
   })
   tx()
   return {
@@ -1405,16 +1413,30 @@ export function insertBackfilledUsage(input: {
 // ---- Activity (contribution graph) -------------------------------------------
 
 /**
- * Timestamps (epoch ms) of every agent turn — one per assistant message — at or
- * after `since`, across all sessions (main, sub, and loop). Feeds the Settings
- * contribution graph's per-day counts. Uses the existing (chat_id, created_at)
- * index for a cheap scan.
+ * Credit one agent turn to a local calendar day.
+ *
+ * The graph is deliberately NOT a query over `messages`: those cascade away with
+ * their chat, so deleting a session (or a whole project folder) used to erase the
+ * history of having worked. This ledger is append-only, keyed by day, and owned
+ * by nothing - the only table whose rows outlive everything they describe.
+ *
+ * `day` must be the LOCAL calendar day (`localDay`), matching how the renderer
+ * lays the grid out, so a turn lands in the square the user watched it happen in.
  */
-export function listAgentTurnTimestamps(since: number): number[] {
-  const rows = getDb()
+export function recordActivityTurn(day: string, turns = 1): void {
+  if (!day || turns <= 0) return
+  getDb()
     .prepare(
-      "SELECT created_at FROM messages WHERE role = 'assistant' AND created_at >= ? ORDER BY created_at ASC"
+      `INSERT INTO activity(day, turns) VALUES(?, ?)
+       ON CONFLICT(day) DO UPDATE SET turns = turns + excluded.turns`
     )
-    .all(since) as { created_at: number }[]
-  return rows.map((r) => r.created_at)
+    .run(day, Math.floor(turns))
+}
+
+/** Per-day turn counts from `fromDay` (inclusive, local YYYY-MM-DD) onward. */
+export function listActivityDays(fromDay: string): Map<string, number> {
+  const rows = getDb()
+    .prepare('SELECT day, turns FROM activity WHERE day >= ? ORDER BY day ASC')
+    .all(fromDay) as { day: string; turns: number }[]
+  return new Map(rows.map((r) => [r.day, r.turns]))
 }

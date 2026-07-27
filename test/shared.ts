@@ -95,7 +95,7 @@ import {
   aggregateUsage
 } from '../src/shared/cost'
 import type { TokenUsage, UsageRecord } from '../src/shared/types'
-import { aggregateActivity, activityLevel } from '../src/shared/activity'
+import { aggregateActivity, activityLevel, aggregateActivityDays } from '../src/shared/activity'
 import {
   estimateTokens,
   countLines,
@@ -2978,6 +2978,29 @@ async function main(): Promise<void> {
   check(
     'activity: idle today → current streak 0',
     aggregateActivity([aNow - 5 * DAYMS], aNow, 182).currentStreak === 0
+  )
+
+  // The ledger path: per-day counts recorded as turns happened, with no
+  // timestamps left to re-bucket (the sessions may be long deleted). It must
+  // produce exactly what the timestamp path does for the same days, or the graph
+  // would visibly shift the moment the data source changed under it.
+  const ledger = new Map([
+    [localDay(aNow), 3],
+    [localDay(aNow - DAYMS), 2],
+    [localDay(aNow - 3 * DAYMS), 1]
+  ])
+  const fromLedger = aggregateActivityDays(ledger, aNow, 182)
+  check(
+    'activity: ledger counts match the timestamp path exactly',
+    JSON.stringify(fromLedger) === JSON.stringify(act)
+  )
+  check(
+    'activity: days outside the window are ignored',
+    aggregateActivityDays(new Map([[localDay(aNow - 400 * DAYMS), 9]]), aNow, 182).total === 0
+  )
+  check(
+    'activity: an empty ledger is a blank grid',
+    aggregateActivityDays(new Map(), aNow, 7).total === 0
   )
 
   // ---- forge: remote URL parsing ------------------------------------------
