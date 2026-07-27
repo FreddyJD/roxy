@@ -213,7 +213,7 @@ export function ChatView(): JSX.Element {
   // No workspace open — prompt to open a folder to start a session.
   if (!activeChat) {
     return (
-      <div className="vibrancy-solid flex h-full min-w-0 flex-1 flex-col">
+      <div className="flex h-full min-w-0 flex-1 flex-col bg-bg">
         <div className="titlebar reserve-controls-right h-12 shrink-0" />
         <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
           <img
@@ -241,7 +241,7 @@ export function ChatView(): JSX.Element {
   const isEmpty = !hasContent && !loading
 
   return (
-    <div className="vibrancy-solid relative flex h-full min-w-0 flex-1 flex-col">
+    <div className="relative flex h-full min-w-0 flex-1 flex-col bg-bg">
       <header className="titlebar reserve-controls-right flex h-12 shrink-0 items-center justify-between gap-3 px-4">
         {activeLoop ? (
           <div className="flex min-w-0 items-center gap-2">

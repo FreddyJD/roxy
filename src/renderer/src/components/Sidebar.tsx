@@ -403,7 +403,7 @@ export function Sidebar(): JSX.Element {
 
   if (railed) {
     return (
-      <aside className="vibrancy-pane sidebar-rail flex h-full shrink-0 flex-col items-center border-r border-border">
+      <aside className="sidebar-rail flex h-full shrink-0 flex-col items-center border-r border-border bg-surface">
         <div className="titlebar reserve-controls-left h-[54px] w-full shrink-0" />
         <div className="flex flex-col items-center gap-1 pt-1">
           <button
@@ -431,7 +431,7 @@ export function Sidebar(): JSX.Element {
             {remoteDot && (
               <span
                 className={cn(
-                  'vibrancy-ring absolute right-1 top-1 h-1.5 w-1.5 rounded-full ring-2 ring-surface',
+                  'absolute right-1 top-1 h-1.5 w-1.5 rounded-full ring-2 ring-surface',
                   remoteDot === 'green' ? 'bg-success' : 'bg-warning'
                 )}
               />
@@ -467,7 +467,7 @@ export function Sidebar(): JSX.Element {
   return (
     <aside
       style={{ width }}
-      className="vibrancy-pane relative flex h-full shrink-0 flex-col border-r border-border"
+      className="relative flex h-full shrink-0 flex-col border-r border-border bg-surface"
     >
       <div className="titlebar reserve-controls-left flex items-center gap-2 px-4 py-3.5">
         <div className="sidebar-brand flex items-center gap-2.5">
@@ -706,11 +706,11 @@ export function Sidebar(): JSX.Element {
                                     // for as long as its menu is open, so a menu
                                     // floating over a dense list still says which
                                     // session it is about to act on. It borrows
-                                    // the selected look wholesale, vibrancy and
-                                    // all: a second, lesser highlight would just
-                                    // be a new thing to learn.
+                                    // the selected look wholesale: a second,
+                                    // lesser highlight would just be a new thing
+                                    // to learn.
                                     chat.id === activeChatId || contextMenu?.chat.id === chat.id
-                                      ? 'vibrancy-chip bg-elevated text-text'
+                                      ? 'bg-elevated text-text'
                                       : 'text-text-muted hover:bg-white/5 hover:text-text'
                                   )}
                                 >
@@ -808,7 +808,7 @@ export function Sidebar(): JSX.Element {
                                         'flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums transition-[opacity,color,background-color]',
                                         liveSubs > 0
                                           ? 'bg-accent/10 text-accent'
-                                          : 'vibrancy-chip-weak bg-surface-2 text-text-subtle hover:text-text',
+                                          : 'bg-surface-2 text-text-subtle hover:text-text',
                                         // This pill is a disclosure control, not a status light,
                                         // so it earns space only while the row is hovered or the
                                         // list it toggles is actually open. Live subagents used to
@@ -841,7 +841,7 @@ export function Sidebar(): JSX.Element {
                                             'group/sub flex items-center gap-2 rounded-lg px-2 py-1 text-xs transition-colors',
                                             sub.id === activeChatId ||
                                               contextMenu?.chat.id === sub.id
-                                              ? 'vibrancy-chip bg-elevated text-text'
+                                              ? 'bg-elevated text-text'
                                               : 'text-text-muted hover:bg-white/5 hover:text-text'
                                           )}
                                         >
@@ -1096,7 +1096,7 @@ function CustomizeNav({
     { label: 'MCP Servers', icon: Plug, onClick: () => navigate('/mcp'), count: counts.mcp }
   ]
   return (
-    <div className="px-3 py-2">
+    <div className="border-t border-border px-3 py-2">
       <div className="flex flex-col gap-0.5">
         {items.map((it) => (
           <button

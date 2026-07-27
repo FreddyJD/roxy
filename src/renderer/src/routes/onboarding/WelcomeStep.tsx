@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { ArrowRight } from 'lucide-react'
-import { DitherGradient } from '../../components/DitherGradient'
 
 /**
  * Cycled on the welcome screen. `lang` picks the right font fallbacks and tells
@@ -33,8 +32,8 @@ const FADE_MS = 1100
 const HOLD_MS = 3400
 
 /**
- * First screen of the first-run experience: a dithered gradient backdrop with
- * a greeting that drifts between languages, and a single way forward.
+ * First screen of the first-run experience: a greeting that drifts between
+ * languages on the app's own background, and a single way forward.
  */
 export function WelcomeStep({ onContinue }: { onContinue: () => void }): JSX.Element {
   const [index, setIndex] = useState(0)
@@ -65,9 +64,7 @@ export function WelcomeStep({ onContinue }: { onContinue: () => void }): JSX.Ele
   const greeting = GREETINGS[index]
 
   return (
-    <div className="relative h-full w-full overflow-hidden">
-      <DitherGradient from="blue" direction="bottom" bloom="aura" stars={70} />
-
+    <div className="relative h-full w-full overflow-hidden bg-bg">
       <div className="relative flex h-full w-full flex-col items-center justify-center gap-6 px-8">
         {/* Fixed height keeps the button still while scripts of very different
             heights swap through. aria-live announces each greeting once. */}
@@ -76,14 +73,13 @@ export function WelcomeStep({ onContinue }: { onContinue: () => void }): JSX.Ele
               at its final opacity and skip the fade-in entirely. */}
           <h1
             lang={greeting.lang}
-            className={`text-5xl font-bold text-white ${greeting.latin ? 'tracking-tight' : 'tracking-normal'}`}
+            className={`text-5xl font-bold text-text ${greeting.latin ? 'tracking-tight' : 'tracking-normal'}`}
             style={{
               opacity: visible ? 1 : 0,
               // Barely-there drift, so it reads as a breeze rather than a slide.
               transform: visible ? 'translateY(0)' : 'translateY(6px)',
               transition: `opacity ${FADE_MS}ms cubic-bezier(0.4, 0, 0.2, 1), transform ${FADE_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`,
-              // Promote to its own layer so the fade composites on the GPU and
-              // never re-rasterizes the text against the canvases behind it.
+              // Promote to its own layer so the fade composites on the GPU.
               willChange: 'opacity, transform'
             }}
           >
@@ -92,7 +88,7 @@ export function WelcomeStep({ onContinue }: { onContinue: () => void }): JSX.Ele
         </div>
 
         {/* Static on purpose — it anchors the block while the greeting cycles. */}
-        <p className="-mt-3 max-w-sm text-center text-sm text-white/60">
+        <p className="-mt-3 max-w-sm text-center text-sm text-text-muted">
           This might be a complete disaster. It might also be the best thing you use all year!
         </p>
 
