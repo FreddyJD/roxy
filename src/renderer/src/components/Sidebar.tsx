@@ -1096,7 +1096,7 @@ function CustomizeNav({
     { label: 'MCP Servers', icon: Plug, onClick: () => navigate('/mcp'), count: counts.mcp }
   ]
   return (
-    <div className="border-t border-border px-3 py-2">
+    <div className="px-3 py-2">
       <div className="flex flex-col gap-0.5">
         {items.map((it) => (
           <button

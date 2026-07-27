@@ -405,7 +405,7 @@ body {
  * carries a `bg-*` utility.
  */
 [data-platform='darwin'] .vibrancy-pane {
-  background: color-mix(in srgb, var(--color-bg) 62%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 88%, transparent);
 }
 
 /*
