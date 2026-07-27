@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import { Streamdown } from 'streamdown'
 import { Brain, ChevronRight } from 'lucide-react'
 import type { MessagePart } from '@shared/types'
@@ -66,6 +66,19 @@ export function MessageParts({
   const liveText =
     (last?.type === 'text' || last?.type === 'reasoning') && last.text.trim() !== '' && !quiet
   const waiting = streaming && !runningTool && !liveText
+
+  // Stable across renders so a memoized ToolCall can actually hit. It used to be
+  // an inline arrow that closed over the specific part's `state`, giving every
+  // card a fresh callback identity on every delta — which alone defeated any
+  // memo on ToolCall. The card passes its own liveness in instead, leaving this
+  // dependent only on the turn-level `streaming` boolean.
+  const renderNested = useCallback(
+    (children: MessagePart[], live: boolean) => (
+      <MessageParts parts={children} streaming={streaming && live} />
+    ),
+    [streaming]
+  )
+
   return (
     <div className="flex flex-col gap-1 text-sm leading-relaxed text-text">
       {parts.map((part, i) => {
@@ -86,12 +99,10 @@ export function MessageParts({
               // Passed as a callback (not a self-import) to keep the recursion
               // explicit and one-directional: ToolCall never reaches back up.
               //
-              // `streaming` is gated on the CARD's state, not the turn's: once a
-              // subagent has reported, its transcript is history and must stop
-              // animating even while the parent turn keeps going.
-              renderNested={(children) => (
-                <MessageParts parts={children} streaming={streaming && part.state === 'running'} />
-              )}
+              // The card supplies its own `live` flag: once a subagent has
+              // reported, its transcript is history and must stop animating even
+              // while the parent turn keeps going.
+              renderNested={renderNested}
             />
           )
         }
@@ -108,13 +119,7 @@ export function MessageParts({
             />
           )
         }
-        return (
-          <div key={i} className="streamdown max-w-none">
-            <Streamdown animated={STREAM_ANIMATION} isAnimating={streaming && isLast}>
-              {part.text}
-            </Streamdown>
-          </div>
-        )
+        return <Prose key={i} text={part.text} animating={streaming && isLast} />
       })}
       {waiting && (
         <ThinkingIndicator
@@ -130,7 +135,38 @@ export function MessageParts({
   )
 }
 
-function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean }): JSX.Element {
+/**
+ * One markdown block.
+ *
+ * Split out and memoized because Streamdown re-parses its whole source on every
+ * render, and a live turn re-renders this list on every token. Without this, a
+ * turn that had already written five paragraphs and was streaming a sixth
+ * re-parsed all six per token instead of one — the cost grew with the length of
+ * the reply, which is exactly why long answers got progressively choppier.
+ */
+const Prose = memo(function Prose({
+  text,
+  animating
+}: {
+  text: string
+  animating: boolean
+}): JSX.Element {
+  return (
+    <div className="streamdown max-w-none">
+      <Streamdown animated={STREAM_ANIMATION} isAnimating={animating}>
+        {text}
+      </Streamdown>
+    </div>
+  )
+})
+
+const ReasoningBlock = memo(function ReasoningBlock({
+  text,
+  streaming
+}: {
+  text: string
+  streaming: boolean
+}): JSX.Element {
   const [open, setOpen] = useState(false)
   const expanded = open || streaming
   return (
@@ -156,4 +192,4 @@ function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean 
       )}
     </div>
   )
-}
+})

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Check,
   ChevronRight,
@@ -78,11 +78,29 @@ export function ChatView(): JSX.Element {
     s.activeChatId ? !!s.runningSubagents[s.activeChatId] : false
   )
 
+  const hasContent = messages.length > 0 || (streaming !== null && streaming.length > 0)
+  // `messages` is cleared the instant you click a session and refilled only after
+  // the round trip, so an empty array on its own says nothing about whether the
+  // session HAS messages. Trusting it painted the empty state over every switch.
+  const loading = !hasContent && !messagesError && messagesChatId !== activeChatId
+  const isEmpty = !hasContent && !loading
+  // The transcript has resolved one way or another (content, empty, or failed),
+  // so the scroll effects below have something real to measure. Computed up here
+  // rather than beside the JSX because the arrival pin depends on it.
+  const transcriptReady = !loading
+
   const scrollRef = useRef<HTMLDivElement>(null)
   // Follow the conversation only while you're already at the bottom. If you've
   // scrolled up to read history, new messages/stream chunks must NOT yank you
   // back down — resume following once you scroll back to the end.
   const stickToBottom = useRef(true)
+  // The chat we have already jumped to the end of. Cleared on every switch, so
+  // until it matches `activeChatId` the pane is still "arriving" and the tail
+  // effect below owns the offset outright.
+  const arrivedChatId = useRef<string | null>(null)
+  // The last offset WE wrote. A scroll event replaying our own write must not be
+  // mistaken for the user scrolling away (see `onScroll`).
+  const pinnedTop = useRef(-1)
   const [loopPaneOpen, setLoopPaneOpen] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
   // Show only the latest N; scrolling up loads older ones a page at a time.
@@ -91,17 +109,36 @@ export function ChatView(): JSX.Element {
   // Which chat `restoreHeight` was measured in — a height from another session
   // is meaningless and must not be applied.
   const restoreChatId = useRef<string | null>(null)
-  // The message column, watched so the bottom-pin survives late layout.
-  const contentRef = useRef<HTMLDivElement>(null)
   // Overlay scrollbars for the transcript. Because the element is initialized
   // as its own viewport, every read below (scrollTop / scrollHeight /
   // clientHeight / scrollTo) and the onScroll prop keep working unchanged.
   useOverlayScroll(scrollRef)
 
+  /** Jump to the newest message, recording the offset as ours. */
+  const pinToBottom = useCallback((): void => {
+    const el = scrollRef.current
+    if (!el) return
+    const top = el.scrollHeight - el.clientHeight
+    pinnedTop.current = top
+    el.scrollTop = top
+  }, [])
+
   const onScroll = (): void => {
     const el = scrollRef.current
     if (!el) return
-    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    // Before the arrival pin lands, every scroll event here is our own doing:
+    // the outgoing transcript unmounting collapses scrollHeight and the browser
+    // clamps scrollTop to 0. Reading that back as "the user scrolled to the top"
+    // is what left switches parked at the top — it cleared `stickToBottom` for a
+    // session you had not even seen yet, so nothing ever pinned it, and at
+    // scrollTop 0 it also paged in another 30 messages on the way past.
+    if (arrivedChatId.current !== activeChatId) return
+    // Landing exactly on the offset we last wrote counts as "still following"
+    // even if the arithmetic below would say otherwise: the event is delivered a
+    // beat after the write, and a turn that grew in between would look like a
+    // gap the user had opened by hand. The ResizeObserver re-pins that growth.
+    stickToBottom.current =
+      el.scrollTop === pinnedTop.current || el.scrollHeight - el.scrollTop - el.clientHeight < 80
     // Near the top with more history → reveal another page, preserving position.
     if (el.scrollTop < 80 && visibleCount < messages.length) {
       restoreHeight.current = el.scrollHeight
@@ -112,15 +149,19 @@ export function ChatView(): JSX.Element {
 
   // Switching chats starts you pinned to the latest message + collapses details.
   //
-  // The scroll offset has to be reset by hand here. This component is never
-  // remounted between sessions (no `key={activeChatId}` upstream), so the
-  // scroller is the same DOM node throughout and `scrollTop` is a DOM property
-  // that survives the swap. Leaving it alone meant arriving in a short session
-  // still scrolled to a long one's offset — past the end of the new content,
-  // showing nothing but background. Clamped by the browser only against the
-  // CURRENT scrollHeight, which at this point is still the outgoing session's.
-  useEffect(() => {
+  // This runs on LAYOUT and deliberately does NOT touch `scrollTop`. It used to
+  // do both after paint (`useEffect` + `scrollTop = 0`), which is a race it lost
+  // every time: the new transcript arrives a commit LATER than the switch, so
+  // the reset ran after the tail effect had already pinned and stomped the pin
+  // back to zero — and the scroll event that write produced then cleared
+  // `stickToBottom`, so nothing pinned again. That is the whole "switching to a
+  // session lands at the top" bug. Marking the session "not arrived" instead
+  // hands the offset to the tail effect below, which lands it whenever the
+  // content actually shows up, in whatever order the effects happen to run.
+  useLayoutEffect(() => {
     stickToBottom.current = true
+    arrivedChatId.current = null
+    pinnedTop.current = -1
     // Drop any pending prepend-anchor: it holds the previous session's
     // scrollHeight, and applying that delta to the new one throws the offset
     // somewhere arbitrary.
@@ -128,7 +169,6 @@ export function ChatView(): JSX.Element {
     restoreChatId.current = null
     setInfoOpen(false)
     setVisibleCount(VISIBLE_MESSAGES)
-    if (scrollRef.current) scrollRef.current.scrollTop = 0
   }, [activeChatId])
 
   // Keep the scroll anchored when older messages prepend (no jump to the top).
@@ -150,25 +190,49 @@ export function ChatView(): JSX.Element {
   // re-pins on the next frame as well: a turn's content keeps growing AFTER this
   // commit — images decode, `lazy()` diff/file views resolve, Streamdown re-lays
   // out — and a single scrollTo lands short of the real bottom every time.
+  //
+  // The first pin after a switch is unconditional. `stickToBottom` cannot be
+  // trusted yet at that point: the outgoing transcript unmounting fires a scroll
+  // to 0 which, before this, was read as the user scrolling up.
   useLayoutEffect(() => {
-    if (!stickToBottom.current || !scrollRef.current) return
-    const pin = (): void => {
-      if (stickToBottom.current && scrollRef.current) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-      }
-    }
-    pin()
-    const frame = requestAnimationFrame(pin)
-    // Content that settles later (a decoded screenshot is the common one) resizes
-    // the column well after any frame we could schedule; watch it instead of
-    // guessing a delay.
-    const observer = new ResizeObserver(pin)
-    if (contentRef.current) observer.observe(contentRef.current)
-    return () => {
-      cancelAnimationFrame(frame)
-      observer.disconnect()
-    }
-  }, [messages, streaming])
+    if (!scrollRef.current) return
+    if (arrivedChatId.current !== activeChatId) {
+      // Still waiting on this session's transcript — nothing to land on yet.
+      // This effect re-runs when it arrives.
+      if (!transcriptReady) return
+      arrivedChatId.current = activeChatId
+    } else if (!stickToBottom.current) return
+    pinToBottom()
+    const frame = requestAnimationFrame(() => {
+      if (stickToBottom.current) pinToBottom()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [messages, streaming, activeChatId, transcriptReady, pinToBottom])
+
+  // Content that settles late (a decoded screenshot is the common one) resizes
+  // the column well after any frame we could schedule, so watch it rather than
+  // guessing a delay.
+  //
+  // Attached by ref callback and kept for the column's lifetime. This used to be
+  // built inside the tail effect above, whose deps include `streaming` — a fresh
+  // array on EVERY streamed delta — so a live turn tore down and rebuilt a
+  // ResizeObserver on each one, every rebuild firing an immediate observation
+  // and forcing layout. That was a large share of the streaming jank.
+  const resizeObserver = useRef<ResizeObserver | null>(null)
+  const setContentNode = useCallback(
+    (node: HTMLDivElement | null): void => {
+      resizeObserver.current?.disconnect()
+      resizeObserver.current = null
+      if (!node) return
+      const observer = new ResizeObserver(() => {
+        if (stickToBottom.current) pinToBottom()
+      })
+      observer.observe(node)
+      resizeObserver.current = observer
+    },
+    [pinToBottom]
+  )
+  useEffect(() => () => resizeObserver.current?.disconnect(), [])
 
   const activeChat = chats.find((c) => c.id === activeChatId)
   const isSub = activeChat?.kind === 'sub'
@@ -205,13 +269,6 @@ export function ChatView(): JSX.Element {
       </div>
     )
   }
-
-  const hasContent = messages.length > 0 || (streaming !== null && streaming.length > 0)
-  // `messages` is cleared the instant you click a session and refilled only after
-  // the round trip, so an empty array on its own says nothing about whether the
-  // session HAS messages. Trusting it painted the empty state over every switch.
-  const loading = !hasContent && !messagesError && messagesChatId !== activeChatId
-  const isEmpty = !hasContent && !loading
 
   return (
     <div className="vibrancy-solid relative flex h-full min-w-0 flex-1 flex-col">
@@ -359,7 +416,7 @@ export function ChatView(): JSX.Element {
         ) : (
           // pb clears the fade below: at max scroll the last line has to end
           // ABOVE the gradient, otherwise the final message always looks dimmed.
-          <div ref={contentRef} className="mx-auto max-w-3xl px-4 pb-6 pt-4">
+          <div ref={setContentNode} className="mx-auto max-w-3xl px-4 pb-6 pt-4">
             {messages.length > visibleCount && (
               <p className="mb-3 text-center text-xs text-text-subtle">
                 Scroll up to load older — showing the last {visibleCount} of {messages.length}
