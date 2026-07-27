@@ -170,6 +170,33 @@ export function ChatView(): JSX.Element {
     }
   }, [messages, streaming])
 
+  // Re-pin when the SCROLLPORT resizes, not just its content.
+  //
+  // Everything stacked below the transcript takes its height out of this pane's
+  // `flex-1`: the queue appearing, expanding or collapsing, the composer
+  // auto-growing as you type, the workstream strip. The browser does not adjust
+  // `scrollTop` for that, and both directions are visibly wrong:
+  //
+  //   shrinking (queue opens) — the max scroll offset grows, so an offset that
+  //     WAS the bottom is now short of it and the last messages slide out of
+  //     view. Reads as the queue shoving the transcript upward.
+  //   growing (queue collapses) — the reclaimed height appears BELOW the last
+  //     message as dead space, because the offset never moves back down. Reads
+  //     as the collapsed queue still holding its space.
+  //
+  // Kept separate from the effect above on purpose: this one is installed once
+  // and must keep observing across queue toggles, which change neither
+  // `messages` nor `streaming` and so would never re-run that effect.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      if (stickToBottom.current) el.scrollTop = el.scrollHeight
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
   const activeChat = chats.find((c) => c.id === activeChatId)
   const isSub = activeChat?.kind === 'sub'
   const parentChat = activeChat?.parentId
