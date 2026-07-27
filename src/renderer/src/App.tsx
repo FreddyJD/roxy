@@ -11,7 +11,7 @@ import Settings from './routes/Settings'
 
 function Splash(): JSX.Element {
   return (
-    <div className="vibrancy-solid flex h-full w-full items-center justify-center">
+    <div className="flex h-full w-full items-center justify-center bg-bg">
       <img
         src={roxy}
         alt="Roxy"

@@ -16,7 +16,7 @@ export function PageShell({
   children: ReactNode
 }): JSX.Element {
   return (
-    <div className="vibrancy-solid flex h-full w-full flex-col">
+    <div className="flex h-full w-full flex-col bg-bg">
       <header className="titlebar reserve-controls-left reserve-controls-right flex h-12 shrink-0 items-center gap-3 px-4">
         <button
           onClick={onBack}

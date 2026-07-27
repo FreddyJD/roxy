@@ -65,7 +65,7 @@ export function WelcomeStep({ onContinue }: { onContinue: () => void }): JSX.Ele
   const greeting = GREETINGS[index]
 
   return (
-    <div className="relative h-full w-full overflow-hidden">
+    <div className="relative h-full w-full overflow-hidden bg-bg">
       <DitherGradient from="blue" direction="bottom" bloom="aura" stars={70} />
 
       <div className="relative flex h-full w-full flex-col items-center justify-center gap-6 px-8">
