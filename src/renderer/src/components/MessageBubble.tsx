@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { User } from 'lucide-react'
 import roxy from '../assets/roxy.png'
 import type { MessagePart, MessageRole } from '@shared/types'
@@ -10,7 +11,7 @@ function partsToText(parts: MessagePart[]): string {
   return parts.map((p) => (p.type === 'text' || p.type === 'reasoning' ? p.text : '')).join('')
 }
 
-export function MessageBubble({
+function MessageBubbleImpl({
   role,
   parts,
   streaming = false
@@ -71,3 +72,18 @@ export function MessageBubble({
     </div>
   )
 }
+
+/**
+ * Memoized because the transcript re-renders on every streamed token.
+ *
+ * `streaming` writes a brand-new parts array into the store on each delta, which
+ * re-renders ChatView, which previously re-rendered all 30 settled bubbles with
+ * it — re-parsing every markdown block through Streamdown ~80 times a second for
+ * messages whose content had not changed since they were written to SQLite.
+ *
+ * A settled message's `parts` array is a stable reference (it comes straight off
+ * the loaded row and is never rebuilt), so the default shallow compare is both
+ * correct and enough: only the live bubble, whose array genuinely changes,
+ * re-renders.
+ */
+export const MessageBubble = memo(MessageBubbleImpl)

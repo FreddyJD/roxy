@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   Camera,
@@ -133,7 +133,7 @@ function ActivityLine({ parts }: { parts: MessagePart[] }): JSX.Element {
  * stream into `children` and render nested inside this card (via `renderNested`,
  * a callback rather than a direct import so the recursion stays one-directional).
  */
-export function ToolCall({
+export const ToolCall = memo(function ToolCall({
   tool,
   state,
   title,
@@ -151,8 +151,13 @@ export function ToolCall({
   diff?: ToolDiff
   /** A subagent's live transcript, for a `task` card. */
   nested?: MessagePart[]
-  /** Renders that transcript — supplied by MessageParts so this file needn't import it. */
-  renderNested?: (parts: MessagePart[]) => ReactNode
+  /**
+   * Renders that transcript — supplied by MessageParts so this file needn't
+   * import it. Takes the card's own liveness so the callback itself can stay
+   * referentially stable across a streaming turn (a per-card closure would
+   * change identity on every delta and defeat this component's memo).
+   */
+  renderNested?: (parts: MessagePart[], live: boolean) => ReactNode
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const Icon = TOOL_ICON[tool] ?? Wrench
@@ -258,7 +263,7 @@ export function ToolCall({
           {/* The subagent's own transcript, indented under a rail so it reads as a
               separate agent's work rather than more of the parent's. */}
           <Scroller className="max-h-[28rem] overflow-auto px-3 py-2">
-            <div className="border-l-2 border-border pl-3">{renderNested!(nested!)}</div>
+            <div className="border-l-2 border-border pl-3">{renderNested!(nested!, live)}</div>
             <div ref={tailRef} />
           </Scroller>
           {body && !live && (
@@ -294,4 +299,4 @@ export function ToolCall({
       )}
     </div>
   )
-}
+})

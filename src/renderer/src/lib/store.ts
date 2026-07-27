@@ -255,6 +255,100 @@ const chatRequests = new Map<string, string>()
 const modelCatalogCache = new Map<string, ModelInfo[]>()
 /** Set when a remote turn lands while a local send streams into the shared chat. */
 const remoteMirror = { deferred: false }
+
+/**
+ * Publish a session's live parts at most once per animation frame.
+ *
+ * All three streaming paths (a local send, a mirrored phone turn, a subagent's
+ * own session) used to write `streamingChats[id]` synchronously on every delta.
+ * A fast model emits those far quicker than the display can show them, so the
+ * transcript re-rendered several hundred times a second — re-parsing the turn's
+ * markdown and re-measuring the scroll column each time — and every render past
+ * the first in a frame was discarded without ever being painted. That was the
+ * bulk of the "the app is laggy while it streams" problem.
+ *
+ * Coalescing is lossless here because the parts array is CUMULATIVE: each delta
+ * produces a complete new snapshot of the turn, so the newest one already
+ * contains every skipped update.
+ *
+ * `null` (turn over) is published synchronously and cancels anything pending.
+ * It's the one update whose ordering matters: the persisted message is appended
+ * right after, and a frame landing later would resurrect the live bubble on top
+ * of it — a visibly duplicated reply.
+ */
+interface StreamPublisher {
+  (parts: MessagePart[] | null): void
+  /** Drop a scheduled frame without publishing it (the chat went away). */
+  cancel(): void
+}
+
+function createStreamPublisher(chatId: string): StreamPublisher {
+  let pending: MessagePart[] | null = null
+  let frame = 0
+  const publish = (parts: MessagePart[] | null): void =>
+    useRoxyStore.setState((s) => {
+      const next = { ...s.streamingChats }
+      if (parts === null) delete next[chatId]
+      else next[chatId] = parts
+      return { streamingChats: next }
+    })
+  const cancel = (): void => {
+    if (frame) cancelAnimationFrame(frame)
+    frame = 0
+    pending = null
+  }
+  const publisher = (parts: MessagePart[] | null): void => {
+    if (parts === null) {
+      cancel()
+      publish(null)
+      return
+    }
+    // Only the payload is replaced; the already-scheduled frame picks up
+    // whichever snapshot was last. Re-scheduling would land on the same frame
+    // boundary anyway, so this is a rate limit rather than a debounce — the
+    // first delta of a turn still paints on the very next frame.
+    pending = parts
+    if (frame) return
+    frame = requestAnimationFrame(() => {
+      frame = 0
+      if (pending) publish(pending)
+      pending = null
+    })
+  }
+  publisher.cancel = cancel
+  return publisher
+}
+
+/**
+ * One publisher per streaming session. Coalescing only works if consecutive
+ * deltas reach the SAME publisher, and two of the three paths (remote mirror,
+ * subagent) run as event handlers that are re-entered per delta and so cannot
+ * hold one in a local.
+ *
+ * Registering them centrally also gives `deleteChat` something to cancel: a
+ * frame scheduled just before a session is removed would otherwise land after
+ * the cleanup and write a live bubble back for a chat that no longer exists.
+ */
+const streamPublishers = new Map<string, StreamPublisher>()
+
+function publishStream(chatId: string, parts: MessagePart[] | null): void {
+  let publisher = streamPublishers.get(chatId)
+  if (!publisher) {
+    publisher = createStreamPublisher(chatId)
+    streamPublishers.set(chatId, publisher)
+  }
+  publisher(parts)
+  // Turn over and nothing pending — drop it rather than accumulating one
+  // closure per session ever streamed.
+  if (parts === null) streamPublishers.delete(chatId)
+}
+
+/** Forget a session's publisher, dropping any frame it had scheduled. */
+function cancelStream(chatId: string): void {
+  streamPublishers.get(chatId)?.cancel()
+  streamPublishers.delete(chatId)
+}
+
 /**
  * Live parts for the in-flight *phone-driven* turn per session, so the desktop
  * mirrors a remote reply token-by-token (the twin of a local send's `parts`).
@@ -350,12 +444,7 @@ function applyRemoteDelta(payload: RemoteDelta): void {
     // Never clobber a local send streaming into the same chat — its own handler
     // owns `streamingChats[sessionId]` until finishTurn reconciles.
     if (useRoxyStore.getState().sendingChats[sessionId]) return
-    useRoxyStore.setState((s) => {
-      const next = { ...s.streamingChats }
-      if (parts === null) delete next[sessionId]
-      else next[sessionId] = parts
-      return { streamingChats: next }
-    })
+    publishStream(sessionId, parts)
   }
 
   if (payload.kind === 'turn') {
@@ -436,12 +525,7 @@ function applySubagentDelta(payload: SubagentDelta): void {
   const { subChatId } = payload
   const reflect = (parts: MessagePart[] | null): void => {
     if (useRoxyStore.getState().activeChatId !== subChatId) return
-    useRoxyStore.setState((s) => {
-      const next = { ...s.streamingChats }
-      if (parts === null) delete next[subChatId]
-      else next[subChatId] = parts
-      return { streamingChats: next }
-    })
+    publishStream(subChatId, parts)
   }
 
   if (payload.kind === 'run') {
@@ -1160,6 +1244,10 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   deleteChat: async (id) => {
     await api.chats.remove(id)
     await get().refreshChats()
+    // Before clearing the live state, drop any frame this chat had scheduled —
+    // it would otherwise land after the cleanup and write a streaming bubble
+    // back for a session that no longer exists.
+    cancelStream(id)
     set((s) => {
       const sendingChats = { ...s.sendingChats }
       const streamingChats = { ...s.streamingChats }
@@ -1264,13 +1352,10 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     // sessions at once) never crosses the streams or drops a reply.
     const setSending = (v: boolean): void =>
       set((s) => ({ sendingChats: { ...s.sendingChats, [chatId]: v } }))
-    const setStreaming = (parts: MessagePart[] | null): void =>
-      set((s) => {
-        const next = { ...s.streamingChats }
-        if (parts === null) delete next[chatId]
-        else next[chatId] = parts
-        return { streamingChats: next }
-      })
+
+    // Streamed parts are published at most once per animation frame — see
+    // `createStreamPublisher` for why that matters.
+    const setStreaming = (parts: MessagePart[] | null): void => publishStream(chatId, parts)
     const clearStop = (): void =>
       set((s) => {
         const next = { ...s.stopChats }
