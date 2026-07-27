@@ -22,7 +22,6 @@ import type { MessagePart, ToolDiff } from '@shared/types'
 import { cn } from '../lib/cn'
 import { TerminalOutput } from './TerminalOutput'
 import { BrailleSpinner } from './ThinkingIndicator'
-import { Scroller } from './Scroller'
 
 const FileDiffView = lazy(() => import('./FileDiffView'))
 const FileView = lazy(() => import('./FileView'))
@@ -239,7 +238,7 @@ export const ToolCall = memo(function ToolCall({
       {/* Collapsed + running: a live one-liner of what the delegate is doing now. */}
       {showNested && live && !open && <ActivityLine parts={nested!} />}
       {open && diff ? (
-        <Scroller className="animate-fade-in max-h-96 overflow-auto border-t border-border bg-surface">
+        <div className="animate-fade-in max-h-96 overflow-auto border-t border-border bg-surface">
           <Suspense
             fallback={
               <div className="px-3 py-2 font-mono text-xs text-text-subtle">Loading diff…</div>
@@ -247,46 +246,40 @@ export const ToolCall = memo(function ToolCall({
           >
             <FileDiffView path={diff.path} before={diff.before} after={diff.after} />
           </Suspense>
-        </Scroller>
+        </div>
       ) : open && tool === 'read' && state === 'done' && body && !image ? (
-        <Scroller className="animate-fade-in max-h-96 overflow-auto border-t border-border bg-surface">
+        <div className="animate-fade-in max-h-96 overflow-auto border-t border-border bg-surface">
           <Suspense
             fallback={<div className="px-3 py-2 font-mono text-xs text-text-subtle">Loading…</div>}
           >
             <FileView name={title || 'file.txt'} contents={body} />
           </Suspense>
-        </Scroller>
+        </div>
       ) : open && (tool === 'bash' || tool === 'bash_output') ? (
         <TerminalOutput text={body} state={state} />
       ) : open && showNested ? (
         <div className="animate-fade-in border-t border-border bg-surface">
           {/* The subagent's own transcript, indented under a rail so it reads as a
               separate agent's work rather than more of the parent's. */}
-          <Scroller className="max-h-[28rem] overflow-auto px-3 py-2">
+          <div className="max-h-[28rem] overflow-auto px-3 py-2">
             <div className="border-l-2 border-border pl-3">{renderNested!(nested!, live)}</div>
             <div ref={tailRef} />
-          </Scroller>
+          </div>
           {body && !live && (
             <div className="border-t border-border">
               <div className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-text-subtle">
                 Report
               </div>
-              <Scroller
-                as="pre"
-                className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 pb-2 font-mono text-xs leading-relaxed text-text-muted"
-              >
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 pb-2 font-mono text-xs leading-relaxed text-text-muted">
                 {body}
-              </Scroller>
+              </pre>
             </div>
           )}
         </div>
       ) : open ? (
-        <Scroller
-          as="pre"
-          className="animate-fade-in max-h-72 overflow-auto border-t border-border bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-text-muted"
-        >
+        <pre className="animate-fade-in max-h-72 overflow-auto border-t border-border bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
           {body || (state === 'running' ? 'Running…' : '(no output)')}
-        </Scroller>
+        </pre>
       ) : null}
       {image && (
         <div className="border-t border-border bg-surface p-2">

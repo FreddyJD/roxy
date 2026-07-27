@@ -209,116 +209,41 @@ body {
 
 /* Scrollbars.
  *
- * Every scroller in the app runs OverlayScrollbars (see lib/overlayScroll.ts),
- * which draws its own handle and needs the native one gone. Hiding it here
- * rather than per-component also covers the scrollers we don't render
- * ourselves -- Streamdown's code blocks and tables inside every markdown
- * message -- which would otherwise still show a 10px platform bar.
+ * Thin, Cursor-like scrollbars, styled natively.
  *
- * SCOPED TO #root ON PURPOSE. OverlayScrollbars decides at startup whether this
- * platform already draws overlay scrollbars natively (macOS trackpad) by
- * measuring a probe element it appends to <body>. A global
- * `* { scrollbar-width: none }` makes that probe measure 0, so the library
- * concludes "already overlaid" and CANCELS every initialization -- silently,
- * leaving the app with no scrollbars at all. Keeping the rule inside #root lets
- * the probe see a real native scrollbar while still hiding every scrollbar the
- * user can actually look at.
+ * This deliberately does NOT use a JS overlay-scrollbar library. That was tried
+ * (overlayscrollbars 2.16.0) and reverted: initializing an element as its own
+ * viewport makes the library stamp `data-overlayscrollbars` on it, and its
+ * stylesheet carries `[data-overlayscrollbars] { position: relative }`. Every
+ * scroller in the app silently became a containing block, and the library also
+ * appends two `.os-scrollbar` divs INSIDE the scroller -- which lands them in
+ * the flex flow of the sidebar and the queue, where they pick up the parent's
+ * `gap` and add phantom spacing. The layout bugs that caused are not worth an
+ * auto-hiding handle.
  *
- * `scrollbar-width: none` is the standard property; the ::-webkit rule is what
- * Chromium actually obeys today. Both are needed. */
-#root * {
-  scrollbar-width: none;
+ * The handle is drawn with `background-clip: content-box` behind a transparent
+ * border, which is what makes a 10px-wide track render a 6px capsule with
+ * breathing room on either side -- the same trick Cursor and VS Code use. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
-#root *::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  display: none;
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
-
-/* Keep a scroller that is ALSO a positioned element positioned.
- *
- * We initialize OverlayScrollbars with `viewport: target` (see
- * lib/overlayScroll.ts), which makes the element its own scrollport. The
- * library then stamps `data-overlayscrollbars-viewport` on it, and its
- * stylesheet's structure rules include:
- *
- *   [data-overlayscrollbars-viewport]:not([data-overlayscrollbars]) {
- *     position: relative;
- *   }
- *
- * That is written for the wrapper mode, where the viewport is an injected child
- * that SHOULD be relative. In target mode it lands on OUR element and silently
- * overwrites `position: absolute` with `relative` — the moment the popover
- * mounts, it stops being out-of-flow, `bottom-full` resolves against a
- * different box, and it drops into the composer's footer row, shoving every
- * control sideways. That is the "dropdowns bug the chat" symptom exactly.
- *
- * Specificity is what makes this a real fix rather than a coin flip: the
- * library's selector is one attribute (0,1,0) and ours is attribute + class
- * (0,2,0), so we win regardless of stylesheet import order. It is also
- * UNLAYERED on purpose — Tailwind v4 puts `.absolute` inside `@layer
- * utilities`, and layered rules always lose to unlayered ones, so a plain
- * `.absolute` could not defend itself here even at equal specificity.
- *
- * Only `position` needs rescuing: the library's `display:flex` /
- * `flex-direction:row !important` block is keyed to `[data-overlayscrollbars~=host]`,
- * and in target mode that attribute is set to the empty string, so `~=host`
- * never matches. Verified against overlayscrollbars 2.16.0 in Electron. */
-[data-overlayscrollbars-viewport].absolute {
-  position: absolute;
+::-webkit-scrollbar-thumb:hover {
+  background: #3d3d43;
+  background-clip: content-box;
 }
-[data-overlayscrollbars-viewport].fixed {
-  position: fixed;
+::-webkit-scrollbar-track {
+  background: transparent;
 }
-[data-overlayscrollbars-viewport].sticky {
-  position: sticky;
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
-
-/* The overlay handle itself: a translucent capsule with nothing behind it, so
- * it reads as floating over the content instead of sitting in a gutter. Sized
- * 10px like the old native bar, but since it's an overlay it costs no layout
- * width -- content no longer reflows when a pane starts overflowing. */
-.os-theme-roxy {
-  --os-size: 10px;
-  --os-padding-perpendicular: 2px;
-  --os-padding-axis: 2px;
-  --os-track-bg: transparent;
-  --os-track-bg-hover: transparent;
-  --os-track-bg-active: transparent;
-  --os-track-border-radius: 9999px;
-  --os-handle-border-radius: 9999px;
-  --os-handle-bg: var(--color-border-strong);
-  --os-handle-bg-hover: #3d3d43;
-  --os-handle-bg-active: #4a4a52;
-  --os-handle-min-size: 28px;
-  /* Widen the grab target past the visible capsule: a 6px handle is painful to
-   * hit deliberately, and this costs nothing visually. */
-  --os-handle-interactive-area-offset: 4px;
-}
-/* Idle handles sit back; they come up to full strength once you're aiming at
- * them. The transition is on the SCROLLBAR (not the handle) because that's the
- * element OverlayScrollbars toggles `os-visible` on when it auto-hides. */
-.os-theme-roxy .os-scrollbar-handle {
-  opacity: 0.75;
-  transition: opacity 120ms var(--ease-out-quart);
-}
-.os-theme-roxy:is(:hover, :active) .os-scrollbar-handle {
-  opacity: 1;
-}
-/* The auto-hide fade. OverlayScrollbars' own transition is a hard 0.3s linear;
- * matching the app's easing keeps it from feeling like a different toolkit. */
-.os-theme-roxy.os-scrollbar {
-  transition:
-    opacity 220ms var(--ease-out-quart),
-    visibility 220ms var(--ease-out-quart);
-}
-@media (prefers-reduced-motion: reduce) {
-  .os-theme-roxy.os-scrollbar,
-  .os-theme-roxy .os-scrollbar-handle {
-    transition: none;
-  }
-}
-
 /* Electron custom title bar: make a region draggable, keep controls clickable. */
 .titlebar {
   -webkit-app-region: drag;

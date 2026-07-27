@@ -39,7 +39,6 @@ import { HeartbeatDot, NewLoopDialog } from './LoopsSection'
 import { RemoteWorkspaceDialog } from './RemoteWorkspaceDialog'
 import { BrailleSpinner } from './ThinkingIndicator'
 import { UpdateCard } from './UpdateCard'
-import { Scroller } from './Scroller'
 import roxy from '../assets/roxy.png'
 
 const MIN_WIDTH = 220
@@ -506,7 +505,7 @@ export function Sidebar(): JSX.Element {
         </button>
       </div>
 
-      <Scroller className="mt-4 flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3">
+      <div className="mt-4 flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3">
         <section className="flex min-h-0 flex-1 flex-col">
           <div className="mb-2 flex items-center px-1">
             <span className="text-xs font-medium text-text-muted">Projects</span>
@@ -895,7 +894,7 @@ export function Sidebar(): JSX.Element {
             </div>
           )}
         </section>
-      </Scroller>
+      </div>
 
       {contextMenu && (
         <SessionContextMenu

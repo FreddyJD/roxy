@@ -55,7 +55,6 @@
     "d3-shape": "^3.2.0",
     "electron-updater": "^6.3.9",
     "lucide-react": "^1.21.0",
-    "overlayscrollbars": "^2.16.0",
     "qrcode.react": "^4.2.0",
     "react-router-dom": "^7.18.0",
     "streamdown": "^2.5.0",

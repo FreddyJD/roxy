@@ -13,7 +13,6 @@ import {
 } from 'lucide-react'
 import type { Chat } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
-import { useOverlayScroll } from '../lib/overlayScroll'
 import { formatInterval } from '@shared/format'
 import { cn } from '../lib/cn'
 import { MessageBubble } from './MessageBubble'
@@ -109,10 +108,6 @@ export function ChatView(): JSX.Element {
   // Which chat `restoreHeight` was measured in — a height from another session
   // is meaningless and must not be applied.
   const restoreChatId = useRef<string | null>(null)
-  // Overlay scrollbars for the transcript. Because the element is initialized
-  // as its own viewport, every read below (scrollTop / scrollHeight /
-  // clientHeight / scrollTo) and the onScroll prop keep working unchanged.
-  useOverlayScroll(scrollRef)
 
   /** Jump to the newest message, recording the offset as ours. */
   const pinToBottom = useCallback((): void => {
@@ -469,10 +464,10 @@ export function ChatView(): JSX.Element {
           pb-6 on the message column is what keeps the last line legible: at
           max scroll it ends above the gradient instead of under it.
 
-          The mr-2.5 is the overlay scrollbar’s width (--os-size in main.css):
-          the handle is drawn inside the scroller, so a full-width fade would
-          paint over its last 24px and swallow the handle exactly when you drag
-          it to the end. */}
+          The mr-2.5 is the scrollbar gutter (10px, see ::-webkit-scrollbar
+          in main.css). The bar occupies the scroller’s right edge, so a
+          full-width fade would paint over its last 24px and wash out the
+          thumb exactly when you drag it to the end. */}
       <div
         aria-hidden
         className="pointer-events-none relative z-10 -mt-6 mr-2.5 h-6 shrink-0 bg-gradient-to-b from-transparent to-bg"
