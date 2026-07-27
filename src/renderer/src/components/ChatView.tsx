@@ -402,7 +402,7 @@ export function ChatView(): JSX.Element {
         // delta by hand. Chromium's anchoring would apply its own correction on
         // top of that, and the two together overshoot.
         style={{ overflowAnchor: 'none' }}
-        className="min-h-0 flex-1 overflow-y-auto"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto"
       >
         {messagesError ? (
           // A failed load used to be indistinguishable from an empty session:
@@ -436,9 +436,24 @@ export function ChatView(): JSX.Element {
             )}
           </div>
         ) : (
+          // mt-auto bottom-aligns a SHORT transcript.
+          //
+          // A new or brief session does not fill the pane, and a top-aligned
+          // column left everything below the last message as empty background --
+          // measured at 488px on a two-message session, which reads as a broken
+          // layout rather than breathing room. Pinning to the bottom cannot fix
+          // it: with nothing to scroll, scrollTop is already 0.
+          //
+          // mt-auto absorbs that slack while the column is shorter than the
+          // scrollport and resolves to 0 the moment it overflows, so long
+          // transcripts are untouched. Deliberately NOT justify-end on the
+          // parent: that clips overflow at the TOP in Chromium, which would put
+          // paged-in history out of reach. w-full because a flex child would
+          // otherwise shrink-to-fit and mx-auto would no longer center it.
+          //
           // pb clears the fade below: at max scroll the last line has to end
           // ABOVE the gradient, otherwise the final message always looks dimmed.
-          <div ref={setContentNode} className="mx-auto max-w-3xl px-4 pb-6 pt-4">
+          <div ref={setContentNode} className="mx-auto mt-auto w-full max-w-3xl px-4 pb-6 pt-4">
             {messages.length > visibleCount && (
               <p className="mb-3 text-center text-xs text-text-subtle">
                 Scroll up to load older — showing the last {visibleCount} of {messages.length}
