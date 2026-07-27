@@ -23,7 +23,6 @@ import { cn } from '../lib/cn'
 // would drift, and a `merged` PR that is green in one place and grey in the
 // other teaches the user that the colour means nothing.
 import { TONE_BG, TONE_TEXT } from '../lib/lifecycle'
-import { Scroller } from './Scroller'
 
 /**
  * The workstream strip — one quiet row under the composer answering "where does
@@ -269,7 +268,7 @@ function UnknownHostChip({ host }: { host: string }): JSX.Element {
     <div className="relative" ref={ref}>
       {open && (
         <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={anchor}>
-          <Scroller className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+          <div className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
             <div className="px-3 py-1.5 text-[11px] text-text-subtle">
               What does <span className="text-text-muted">{host}</span> run?
             </div>
@@ -283,7 +282,7 @@ function UnknownHostChip({ host }: { host: string }): JSX.Element {
                 {FORGE_NAMES[k]}
               </button>
             ))}
-          </Scroller>
+          </div>
         </div>
       )}
       <button
@@ -909,7 +908,7 @@ function WorkstreamMenu({
       {/* The whole menu scrolls, not just the branch list: a project with a
           dozen sessions makes the workstream list itself taller than the window,
           and `maxHeight` without `overflow` would only clip it differently. */}
-      <Scroller className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+      <div className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
         <MenuLabel>Workstreams</MenuLabel>
 
         {/* The default workstream is the project folder itself — always present,
@@ -986,7 +985,7 @@ function WorkstreamMenu({
                 ← branches
               </button>
             </MenuLabel>
-            <Scroller className="max-h-56 overflow-y-auto">
+            <div className="max-h-56 overflow-y-auto">
               {projectBranches.length === 0 && (
                 <div className="px-3 py-1.5 text-[11px] text-text-subtle">No branches found.</div>
               )}
@@ -1015,10 +1014,10 @@ function WorkstreamMenu({
                   </MenuItem>
                 )
               })}
-            </Scroller>
+            </div>
           </>
         )}
-      </Scroller>
+      </div>
     </div>
   )
 }

@@ -1,6 +1,5 @@
 import { type ReactNode } from 'react'
 import { ArrowLeft } from 'lucide-react'
-import { Scroller } from './Scroller'
 
 export function PageShell({
   title,
@@ -28,12 +27,12 @@ export function PageShell({
         <span className="text-sm font-medium">{title}</span>
         {actions && <div className="ml-auto">{actions}</div>}
       </header>
-      <Scroller className="min-h-0 flex-1 overflow-y-auto border-t border-border">
+      <div className="min-h-0 flex-1 overflow-y-auto border-t border-border">
         <div className="mx-auto max-w-3xl px-6 py-8">
           {subtitle && <p className="mb-6 text-sm text-text-muted">{subtitle}</p>}
           {children}
         </div>
-      </Scroller>
+      </div>
     </div>
   )
 }

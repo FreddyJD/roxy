@@ -7,7 +7,6 @@ import { Button } from '../components/ui'
 import roxy from '../assets/roxy.png'
 import { WelcomeStep } from './onboarding/WelcomeStep'
 import { ProviderStep } from './onboarding/ProviderStep'
-import { Scroller } from '../components/Scroller'
 
 type Step = 'welcome' | 'provider'
 
@@ -51,11 +50,11 @@ export default function Onboarding(): JSX.Element {
         </div>
       </header>
 
-      <Scroller className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-6 py-8">
           <ProviderStep />
         </div>
-      </Scroller>
+      </div>
 
       <footer className="flex h-16 shrink-0 items-center justify-between border-t border-border px-6">
         <span className="text-xs text-text-subtle">

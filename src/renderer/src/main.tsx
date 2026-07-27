@@ -1,6 +1,5 @@
 import '@fontsource-variable/geist/index.css'
 import '@fontsource-variable/geist-mono/index.css'
-import 'overlayscrollbars/overlayscrollbars.css'
 import './assets/main.css'
 import 'streamdown/styles.css'
 import React from 'react'

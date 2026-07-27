@@ -6,7 +6,6 @@ import { isServiceFailure, serviceStatusLabel, servicesSummary } from '@shared/s
 import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
 import { TerminalOutput } from './TerminalOutput'
-import { Scroller } from './Scroller'
 
 /**
  * The Services segment — what this session is actually running.
@@ -193,7 +192,7 @@ function ServicesMenu({
         {/* Scrolls instead of growing past the top of the window: a worktree
             setup can leave several processes behind, and the header has to stay
             on screen or the list loses its label. */}
-        <Scroller className="min-h-0 overflow-y-auto">
+        <div className="min-h-0 overflow-y-auto">
           {services.map((svc) => (
             <ServiceRow
               key={svc.id}
@@ -203,7 +202,7 @@ function ServicesMenu({
               onToggleLogs={() => onToggleLogs(svc.id)}
             />
           ))}
-        </Scroller>
+        </div>
       </div>
     </div>
   )

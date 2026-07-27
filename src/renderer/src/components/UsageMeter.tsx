@@ -16,7 +16,6 @@ import { cn } from '../lib/cn'
 import { BarChart } from './dither-kit/bar-chart'
 import { Bar } from './dither-kit/bar'
 import type { ChartConfig } from './dither-kit/chart-context'
-import { Scroller } from './Scroller'
 
 /** Close-on-outside-click / Escape for the popover. */
 function usePopover(): {
@@ -274,7 +273,7 @@ export function UsageMeter(): JSX.Element | null {
       {open && (
         <div className="animate-pop-in absolute right-0 top-full z-50 mt-2 w-80 origin-top-right overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl">
           {/* Tabs */}
-          <Scroller className="flex items-center gap-1 overflow-x-auto border-b border-border p-1.5">
+          <div className="flex items-center gap-1 overflow-x-auto border-b border-border p-1.5">
             {tabs.map((t) => (
               <button
                 key={t.id}
@@ -291,7 +290,7 @@ export function UsageMeter(): JSX.Element | null {
                 {t.label}
               </button>
             ))}
-          </Scroller>
+          </div>
           {tab === 'overview'
             ? overviewPanel(usageStats)
             : activeProvider

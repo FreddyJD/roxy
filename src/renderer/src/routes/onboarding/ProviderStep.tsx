@@ -16,7 +16,6 @@ import { api } from '../../lib/api'
 import { useRoxyStore } from '../../lib/store'
 import { Button, Input } from '../../components/ui'
 import { ProviderLogo } from '../../lib/providerLogos'
-import { Scroller } from '../../components/Scroller'
 
 // The searchable list leads with Roxy too — a fallback for anyone who breezes
 // past the featured hero card above — followed by every other provider. (Roxy
@@ -74,7 +73,7 @@ export function ProviderStep(): JSX.Element {
         />
       </div>
 
-      <Scroller className="mt-3 max-h-[320px] overflow-y-auto rounded-xl border border-border bg-surface">
+      <div className="mt-3 max-h-[320px] overflow-y-auto rounded-xl border border-border bg-surface">
         {filtered.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-text-subtle">
             No providers match “{query}”.
@@ -91,7 +90,7 @@ export function ProviderStep(): JSX.Element {
             ))}
           </div>
         )}
-      </Scroller>
+      </div>
 
       {setupId && <ProviderSetup seed={resolveSeed(setupId)} onClose={() => setSetupId(null)} />}
     </div>
@@ -247,7 +246,7 @@ function ProviderSetup({
         </div>
       </header>
 
-      <Scroller className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-md px-6 py-10">
           {isCopilot ? (
             <CopilotSetup onConnected={onConnected} />
@@ -318,7 +317,7 @@ function ProviderSetup({
             </div>
           )}
         </div>
-      </Scroller>
+      </div>
     </div>
   )
 }

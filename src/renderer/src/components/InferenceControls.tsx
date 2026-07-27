@@ -12,7 +12,6 @@ import {
 } from '@shared/session-config'
 import { useMenuAnchor } from '../lib/useMenuAnchor'
 import { cn } from '../lib/cn'
-import { Scroller } from './Scroller'
 
 /**
  * Close-on-outside-click / Escape for a small popover, plus the geometry that
@@ -147,7 +146,7 @@ export function ThinkingPicker(): JSX.Element | null {
         <span>{currentLabel}</span>
       </button>
       {open && (
-        <Scroller className={popoverClass} style={anchor}>
+        <div className={popoverClass} style={anchor}>
           <div className="shrink-0 border-b border-border px-3 py-2 text-[11px] font-medium text-text-subtle">
             Thinking Effort
           </div>
@@ -181,7 +180,7 @@ export function ThinkingPicker(): JSX.Element | null {
           <div className="shrink-0 border-t border-border px-3 py-1.5 text-[11px] text-text-subtle">
             Higher levels of thinking may increase cost.
           </div>
-        </Scroller>
+        </div>
       )}
     </div>
   )
@@ -213,7 +212,7 @@ export function AgentPicker(): JSX.Element {
         <span>{active.name}</span>
       </button>
       {open && (
-        <Scroller className={popoverClass} style={anchor}>
+        <div className={popoverClass} style={anchor}>
           <div className="p-1">
             {PRIMARY_AGENTS.map((a) => {
               const selected = a.id === active.id
@@ -243,7 +242,7 @@ export function AgentPicker(): JSX.Element {
               )
             })}
           </div>
-        </Scroller>
+        </div>
       )}
     </div>
   )
@@ -288,7 +287,7 @@ export function ContextPicker(): JSX.Element | null {
         <span>{formatTokens(current)}</span>
       </button>
       {open && (
-        <Scroller className={popoverClass} style={anchor}>
+        <div className={popoverClass} style={anchor}>
           <div className="shrink-0 border-b border-border px-3 py-2 text-[11px] font-medium text-text-subtle">
             Context Size
           </div>
@@ -326,7 +325,7 @@ export function ContextPicker(): JSX.Element | null {
           <div className="shrink-0 border-t border-border px-3 py-1.5 text-[11px] text-text-subtle">
             Larger context may increase cost.
           </div>
-        </Scroller>
+        </div>
       )}
     </div>
   )

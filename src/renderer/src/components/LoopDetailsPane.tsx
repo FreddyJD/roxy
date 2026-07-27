@@ -2,7 +2,6 @@ import { Repeat, X } from 'lucide-react'
 import type { Chat, Loop } from '@shared/types'
 import { formatInterval } from '@shared/format'
 import { cn } from '../lib/cn'
-import { Scroller } from './Scroller'
 
 function fmtTime(ts: number | null): string {
   return ts ? new Date(ts).toLocaleString() : '—'
@@ -75,7 +74,7 @@ export function LoopDetailsPane({
         </button>
       </div>
 
-      <Scroller className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
         <Row label="Name">{loop.name}</Row>
 
         <Row label="Status">
@@ -127,7 +126,7 @@ export function LoopDetailsPane({
           Read-only. Ask Roxy to change a loop with the loop tools (e.g. “pause the {loop.name}
           loop”).
         </p>
-      </Scroller>
+      </div>
     </aside>
   )
 }
