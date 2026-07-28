@@ -13,6 +13,8 @@ import { pathToFileURL } from 'node:url'
 import { app } from 'electron'
 
 import * as repo from '../src/main/db/repo'
+import { getActivityStats } from '../src/main/services/activity'
+import { localDay } from '../src/shared/cost'
 import { closeDb } from '../src/main/db/database'
 import {
   runTool,
@@ -854,6 +856,59 @@ async function main(): Promise<void> {
     repo.removeChat(sessB.id)
   }
 
+  // ---- activity survives deletion (the whole point of the ledger) ----
+  // The contribution graph used to COUNT assistant messages, which cascade away
+  // with their chat - so deleting a session, or removing a project folder (which
+  // deletes every session under it), silently erased months of history. These
+  // pin the property that broke: the record of having worked outlives the
+  // transcript it came from.
+  {
+    const before = getActivityStats().total
+    const today = localDay(Date.now())
+
+    const keep = repo.createChat({ title: 'activity keep', kind: 'main', workspacePath: ws })
+    const doomed = repo.createChat({ title: 'activity doomed', kind: 'main', workspacePath: ws })
+    const sub = repo.createChat({
+      title: 'activity sub',
+      kind: 'sub',
+      workspacePath: ws,
+      parentId: doomed.id
+    })
+
+    repo.addMessage({ chatId: keep.id, role: 'user', content: 'hi' })
+    repo.addMessage({ chatId: keep.id, role: 'assistant', content: 'one' })
+    repo.addMessage({ chatId: doomed.id, role: 'assistant', content: 'two' })
+    repo.addMessage({ chatId: sub.id, role: 'assistant', content: 'three' })
+
+    // 4 messages went in, 3 of them assistant: user prompts are not turns.
+    const after = getActivityStats()
+    check('activity: assistant messages are recorded as turns', after.total === before + 3)
+    const todayCell = after.days[after.days.length - 1]
+    check(
+      'activity: turns land on today, in local time',
+      todayCell.date === today && todayCell.count >= 3
+    )
+
+    // Deleting the session cascades its messages AND its subagent's - the graph
+    // must not move.
+    repo.removeChat(doomed.id)
+    check(
+      "activity: deleting a session doesn't erase its history",
+      getActivityStats().total === before + 3
+    )
+    check(
+      'activity: the messages really were deleted',
+      repo.listMessages(doomed.id).length === 0 && repo.listMessages(sub.id).length === 0
+    )
+
+    // ...and removing the last session in a folder (what "remove folder" does)
+    // must not either.
+    repo.removeChat(keep.id)
+    const end = getActivityStats()
+    check('activity: emptying a project folder keeps the graph', end.total === before + 3)
+    check('activity: today is still an active day', end.currentStreak >= 1)
+  }
+
   // ---- migration repair (two branches, two different "v14"s) ----
   // The schema version is an ARRAY POSITION, so when the usage-dashboard branch
   // and the worktree branch each shipped a migration numbered v14, a database
@@ -899,6 +954,58 @@ async function main(): Promise<void> {
          VALUES('mig1','pre-existing','main','/proj',1,1,1)`
       ).run()
       return db
+    }
+
+    // v18's backfill: an existing install upgrading must not start from a blank
+    // graph. The ledger is seeded from the assistant messages still on disk,
+    // bucketed by LOCAL day so it agrees with what the renderer draws.
+    {
+      const db = await seeded('mig-activity', 17)
+      const mk = (id: string, at: number, role: string): void => {
+        db.prepare(
+          `INSERT INTO messages(id, chat_id, role, content, created_at)
+           VALUES(?, 'mig1', ?, 'x', ?)`
+        ).run(id, role, at)
+      }
+      const noon = new Date(2026, 0, 15, 12, 0, 0).getTime()
+      mk('m1', noon, 'assistant')
+      mk('m2', noon + 60_000, 'assistant')
+      mk('m3', noon - 24 * 60 * 60 * 1000, 'assistant')
+      mk('m4', noon, 'user') // not a turn
+      check('migration v18: ledger absent before the upgrade', !tablesOf(db).includes('activity'))
+
+      runLadder(db)
+      const led = db.prepare('SELECT day, turns FROM activity ORDER BY day').all() as {
+        day: string
+        turns: number
+      }[]
+      check(
+        'migration v18: backfills one row per active day',
+        led.length === 2,
+        JSON.stringify(led)
+      )
+      check(
+        'migration v18: backfills local-day counts, assistant only',
+        led[0].day === localDay(noon - 24 * 60 * 60 * 1000) &&
+          led[0].turns === 1 &&
+          led[1].day === localDay(noon) &&
+          led[1].turns === 2,
+        JSON.stringify(led)
+      )
+
+      // The ledger is the record of record: re-running must never re-seed on top
+      // of it, or every restart would double a day that still has its messages.
+      repairSchema(db)
+      repairSchema(db)
+      check(
+        'migration v18: repeated opens never double-count',
+        (
+          db.prepare('SELECT turns AS t FROM activity WHERE day = ?').get(localDay(noon)) as {
+            t: number
+          }
+        ).t === 2
+      )
+      db.close()
     }
 
     // Direction 1: took the usage v14, so the worktree columns were skipped.
@@ -1026,7 +1133,7 @@ async function main(): Promise<void> {
 
     // Every table the app depends on must come back, not just the ones a
     // previously-reported bug happened to name.
-    for (const table of ['projects', 'usage', 'queue', 'mcp_servers', 'settings']) {
+    for (const table of ['projects', 'usage', 'queue', 'mcp_servers', 'settings', 'activity']) {
       const db = healthy()
       db.exec(`DROP TABLE ${table}`)
       check(`self-heal: ${table} is missing before repair`, !tablesOf(db).includes(table))
