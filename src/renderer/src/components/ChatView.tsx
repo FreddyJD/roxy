@@ -68,9 +68,15 @@ export function ChatView(): JSX.Element {
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const chats = useRoxyStore((s) => s.chats)
   const loops = useRoxyStore((s) => s.loops)
-  const backgroundTaskCount = useRoxyStore((s) =>
-    s.activeChatId ? (s.runningTasks[s.activeChatId]?.length ?? 0) : 0
+  // Subscribe to the STORED array, not a defaulted copy. A selector returning
+  // `?? []` builds a new array every call, so zustand's Object.is check never
+  // matches and the component re-renders forever ("getSnapshot should be
+  // cached" -> "Maximum update depth exceeded"). undefined is a stable value;
+  // the empty-array default belongs below, outside the subscription.
+  const runningTasks = useRoxyStore((s) =>
+    s.activeChatId ? s.runningTasks[s.activeChatId] : undefined
   )
+  const backgroundTaskCount = runningTasks?.length ?? 0
   // A subagent working in ITS OWN session. Tracked separately from `sending`
   // (which is per-chat local-send state): nobody "sent" this turn from the UI —
   // the parent agent delegated it — so the only signal is the live run itself.
@@ -79,9 +85,6 @@ export function ChatView(): JSX.Element {
   )
   const cancelSubagent = useRoxyStore((s) => s.cancelSubagent)
   const cancelBackgroundTask = useRoxyStore((s) => s.cancelBackgroundTask)
-  const runningTasks = useRoxyStore((s) =>
-    s.activeChatId ? (s.runningTasks[s.activeChatId] ?? []) : []
-  )
 
   const hasContent = messages.length > 0 || (streaming !== null && streaming.length > 0)
   // `messages` is cleared the instant you click a session and refilled only after
@@ -384,7 +387,9 @@ export function ChatView(): JSX.Element {
               // interaction, and per-task control lives on the task card.
               <button
                 onClick={() => {
-                  for (const t of runningTasks) void cancelBackgroundTask(activeChatId, t.jobId)
+                  for (const t of runningTasks ?? []) {
+                    void cancelBackgroundTask(activeChatId, t.jobId)
+                  }
                 }}
                 title={`Cancel ${backgroundTaskCount} background subagent${
                   backgroundTaskCount === 1 ? '' : 's'
