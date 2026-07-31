@@ -250,6 +250,24 @@ interface RoxyStore {
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+/**
+ * Accept a session id only if it really is one.
+ *
+ * Actions shaped `(chatId?: string) => …` are the natural thing to hand
+ * straight to an onClick — and React then calls them with the SyntheticEvent,
+ * which silently becomes the "session" to act on. TypeScript does not catch it:
+ * `(id?: string) => void` is assignable to `() => void`, so `onClick={stop}`
+ * compiles clean. The failure mode is ugly and remote from the cause — the event
+ * keys state as "[object Object]", matches no session, and blows up as
+ * "An object could not be cloned" when it reaches an IPC boundary, leaving the
+ * button looking stuck.
+ *
+ * So every such action funnels its argument through here: anything that is not a
+ * string means "the active session".
+ */
+const asChatId = (value: unknown): string | undefined =>
+  typeof value === 'string' ? value : undefined
+
 let loopTickSubscribed = false
 let llmDeltaSubscribed = false
 let taskUpdateSubscribed = false
@@ -1713,7 +1731,8 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   },
 
   stop: (targetChatId) => {
-    const id = targetChatId ?? get().activeChatId
+    // Guarded: a bare `onClick={stop}` hands this the click event. See asChatId.
+    const id = asChatId(targetChatId) ?? get().activeChatId
     if (!id) return
     set((s) => ({ stopChats: { ...s.stopChats, [id]: true } }))
     const requestId = chatRequests.get(id)
@@ -1753,7 +1772,9 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   },
 
   compactConversation: async (targetChatId) => {
-    const chatId = targetChatId ?? get().activeChatId
+    // Same guard as `stop`: this shape is one bare onClick away from sending a
+    // SyntheticEvent over IPC to api.context.compact.
+    const chatId = asChatId(targetChatId) ?? get().activeChatId
     if (!chatId || get().compactingChats[chatId]) return
     const { settings, providers } = get()
     // Compact with the SESSION's own model: compacting must not route a

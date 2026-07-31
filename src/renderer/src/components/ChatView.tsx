@@ -554,7 +554,9 @@ export function ChatView(): JSX.Element {
       <Composer
         onSend={submit}
         sending={sending || subagentRunning}
-        onStop={subagentRunning && activeChatId ? () => void cancelSubagent(activeChatId) : stop}
+        onStop={
+          subagentRunning && activeChatId ? () => void cancelSubagent(activeChatId) : () => stop()
+        }
       />
 
       <WorkstreamStrip />
