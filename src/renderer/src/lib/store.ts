@@ -15,6 +15,7 @@ import type {
   ChatMessage,
   CreateLoopInput,
   LlmEvent,
+  LlmResult,
   ModelInfo,
   RemoteDelta,
   RemoteState,
@@ -186,7 +187,16 @@ interface RoxyStore {
   editQueued: (id: string, content: string, images?: ComposerImage[]) => Promise<void>
   /** Refresh the usage/cost dashboard (called on turn end + when the pill opens). */
   refreshUsage: () => Promise<void>
-  stop: () => void
+  /**
+   * Stop a session's turn. Defaults to the active chat; pass an id to stop a
+   * session that isn't on screen (a background turn used to be unstoppable —
+   * the only Stop button was the composer's, which only ever knew the open one).
+   */
+  stop: (targetChatId?: string) => void
+  /** Cancel ONE running subagent by its session id, leaving its parent turn alive. */
+  cancelSubagent: (subChatId: string) => Promise<void>
+  /** Cancel one detached background task launched by a session. */
+  cancelBackgroundTask: (sessionId: string, jobId: string) => Promise<void>
   /** Start sharing the active session to a phone via the roxy.gg relay. */
   startRemote: () => Promise<void>
   /** Stop sharing + revoke the room/token (Stop sharing). */
@@ -1591,19 +1601,41 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
         setStreaming(parts)
       })
       chatRequests.set(chatId, requestId)
-      const result = await api.llm.start({
-        requestId,
-        sessionId: chatId,
-        providerId: provider.id,
-        model,
-        messages: chatMessages,
-        agentId,
-        reasoning: info?.reasoning ?? false,
-        reasoningEffort: config.reasoningEffort,
-        contextLimit: contextBudget
-      })
-      deltaHandlers.delete(requestId)
-      chatRequests.delete(chatId)
+      // Stop can land during the pre-flight above (ensureModels, token estimate,
+      // compaction, buildChatMessages — all awaited, all before a requestId
+      // exists). Starting the turn anyway is exactly the "I pressed cancel and
+      // it ran regardless" case, so bail here instead.
+      if (stopped()) {
+        deltaHandlers.delete(requestId)
+        chatRequests.delete(chatId)
+        await finishTurn()
+        return
+      }
+      // Every exit from here on must clear the send state. Without the
+      // try/finally a rejected `llm.start` (a main-process throw, a window
+      // race) left `sendingChats[chatId]` true forever: the composer showed a
+      // Stop button for a turn that no longer existed, and clicking it aborted
+      // a requestId that had already been deleted. That is the OTHER half of
+      // the stuck-cancel bug, and it could only be cleared by restarting.
+      let result: LlmResult
+      try {
+        result = await api.llm.start({
+          requestId,
+          sessionId: chatId,
+          providerId: provider.id,
+          model,
+          messages: chatMessages,
+          agentId,
+          reasoning: info?.reasoning ?? false,
+          reasoningEffort: config.reasoningEffort,
+          contextLimit: contextBudget
+        })
+      } catch (e) {
+        result = { ok: false, error: e instanceof Error ? e.message : String(e) }
+      } finally {
+        deltaHandlers.delete(requestId)
+        chatRequests.delete(chatId)
+      }
       if (!result.ok && !stopped()) {
         parts = [
           ...parts,
@@ -1680,12 +1712,44 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     }
   },
 
-  stop: () => {
-    const id = get().activeChatId
+  stop: (targetChatId) => {
+    const id = targetChatId ?? get().activeChatId
     if (!id) return
     set((s) => ({ stopChats: { ...s.stopChats, [id]: true } }))
     const requestId = chatRequests.get(id)
     if (requestId) void api.llm.abort(requestId)
+    // Abort by SESSION as well as by request.
+    //
+    // `chatRequests` is only populated once the turn is actually starting, and a
+    // turn does real work before that — most of all compaction, a full model
+    // call on a long history. Stop pressed in that window used to find no
+    // requestId, do nothing at all, and then have its own flag wiped by
+    // `clearStop` when the turn it failed to stop finished. That is the "cancel
+    // gets stuck" bug. This path always has something to abort, and also
+    // cancels the session's subagents.
+    void api.llm.abortSession(id)
+  },
+
+  cancelSubagent: async (subChatId) => {
+    // Optimistic: the spinner has to go the instant you click, or the button
+    // reads as broken while the run tears itself down. Main is the source of
+    // truth and will broadcast the real end state a moment later.
+    set((s) => {
+      const next = { ...s.runningSubagents }
+      delete next[subChatId]
+      return { runningSubagents: next }
+    })
+    await api.subagents.cancel(subChatId)
+  },
+
+  cancelBackgroundTask: async (sessionId, jobId) => {
+    set((s) => ({
+      runningTasks: {
+        ...s.runningTasks,
+        [sessionId]: (s.runningTasks[sessionId] ?? []).filter((t) => t.jobId !== jobId)
+      }
+    }))
+    await api.tasks.cancel(jobId)
   },
 
   compactConversation: async (targetChatId) => {

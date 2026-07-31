@@ -776,6 +776,82 @@ async function main(): Promise<void> {
   check('bash_kill stops the process', bgKill.ok, bgKill.output)
   check('bash_output rejects an unknown id', !(await run('bash_output', { id: 'bg_nope' })).ok)
 
+  // ---- Stop actually interrupts a running tool ----
+  // The turn signal now reaches INSIDE runTool. Before this, the harness could
+  // only check `aborted` BETWEEN tool calls, so pressing Stop during a long
+  // bash did nothing until that command finished on its own (up to 10 minutes)
+  // — the "cancel button gets stuck" bug.
+  {
+    const sleepCmd = process.platform === 'win32' ? 'Start-Sleep -Seconds 30' : 'sleep 30'
+
+    // Aborting mid-flight kills the child and returns promptly.
+    const controller = new AbortController()
+    const startedAt = Date.now()
+    const pending = runTool(
+      'bash',
+      { command: sleepCmd, timeout: 30 },
+      { cwd: ws, signal: controller.signal }
+    )
+    setTimeout(() => controller.abort(), 300)
+    const stoppedRes = await pending
+    const elapsed = Date.now() - startedAt
+    check('bash: an aborted command returns promptly', elapsed < 10_000, `${elapsed}ms`)
+    check('bash: an aborted command is not ok', !stoppedRes.ok, stoppedRes.output)
+    check(
+      'bash: an aborted command reads as stopped, not as a timeout',
+      /stopped/i.test(stoppedRes.output) && !/timed out/i.test(stoppedRes.output),
+      stoppedRes.output
+    )
+
+    // An already-aborted signal must not spawn anything at all.
+    const dead = new AbortController()
+    dead.abort()
+    const skipped = await runTool('bash', { command: bashCmd }, { cwd: ws, signal: dead.signal })
+    check(
+      'bash: an already-stopped turn never spawns the command',
+      !skipped.ok && !skipped.output.includes('roxy-bash-ok'),
+      skipped.output
+    )
+
+    // A signal that never aborts must not change ordinary behaviour.
+    const live = new AbortController()
+    const normal = await runTool('bash', { command: bashCmd }, { cwd: ws, signal: live.signal })
+    check(
+      'bash: a live signal leaves a normal command untouched',
+      normal.ok && normal.output.includes('roxy-bash-ok'),
+      normal.output
+    )
+
+    // Every tool call attaches an abort listener to the SAME turn signal, so a
+    // long turn would leak one per call if they were never removed.
+    const shared = new AbortController()
+    for (let i = 0; i < 12; i++) {
+      await runTool('bash', { command: bashCmd }, { cwd: ws, signal: shared.signal })
+    }
+    const listeners = (
+      shared.signal as AbortSignal & { listenerCount?: (t: string) => number }
+    ).listenerCount?.('abort')
+    check(
+      'bash: abort listeners are cleaned up between calls',
+      listeners === undefined || listeners <= 1,
+      String(listeners)
+    )
+
+    // A cancelled fetch reports as stopped rather than as a network failure.
+    const fetchCtl = new AbortController()
+    fetchCtl.abort()
+    const fetchRes = await runTool(
+      'webfetch',
+      { url: 'https://example.com' },
+      { cwd: ws, signal: fetchCtl.signal }
+    )
+    check(
+      'webfetch: an already-stopped turn reports as stopped',
+      !fetchRes.ok && /stopped/i.test(fetchRes.output),
+      fetchRes.output
+    )
+  }
+
   // ---- background procs are owned per SESSION, not per cwd ----
   // Two sessions open on the SAME folder must not see or kill each other's dev
   // servers, and a subagent's processes must be owned by its parent session.

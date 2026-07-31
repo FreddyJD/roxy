@@ -70,6 +70,65 @@ export interface ToolContext {
   browserKey?: string
   /** Optional sink for incremental output (bash streams its logs here live). */
   onChunk?: (chunk: string) => void
+  /**
+   * The turn's abort signal — Stop, or a single subagent being cancelled.
+   *
+   * Threading this all the way down is what makes Stop *feel* instant. Without
+   * it the harness could only check `aborted` BETWEEN tool calls, so pressing
+   * Stop during a 10-minute `bash` or a hung `webfetch` did nothing observable
+   * until that call returned on its own: the turn stayed in flight, the composer
+   * kept showing Stop, and clicking it again did nothing. Every tool that can
+   * block for a meaningful time now honors this.
+   *
+   * Optional because the manual `!verb` path and the smoke tests call `runTool`
+   * without a turn around them; a tool that gets no signal behaves as before.
+   */
+  signal?: AbortSignal
+}
+
+/** The output a cancelled tool reports back — recognizable, and never `ok`. */
+export const TOOL_ABORTED = 'Stopped by the user before this tool finished.'
+
+/** A rejected promise the moment `signal` aborts; never resolves otherwise. */
+function abortRace(signal: AbortSignal | undefined): Promise<never> | null {
+  if (!signal) return null
+  return new Promise((_resolve, reject) => {
+    if (signal.aborted) {
+      reject(new AbortError())
+      return
+    }
+    signal.addEventListener('abort', () => reject(new AbortError()), { once: true })
+  })
+}
+
+/** Marker error for "this tool was cut short by Stop", distinguished from real failures. */
+class AbortError extends Error {
+  constructor() {
+    super(TOOL_ABORTED)
+    this.name = 'AbortError'
+  }
+}
+
+/**
+ * Run `work`, but give up on it the moment `signal` aborts.
+ *
+ * For tools whose underlying operation cannot itself be interrupted (Electron's
+ * `webContents` calls, an MCP round trip): the work keeps running to completion
+ * in the background, but the TURN stops waiting for it. That's the difference
+ * between a Stop that responds instantly and one that appears stuck — and it is
+ * safe here because the turn is being torn down anyway, so a late result has no
+ * one left to mislead.
+ */
+async function untilAborted<T>(
+  signal: AbortSignal | undefined,
+  work: () => Promise<T>
+): Promise<T> {
+  const race = abortRace(signal)
+  if (!race) return await work()
+  // Swallow a late rejection from the losing side so an aborted turn can't
+  // surface an unhandled rejection after its own error path already ran.
+  race.catch(() => {})
+  return await Promise.race([work(), race])
 }
 
 const MAX_OUTPUT = 100_000
@@ -113,7 +172,8 @@ export async function runTool(
         return await runBash(str(input.command), ctx.cwd, ctx.onChunk, {
           timeout: num(input.timeout),
           background: bool(input.background),
-          sessionId: owningSessionId(ctx)
+          sessionId: owningSessionId(ctx),
+          signal: ctx.signal
         })
       case 'bash_list':
         return runBashList(owningSessionId(ctx))
@@ -143,23 +203,44 @@ export async function runTool(
           ctx.cwd
         )
       case 'webfetch':
-        return await runWebFetch(str(input.url), str(input.format), input.timeout, ctx.onChunk)
+        return await runWebFetch(
+          str(input.url),
+          str(input.format),
+          input.timeout,
+          ctx.onChunk,
+          ctx.signal
+        )
       case 'websearch':
-        return await runWebSearch(str(input.query), input.numResults ?? input.count, ctx.onChunk)
+        return await runWebSearch(
+          str(input.query),
+          input.numResults ?? input.count,
+          ctx.onChunk,
+          ctx.signal
+        )
+      // The browser tools drive Electron `webContents`, whose calls take no
+      // AbortSignal — a `loadURL` against a dead host can hang for a long time.
+      // `untilAborted` therefore stops the TURN waiting on them rather than
+      // cancelling the navigation itself; see its doc comment.
       case 'browser_open':
-        return await runBrowserOpen(str(input.url), browserKey(ctx))
+        return await untilAborted(ctx.signal, () => runBrowserOpen(str(input.url), browserKey(ctx)))
       case 'browser_screenshot':
-        return await runBrowserScreenshot(ctx.cwd, browserKey(ctx))
+        return await untilAborted(ctx.signal, () => runBrowserScreenshot(ctx.cwd, browserKey(ctx)))
       case 'browser_read':
-        return await runBrowserRead(str(input.selector) || undefined, browserKey(ctx))
+        return await untilAborted(ctx.signal, () =>
+          runBrowserRead(str(input.selector) || undefined, browserKey(ctx))
+        )
       case 'browser_console':
         return runBrowserConsole(browserKey(ctx))
       case 'browser_click':
-        return await runBrowserClick(str(input.selector), browserKey(ctx))
+        return await untilAborted(ctx.signal, () =>
+          runBrowserClick(str(input.selector), browserKey(ctx))
+        )
       case 'browser_scroll':
-        return await runBrowserScroll(input, browserKey(ctx))
+        return await untilAborted(ctx.signal, () => runBrowserScroll(input, browserKey(ctx)))
       case 'browser_type':
-        return await runBrowserType(str(input.selector), str(input.text), browserKey(ctx))
+        return await untilAborted(ctx.signal, () =>
+          runBrowserType(str(input.selector), str(input.text), browserKey(ctx))
+        )
       case 'browser_tabs':
         return runBrowserTabs(browserKey(ctx))
       case 'browser_new_tab':
@@ -182,22 +263,37 @@ export async function runTool(
       case 'change_session_metadata':
         return await runSetSessionMetadata(input, ctx.sessionId)
       case 'lsp':
-        return await runLspTool(str(input.path ?? input.file), ctx.cwd)
+        return await untilAborted(ctx.signal, () =>
+          runLspTool(str(input.path ?? input.file), ctx.cwd)
+        )
       case 'skill':
         return await loadSkill(str(input.name ?? input.skill), ctx.cwd)
       case 'skill_manage':
-        return await runSkillManage(input, ctx.cwd)
+        // Installing a skill fetches from GitHub — fetchWithTimeout already
+        // accepts an external signal, so this one cancels for real.
+        return await runSkillManage(input, ctx.cwd, ctx.signal)
       case 'mcp':
-        return await runMcpTool(input, ctx.cwd)
+        return await untilAborted(ctx.signal, () => runMcpTool(input, ctx.cwd))
       default:
         // Tools contributed by connected MCP servers use namespaced names
-        // (`mcp__<server>__<tool>`) — route them to the MCP pool.
-        if (isMcpTool(name)) return await callMcpTool(name, input)
+        // (`mcp__<server>__<tool>`) — route them to the MCP pool. An MCP round
+        // trip has its own 120s timeout and no signal, so the turn stops
+        // waiting rather than blocking Stop for up to two minutes.
+        if (isMcpTool(name)) return await untilAborted(ctx.signal, () => callMcpTool(name, input))
         return { ok: false, output: `Unknown tool: ${name}` }
     }
   } catch (e) {
+    // A tool cut short by Stop is not a failure to report to the model — the
+    // turn is ending. Return it as a recognizable non-ok result so the card
+    // reads "stopped" rather than surfacing a raw AbortError.
+    if (isAbort(e) || ctx.signal?.aborted) return { ok: false, output: TOOL_ABORTED }
     return { ok: false, output: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/** Whether a thrown value is an abort (ours, or a fetch/DOM AbortError). */
+function isAbort(e: unknown): boolean {
+  return e instanceof Error && e.name === 'AbortError'
 }
 
 function str(v: unknown): string {
@@ -324,11 +420,18 @@ function runBash(
   command: string,
   cwd: string,
   onChunk?: (chunk: string) => void,
-  opts: { timeout?: number; background?: boolean; sessionId?: string } = {}
+  opts: {
+    timeout?: number
+    background?: boolean
+    sessionId?: string
+    signal?: AbortSignal
+  } = {}
 ): Promise<ToolResult> {
   if (!command.trim()) return Promise.resolve({ ok: false, output: 'bash: missing "command"' })
   // Long-running commands (dev servers, watchers) run detached; poll via bash_output.
   if (opts.background) return Promise.resolve(startBackground(command, cwd, opts.sessionId ?? ''))
+  // Already stopped before we even spawned — don't start work for a dead turn.
+  if (opts.signal?.aborted) return Promise.resolve({ ok: false, output: TOOL_ABORTED })
 
   const timeoutMs = Math.min(Math.max((opts.timeout ?? 60) * 1000, 1000), FG_TIMEOUT_MAX)
   const { cmd, args } = shellInvocation(command)
@@ -359,14 +462,38 @@ function runBash(
       timedOut = true
       killProc(child)
     }, timeoutMs)
-    child.on('error', (e) => {
+    // Stop kills the command for real — same teardown as the timeout, including
+    // the process tree (see killProc). This is the single biggest reason Stop
+    // used to feel stuck: a `npm test` or a hung curl held the turn open for its
+    // full timeout (up to 10 minutes) with nothing the user could do about it.
+    let stopped = false
+    const onAbort = (): void => {
+      stopped = true
+      killProc(child)
+    }
+    opts.signal?.addEventListener('abort', onAbort, { once: true })
+    const cleanup = (): void => {
       clearTimeout(timer)
+      opts.signal?.removeEventListener('abort', onAbort)
+    }
+    child.on('error', (e) => {
+      cleanup()
+      if (stopped) {
+        resolve({ ok: false, output: `${acc}\n[${TOOL_ABORTED}]`.trimEnd() })
+        return
+      }
       const msg = `\n[error: ${e.message}]`
       onChunk?.(msg)
       resolve({ ok: false, output: (acc + msg).trimEnd() })
     })
     child.on('close', (code) => {
-      clearTimeout(timer)
+      cleanup()
+      if (stopped) {
+        const msg = `\n[stopped]`
+        onChunk?.(msg)
+        resolve({ ok: false, output: (acc + msg).trimEnd() || TOOL_ABORTED })
+        return
+      }
       const exitCode = code ?? (timedOut ? 124 : 0)
       const suffix = timedOut
         ? `\n[timed out after ${Math.round(timeoutMs / 1000)}s — for a server or watcher, call bash again with background:true]`
@@ -807,7 +934,8 @@ async function runWebFetch(
   rawUrl: string,
   format: string,
   timeout: unknown,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  signal?: AbortSignal
 ): Promise<ToolResult> {
   let url: string
   try {
@@ -821,6 +949,9 @@ async function runWebFetch(
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutSec * 1000)
+  // Stop aborts the request itself, not just the wait: a webfetch against a
+  // slow host used to hold the turn open for the full timeout.
+  const unlink = linkAbort(signal, controller)
   try {
     const res = await fetch(url, {
       redirect: 'follow',
@@ -856,6 +987,7 @@ async function runWebFetch(
     const output = capText(converted, WEBFETCH_OUTPUT_CAP)
     return { ok: true, output: output || '(the page had no readable text content)' }
   } catch (e) {
+    if (signal?.aborted) return { ok: false, output: TOOL_ABORTED }
     if (controller.signal.aborted) {
       return { ok: false, output: `Fetching ${url} timed out after ${timeoutSec}s.` }
     }
@@ -865,7 +997,27 @@ async function runWebFetch(
     }
   } finally {
     clearTimeout(timer)
+    unlink()
   }
+}
+
+/**
+ * Make an outer abort signal also abort a tool's own controller, returning an
+ * unsubscribe. Tools keep their internal timeout controller (their timeout
+ * semantics are their own); this just adds Stop as a second trigger.
+ *
+ * Unsubscribing matters: a turn's signal outlives any single tool call, so
+ * leaving listeners attached would leak one per tool call for the whole turn.
+ */
+function linkAbort(signal: AbortSignal | undefined, controller: AbortController): () => void {
+  if (!signal) return () => {}
+  if (signal.aborted) {
+    controller.abort()
+    return () => {}
+  }
+  const onAbort = (): void => controller.abort()
+  signal.addEventListener('abort', onAbort, { once: true })
+  return () => signal.removeEventListener('abort', onAbort)
 }
 
 /**
@@ -877,7 +1029,8 @@ async function runWebFetch(
 async function runWebSearch(
   query: string,
   numResults: unknown,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  signal?: AbortSignal
 ): Promise<ToolResult> {
   if (!query.trim()) return { ok: false, output: 'websearch: missing "query"' }
   const count = clampResults(numResults)
@@ -892,6 +1045,7 @@ async function runWebSearch(
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), WEBSEARCH_TIMEOUT * 1000)
+  const unlink = linkAbort(signal, controller)
   try {
     const res = await fetch(endpoint, {
       method: 'POST',
@@ -917,6 +1071,7 @@ async function runWebSearch(
     const text = parseExaResponse(body)
     return { ok: true, output: text ? capText(text, WEBFETCH_OUTPUT_CAP) : WEBSEARCH_NO_RESULTS }
   } catch (e) {
+    if (signal?.aborted) return { ok: false, output: TOOL_ABORTED }
     if (controller.signal.aborted) {
       return { ok: false, output: `Web search timed out after ${WEBSEARCH_TIMEOUT}s.` }
     }
@@ -926,6 +1081,7 @@ async function runWebSearch(
     }
   } finally {
     clearTimeout(timer)
+    unlink()
   }
 }
 
@@ -1134,7 +1290,11 @@ function runLoopSet(ref: string, enabled: boolean): ToolResult {
  * (global) and become loadable via the `skill` tool on the next turn. Never
  * throws — every failure degrades to an error ToolResult.
  */
-async function runSkillManage(input: Record<string, unknown>, cwd: string): Promise<ToolResult> {
+async function runSkillManage(
+  input: Record<string, unknown>,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<ToolResult> {
   const action = str(input.action ?? input.op)
     .trim()
     .toLowerCase()
@@ -1154,7 +1314,7 @@ async function runSkillManage(input: Record<string, unknown>, cwd: string): Prom
     ((action === 'create' || action === 'add' || action === 'new') &&
       !!source &&
       !pickSkillBody(input))
-  if (wantsInstall) return runSkillInstall(input, source, cwd)
+  if (wantsInstall) return runSkillInstall(input, source, cwd, signal)
 
   const name = str(input.name ?? input.skill ?? input.id).trim()
   if (!name)
@@ -1227,7 +1387,8 @@ async function runSkillManage(input: Record<string, unknown>, cwd: string): Prom
 async function runSkillInstall(
   input: Record<string, unknown>,
   source: string,
-  cwd: string
+  cwd: string,
+  signal?: AbortSignal
 ): Promise<ToolResult> {
   if (!source) {
     return {
@@ -1237,7 +1398,8 @@ async function runSkillInstall(
     }
   }
   const scope = str(input.scope).trim().toLowerCase() === 'global' ? 'global' : 'workspace'
-  const res = await installSkillFromSource(source, { scope, cwd })
+  const res = await installSkillFromSource(source, { scope, cwd, signal })
+  if (signal?.aborted) return { ok: false, output: TOOL_ABORTED }
   if (!res.ok) return { ok: false, output: res.error ?? 'Failed to install the skill.' }
   const names = res.installed.map((s) => s.name)
   const lines = res.installed.map((s) => `- ${s.name} → ${s.location}`)

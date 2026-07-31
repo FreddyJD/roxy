@@ -9,7 +9,8 @@ import {
   Loader2,
   Repeat,
   RotateCw,
-  Settings
+  Settings,
+  Square
 } from 'lucide-react'
 import type { Chat } from '@shared/types'
 import { useRoxyStore } from '../lib/store'
@@ -75,6 +76,11 @@ export function ChatView(): JSX.Element {
   // the parent agent delegated it — so the only signal is the live run itself.
   const subagentRunning = useRoxyStore((s) =>
     s.activeChatId ? !!s.runningSubagents[s.activeChatId] : false
+  )
+  const cancelSubagent = useRoxyStore((s) => s.cancelSubagent)
+  const cancelBackgroundTask = useRoxyStore((s) => s.cancelBackgroundTask)
+  const runningTasks = useRoxyStore((s) =>
+    s.activeChatId ? (s.runningTasks[s.activeChatId] ?? []) : []
   )
 
   const hasContent = messages.length > 0 || (streaming !== null && streaming.length > 0)
@@ -328,14 +334,22 @@ export function ChatView(): JSX.Element {
             ) : (
               <WorkspacePath chat={activeChat} />
             )}
-            {subagentRunning && (
-              <span
-                title="This subagent is working"
-                className="flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent"
+            {subagentRunning && activeChatId && (
+              // Clickable, because this used to be the one running thing in the
+              // app with no way to stop it: a subagent's turn is driven by its
+              // parent, so the composer's Stop was deliberately withheld here
+              // (it had no request of its own to abort) and the session was
+              // simply uninterruptible from its own view.
+              <button
+                onClick={() => void cancelSubagent(activeChatId)}
+                title="Cancel this subagent"
+                className="press-scale group flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/20"
               >
-                <Loader2 className="h-3 w-3 animate-spin" />
-                working
-              </span>
+                <Loader2 className="h-3 w-3 animate-spin group-hover:hidden" />
+                <Square className="hidden h-2.5 w-2.5 fill-current group-hover:block" />
+                <span className="group-hover:hidden">working</span>
+                <span className="hidden group-hover:inline">cancel</span>
+              </button>
             )}
             {hasSessionInfo && (
               <button
@@ -362,14 +376,25 @@ export function ChatView(): JSX.Element {
                 />
               </button>
             )}
-            {backgroundTaskCount > 0 && (
-              <span
-                title={`${backgroundTaskCount} background subagent${backgroundTaskCount === 1 ? '' : 's'} running`}
-                className="flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent"
+            {backgroundTaskCount > 0 && activeChatId && (
+              // Detached tasks were cancellable in main from day one
+              // (`tasks:cancel`) but nothing ever called it — this badge counted
+              // them and offered no way out. Cancels them all: they're detached
+              // by definition, so "stop the thing I didn't ask for" is the whole
+              // interaction, and per-task control lives on the task card.
+              <button
+                onClick={() => {
+                  for (const t of runningTasks) void cancelBackgroundTask(activeChatId, t.jobId)
+                }}
+                title={`Cancel ${backgroundTaskCount} background subagent${
+                  backgroundTaskCount === 1 ? '' : 's'
+                }`}
+                className="press-scale group flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/20"
               >
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Loader2 className="h-3 w-3 animate-spin group-hover:hidden" />
+                <Square className="hidden h-2.5 w-2.5 fill-current group-hover:block" />
                 <span className="tabular-nums">{backgroundTaskCount}</span>
-              </span>
+              </button>
             )}
           </div>
         )}
@@ -518,10 +543,13 @@ export function ChatView(): JSX.Element {
         </div>
       )}
 
+      {/* A subagent's session can now be stopped from its own composer: the Stop
+          cancels the DELEGATE (there is no local request here to abort), which
+          is what the button visibly means in this view. */}
       <Composer
         onSend={submit}
         sending={sending || subagentRunning}
-        onStop={subagentRunning ? undefined : stop}
+        onStop={subagentRunning && activeChatId ? () => void cancelSubagent(activeChatId) : stop}
       />
 
       <WorkstreamStrip />

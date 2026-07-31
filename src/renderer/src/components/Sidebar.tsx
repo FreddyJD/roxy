@@ -22,6 +22,7 @@ import {
   Plus,
   Repeat,
   Settings as SettingsIcon,
+  Square,
   SquarePen,
   Trash2
 } from 'lucide-react'
@@ -98,6 +99,8 @@ export function Sidebar(): JSX.Element {
   const forkChat = useRoxyStore((s) => s.forkChat)
   const renameChat = useRoxyStore((s) => s.renameChat)
   const sendingChats = useRoxyStore((s) => s.sendingChats)
+  const stop = useRoxyStore((s) => s.stop)
+  const cancelSubagent = useRoxyStore((s) => s.cancelSubagent)
   const loops = useRoxyStore((s) => s.loops)
   const removeLoop = useRoxyStore((s) => s.removeLoop)
   const reorderSessions = useRoxyStore((s) => s.reorderSessions)
@@ -714,7 +717,19 @@ export function Sidebar(): JSX.Element {
                                   )}
                                 >
                                   {sending ? (
-                                    <BrailleSpinner className="shrink-0 text-sm text-accent" />
+                                    // Click the spinner to stop THAT session.
+                                    // `store.stop()` only ever knew the active
+                                    // chat, so a session streaming in the
+                                    // background could not be stopped at all
+                                    // without switching to it first.
+                                    <button
+                                      onClick={() => stop(chat.id)}
+                                      title="Stop this session"
+                                      className="group/stop flex h-4 w-4 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-white/10"
+                                    >
+                                      <BrailleSpinner className="text-sm group-hover/stop:hidden" />
+                                      <Square className="hidden h-2 w-2 fill-current group-hover/stop:block" />
+                                    </button>
                                   ) : (
                                     <span
                                       className={cn(
@@ -845,7 +860,19 @@ export function Sidebar(): JSX.Element {
                                           )}
                                         >
                                           {runningSubagents[sub.id] ? (
-                                            <BrailleSpinner className="shrink-0 text-xs text-accent" />
+                                            // Skip one delegate from the sidebar
+                                            // — the fastest path for the "a
+                                            // commit hook spawned a README
+                                            // subagent I don't want" case, with
+                                            // no need to open anything.
+                                            <button
+                                              onClick={() => void cancelSubagent(sub.id)}
+                                              title="Cancel this subagent"
+                                              className="group/cancel flex h-4 w-4 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-white/10"
+                                            >
+                                              <BrailleSpinner className="text-xs group-hover/cancel:hidden" />
+                                              <Square className="hidden h-2 w-2 fill-current group-hover/cancel:block" />
+                                            </button>
                                           ) : (
                                             <Hammer className="h-3 w-3 shrink-0 opacity-70" />
                                           )}

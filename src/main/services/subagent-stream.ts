@@ -41,6 +41,19 @@ interface Run {
   background: boolean
   startedAt: number
   fold: PartsFold
+  /**
+   * Abort just THIS delegate, leaving its parent turn running.
+   *
+   * Registered here rather than in a registry of its own because this map is
+   * already the one place that knows about every run of either kind — a
+   * foreground subagent had no cancellation at all before (the only lever was
+   * Stop, which killed the whole turn), and a background one had `tasks:cancel`
+   * keyed by job id, which the renderer never called. One key (the sub session
+   * id) now cancels either kind, which is also the only id the UI reliably has.
+   */
+  cancel: () => void
+  /** Set by `cancelSubagentRun` so the harness can tell "cancelled" from "failed". */
+  cancelled: boolean
 }
 
 /** Sub chat id —> its in-flight run. Only ever holds RUNNING subagents. */
@@ -79,6 +92,8 @@ export interface StartRunInput {
   description: string
   subagentType: string
   background: boolean
+  /** Aborts this run's own signal — see `Run.cancel`. */
+  cancel: () => void
 }
 
 /**
@@ -100,7 +115,9 @@ export function startSubagentRun(input: StartRunInput): {
     subagentType: input.subagentType,
     background: input.background,
     startedAt: Date.now(),
-    fold: new PartsFold()
+    fold: new PartsFold(),
+    cancel: input.cancel,
+    cancelled: false
   }
   runs.set(input.subChatId, run)
   broadcast({ subChatId: run.subChatId, kind: 'run', state: 'running' })
@@ -136,6 +153,37 @@ export function subagentSnapshot(subChatId: string): MessagePart[] | null {
   return runs.get(subChatId)?.fold.parts ?? null
 }
 
+/**
+ * Cancel one running subagent by its session id, foreground or background.
+ *
+ * Aborting is all this does — the run tears itself down through its normal exit
+ * path (persist what it got, `finish`, report back to the parent as cancelled),
+ * so there is exactly one place that ends a run and no way for a cancel to leave
+ * a half-closed one behind. Returns false when nothing was running, which the
+ * UI uses to avoid pretending it did something.
+ */
+export function cancelSubagentRun(subChatId: string): boolean {
+  const run = runs.get(subChatId)
+  if (!run) return false
+  run.cancelled = true
+  run.cancel()
+  return true
+}
+
+/** Whether a run was cancelled by the user (vs. failing on its own). */
+export function wasSubagentCancelled(subChatId: string): boolean {
+  return runs.get(subChatId)?.cancelled === true
+}
+
+/** Cancel every subagent a session spawned — used when its parent turn is stopped. */
+export function cancelSubagentRunsFor(parentChatId: string): void {
+  for (const run of [...runs.values()]) {
+    if (run.parentChatId !== parentChatId) continue
+    run.cancelled = true
+    run.cancel()
+  }
+}
+
 /** Every subagent currently running, so a fresh window can restore its spinners. */
 export function listRunningSubagents(): SubagentRunView[] {
   return [...runs.values()].map((r) => ({
@@ -160,6 +208,15 @@ export function listRunningSubagents(): SubagentRunView[] {
 export function endSubagentRuns(chatId: string): void {
   for (const run of [...runs.values()]) {
     if (run.subChatId !== chatId && run.parentChatId !== chatId) continue
+    // Now that runs carry a cancel, stop the WORK too rather than only clearing
+    // the registry: a foreground delegate whose session was deleted mid-run used
+    // to keep burning tokens with nowhere left to report.
+    run.cancelled = true
+    try {
+      run.cancel()
+    } catch {
+      // a cancel must never break the teardown loop
+    }
     runs.delete(run.subChatId)
     broadcast({ subChatId: run.subChatId, kind: 'run', state: 'error' })
   }

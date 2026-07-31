@@ -57,7 +57,11 @@ import type { McpServerRecord } from '../../shared/mcp'
 import { SKILL_TOOL_NAME, SKILL_TOOL_DESCRIPTION } from '../../shared/skills'
 import { listSkills, skillInstructions } from '../services/skills'
 import { findGitRoot } from '../services/workspace'
-import { registerBackgroundJob, finishBackgroundJob } from '../services/background-tasks'
+import {
+  registerBackgroundJob,
+  finishBackgroundJob,
+  cancelBackgroundJob
+} from '../services/background-tasks'
 import { startSubagentRun } from '../services/subagent-stream'
 import {
   messagesHaveImages,
@@ -1263,6 +1267,11 @@ async function runLoop(o: LoopOptions): Promise<string> {
         cwd,
         sessionId,
         browserKey,
+        // Stop must reach INSIDE the tool, not just between calls. Without this
+        // the loop's `if (signal.aborted) break` above only fires once the
+        // current tool returns on its own, which is why Stop looked stuck
+        // during a long bash or a hanging fetch.
+        signal,
         onChunk: (chunk) => emitTool({ type: 'tool-delta', callId: tc.id, chunk })
       })
       emitTool({
@@ -1414,8 +1423,9 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
   // skips that (the turn may already be over) and reports via the sub session.
   const runBody = async (
     runSignal: AbortSignal,
-    forwardToParent: boolean
-  ): Promise<{ report: string; state: 'completed' | 'error' }> => {
+    forwardToParent: boolean,
+    onCancel: () => void
+  ): Promise<{ report: string; state: 'completed' | 'error' | 'cancelled' }> => {
     // One fold builds the subagent's transcript; the same events fan out to the
     // parent's `task` card and to the sub session's own live stream, so all three
     // views are the same thing by construction and cannot drift.
@@ -1443,7 +1453,8 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
           parentChatId: parentChatId ?? null,
           description,
           subagentType,
-          background: background === true
+          background: background === true,
+          cancel: onCancel
         })
       : null
     /**
@@ -1501,16 +1512,28 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
         contextLimit,
         depth: depth + 1
       })
+      // A cancel lands BETWEEN steps, where runLoop returns normally with a
+      // partial report — so reaching here says nothing about whether the work
+      // actually finished. Check the signal before calling it a success, or a
+      // cancelled delegate would be recorded as `completed` and its truncated
+      // report would be handed to the parent model as a real answer. (The
+      // background path already guarded this; the foreground path did not.)
+      const cancelled = runSignal.aborted
       persistSub()
       // Persist BEFORE ending the run: the renderer reloads the sub session's
       // transcript on the end frame, and reloading before the row exists would
       // blank the view for a beat between the live bubble and the saved message.
-      live?.finish('completed')
+      live?.finish(cancelled ? 'error' : 'completed')
+      if (cancelled) {
+        return { report: cancelledReport(description, text), state: 'cancelled' }
+      }
       return { report: text.trim() || '(subagent returned no report)', state: 'completed' }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
+      const cancelled = runSignal.aborted
       persistSub()
       live?.finish('error')
+      if (cancelled) return { report: cancelledReport(description, ''), state: 'cancelled' }
       return { report: `Subagent failed: ${msg}`, state: 'error' }
     }
   }
@@ -1524,7 +1547,9 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
       callId,
       tool: 'task',
       title: `${agent.name}: ${description} (background)`,
-      input: { description, prompt, subagent_type: subagentType, background: true }
+      input: { description, prompt, subagent_type: subagentType, background: true },
+      // Lets the card offer a cancel for this one detached delegate.
+      subChatId: subChatId ?? undefined
     })
     emit({
       type: 'tool-end',
@@ -1541,7 +1566,7 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
       description,
       subagentType
     })
-    void runBody(bgSignal, false)
+    void runBody(bgSignal, false, () => cancelBackgroundJob(jobId))
       .then(({ report, state }) => {
         // A cancelled job (session delete, app quit, or explicit cancel) aborts
         // bgSignal. That abort can land BETWEEN steps, where runLoop returns
@@ -1549,7 +1574,7 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
         // even though the work was cut short. Never record a cancelled run as a
         // successful completion: the transcript card AND the structured tool
         // history the next turn reconstructs from it would both mislead.
-        const cancelled = bgSignal.aborted
+        const cancelled = bgSignal.aborted || state === 'cancelled'
         const finalState: 'completed' | 'error' = cancelled ? 'error' : state
         const finalReport = cancelled
           ? `The "${description}" background task was cancelled before it finished.`
@@ -1595,11 +1620,48 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
     callId,
     tool: 'task',
     title: `${agent.name}: ${description}`,
-    input: { description, prompt, subagent_type: subagentType }
+    input: { description, prompt, subagent_type: subagentType },
+    // Addresses the cancel button on this card at THIS delegate — the parent
+    // turn keeps running when it's clicked.
+    subChatId: subChatId ?? undefined
   })
-  const { report, state } = await runBody(signal, true)
-  emit({ type: 'tool-end', callId, output: report, ok: state === 'completed' })
-  return renderTaskResult(subagentType, state, report)
+  // Its OWN controller, chained to the parent's signal rather than being it.
+  //
+  // Chaining is the whole feature: Stop on the parent still cascades (the
+  // listener below), but cancelling this one delegate aborts only its
+  // controller, so the launching turn survives and simply reads a "cancelled"
+  // task result — which is exactly what you want when a post-commit hook spins
+  // up a README subagent you don't care about.
+  const controller = new AbortController()
+  const cascade = (): void => controller.abort()
+  if (signal.aborted) controller.abort()
+  else signal.addEventListener('abort', cascade, { once: true })
+  try {
+    const { report, state } = await runBody(controller.signal, true, cascade)
+    emit({ type: 'tool-end', callId, output: report, ok: state === 'completed' })
+    // The parent itself was stopped — this delegate died as collateral, and the
+    // turn is being torn down anyway, so report it as the cancellation it was.
+    if (state === 'cancelled') return renderTaskResult(subagentType, 'error', report)
+    return renderTaskResult(subagentType, state, report)
+  } finally {
+    signal.removeEventListener('abort', cascade)
+  }
+}
+
+/**
+ * What a cancelled delegate reports back to the model that spawned it.
+ *
+ * Deliberately explicit that the user made this call: the parent keeps running
+ * and will read this, and without the framing it tends to re-delegate the exact
+ * task that was just cancelled.
+ */
+function cancelledReport(description: string, partial: string): string {
+  const got = partial.trim()
+  return (
+    `The user cancelled the "${description}" subagent before it finished. ` +
+    'Do not start it again unless they ask. Continue with the rest of your work.' +
+    (got ? `\n\nPartial output before it was cancelled:\n${got.slice(0, 2000)}` : '')
+  )
 }
 
 /** A subagent's focused system prompt: who it is, that it starts blank, and to report back. */

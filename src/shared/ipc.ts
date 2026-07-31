@@ -91,6 +91,15 @@ export const CHANNELS = {
 
   llmStart: 'llm:start',
   llmAbort: 'llm:abort',
+  /**
+   * renderer -> main: stop EVERYTHING in flight for a session.
+   *
+   * llm:abort needs a requestId, which the renderer only has once the turn is
+   * already streaming — so it cannot cancel the pre-flight work (compaction
+   * above all) that runs first. This is Stop as the user means it, keyed by the
+   * one id the UI always has.
+   */
+  llmAbortSession: 'llm:abortSession',
   /** main -> renderer event carrying a streamed completion chunk */
   llmDelta: 'llm:delta',
 
@@ -109,6 +118,14 @@ export const CHANNELS = {
   subagentListRunning: 'subagent:listRunning',
   /** renderer -> main: which chat is on screen, so a viewed sub session isn't pruned */
   subagentSetViewed: 'subagent:setViewed',
+  /**
+   * renderer -> main: cancel ONE running subagent by its session id.
+   *
+   * Keyed by sub chat id rather than the background job id `tasks:cancel` uses,
+   * because that is the only handle the UI has for a FOREGROUND delegate (which
+   * has no job at all) — and it's the id every subagent surface already knows.
+   */
+  subagentCancel: 'subagent:cancel',
 
   modelsList: 'models:list',
 

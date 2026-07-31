@@ -93,9 +93,9 @@ export function partitionTasksByWriteCapability<T>(
  * The returned promise is meant to be held and awaited later, so a caller can
  * run its other (sequential) tools while these are in flight.
  *
- * `aborted()` is polled between writers: once the turn is cancelled we stop
- * LAUNCHING new ones, but results already produced are kept so the caller can
- * still pair every tool_call with a tool result.
+ * `aborted()` is polled between BOTH writers and readers: once the turn is
+ * cancelled we stop LAUNCHING new ones, but results already produced are kept so
+ * the caller can still pair every tool_call with a tool result.
  */
 export async function runTasksByWriteCapability<T, R>(
   tasks: readonly T[],
@@ -108,10 +108,16 @@ export async function runTasksByWriteCapability<T, R>(
 ): Promise<{ task: T; result: R }[]> {
   const { readers, writers } = partitionTasksByWriteCapability(tasks, opts.isWriteCapable)
 
-  const readerWork = mapWithConcurrency(readers, opts.limit, async (t) => ({
-    task: t,
-    result: await opts.run(t)
-  }))
+  // Readers honor the abort too. They used to be launched unconditionally, so
+  // stopping a turn that had fanned out (say) eight explore subagents still
+  // started every one that hadn't been picked up yet — work the user had just
+  // asked to cancel, spending tokens on a turn that was already over.
+  const readerWork = mapWithConcurrency(
+    readers,
+    opts.limit,
+    async (t) => ({ task: t, result: await opts.run(t) }),
+    opts.aborted
+  )
 
   const writerWork = (async (): Promise<{ task: T; result: R }[]> => {
     const out: { task: T; result: R }[] = []
@@ -123,7 +129,10 @@ export async function runTasksByWriteCapability<T, R>(
   })()
 
   const [a, b] = await Promise.all([readerWork, writerWork])
-  return [...a, ...b]
+  // A reader that was never launched (abort) leaves a HOLE in the pool's result
+  // array, since it preserves input positions. Drop those: callers pair results
+  // by id and would otherwise dereference `undefined`.
+  return [...a.filter((r) => r !== undefined), ...b]
 }
 
 /** Coerce an unknown JSON value to a trimmed string, or '' when absent. */
@@ -169,11 +178,16 @@ export function parseTaskInput(rawArgs: string): TaskInput {
  * This is the bounded worker pool behind parallel subagents: it keeps the
  * machine from being swamped when a model fans out many `task` calls, while
  * still overlapping their (mostly network-bound) work.
+ *
+ * `aborted` is polled before each item is picked up. Items never started are
+ * left as holes in the result array (the caller supplies their own placeholder),
+ * which is the same shape as the writer loop's early `break`.
  */
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],
   limit: number,
-  fn: (item: T, index: number) => Promise<R>
+  fn: (item: T, index: number) => Promise<R>,
+  aborted?: () => boolean
 ): Promise<R[]> {
   const n = items.length
   const results = new Array<R>(n)
@@ -182,6 +196,7 @@ export async function mapWithConcurrency<T, R>(
   let next = 0
   async function worker(): Promise<void> {
     for (;;) {
+      if (aborted?.()) return
       const i = next++
       if (i >= n) return
       results[i] = await fn(items[i], i)

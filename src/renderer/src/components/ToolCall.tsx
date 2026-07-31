@@ -13,6 +13,7 @@ import {
   Repeat,
   ScanText,
   Search,
+  Square,
   Terminal,
   TriangleAlert,
   Wrench
@@ -140,7 +141,8 @@ export const ToolCall = memo(function ToolCall({
   image,
   diff,
   nested: nestedParts,
-  renderNested
+  renderNested,
+  onCancel
 }: {
   tool: string
   state: 'running' | 'done' | 'error'
@@ -148,6 +150,12 @@ export const ToolCall = memo(function ToolCall({
   output?: string
   image?: string
   diff?: ToolDiff
+  /**
+   * Cancel just this call — supplied only for a running `task` card whose
+   * delegate we can address. Absent means there is nothing honest to offer, and
+   * no button is drawn (a Stop that does nothing is worse than no Stop).
+   */
+  onCancel?: () => void
   /** A subagent's live transcript, for a `task` card. */
   nested?: MessagePart[]
   /**
@@ -224,6 +232,32 @@ export const ToolCall = memo(function ToolCall({
           {showNested && !live && stepCount > 0 && (
             <span className="font-mono text-[10px] tabular-nums text-text-subtle">
               {stepCount} {stepCount === 1 ? 'step' : 'steps'}
+            </span>
+          )}
+          {/* Skip this delegate without stopping the turn — the answer to "a hook
+              spun up a README subagent and I just want it gone". Rendered as a
+              nested <span role="button">, not a <button>: the header is itself a
+              button (expand/collapse) and nesting one is invalid HTML that React
+              warns about and browsers un-nest. Stops propagation so cancelling
+              doesn't also toggle the card open. */}
+          {live && onCancel && (
+            <span
+              role="button"
+              tabIndex={0}
+              title="Cancel this subagent"
+              onClick={(e) => {
+                e.stopPropagation()
+                onCancel()
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return
+                e.preventDefault()
+                e.stopPropagation()
+                onCancel()
+              }}
+              className="press-scale flex h-5 w-5 items-center justify-center rounded text-text-subtle transition-colors hover:bg-white/10 hover:text-text"
+            >
+              <Square className="h-2.5 w-2.5 fill-current" />
             </span>
           )}
           {state === 'running' && <Loader2 className="h-3.5 w-3.5 animate-spin text-text-subtle" />}

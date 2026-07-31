@@ -1017,6 +1017,49 @@ check('renderBackgroundStarted warns against polling', /DO NOT poll/i.test(start
 }
 
 {
+  // A `task` card carries its delegate's session id, which is what addresses the
+  // per-subagent cancel button. It must survive the fold, and must NOT be
+  // invented for tools that don't have one.
+  const fold = new PartsFold()
+  fold.apply({
+    type: 'tool-start',
+    callId: 't9',
+    tool: 'task',
+    title: 'Explore: map it',
+    input: { description: 'map it' },
+    subChatId: 'sub-42'
+  })
+  const card = fold.parts[0]
+  check(
+    'fold: a task card keeps its subChatId',
+    card.type === 'tool' && card.subChatId === 'sub-42'
+  )
+  // It is UI addressing, not model history: it must stay OUT of `input`, which
+  // is replayed verbatim as the model's tool_calls arguments next turn.
+  check(
+    'fold: subChatId is not smuggled into the model-facing input',
+    card.type === 'tool' && !('subChatId' in (card.input ?? {}))
+  )
+
+  fold.apply({ type: 'tool-start', callId: 'b1', tool: 'bash', title: 'ls' })
+  const plain = fold.parts[1]
+  check(
+    'fold: a non-task card has no subChatId',
+    plain.type === 'tool' && plain.subChatId === undefined
+  )
+
+  // Resuming a run (opening a subagent session mid-flight) must not lose it.
+  const resumed = new PartsFold()
+  resumed.seed(fold.parts)
+  resumed.apply({ type: 'tool-end', callId: 't9', output: 'done', ok: true })
+  const after = resumed.parts[0]
+  check(
+    'fold: subChatId survives a seed + later tool-end',
+    after.type === 'tool' && after.subChatId === 'sub-42' && after.state === 'done'
+  )
+}
+
+{
   // The point of the feature: a subagent's steps nest INSIDE its task card and
   // never leak into the parent's top-level parts.
   const fold = new PartsFold()
@@ -2277,6 +2320,42 @@ async function main(): Promise<void> {
       })
       check('abort stops launching further writers', ran === 1, String(ran))
       check('...but keeps the result that already completed', out.length === 1)
+    }
+
+    // Readers honor the abort too. They used to be launched unconditionally, so
+    // stopping a fanned-out turn still started every explore subagent that had
+    // not been picked up yet.
+    {
+      let ran = 0
+      let abort = false
+      const out = await runTasksByWriteCapability(['explore', 'explore', 'explore', 'explore'], {
+        isWriteCapable: () => false,
+        limit: 1, // one at a time, so the abort lands between items
+        aborted: () => abort,
+        run: async () => {
+          ran++
+          abort = true
+          return ran
+        }
+      })
+      check('abort stops launching further readers', ran === 1, String(ran))
+      check('...and leaves no undefined holes in the results', out.length === 1)
+      check(
+        '...with the completed result intact',
+        out.every((r) => r !== undefined && r.result !== undefined)
+      )
+    }
+
+    // A reader batch that is aborted before ANY item starts yields nothing at
+    // all rather than an array of holes.
+    {
+      const out = await runTasksByWriteCapability(['explore', 'explore'], {
+        isWriteCapable: () => false,
+        limit: 4,
+        aborted: () => true,
+        run: async () => 1
+      })
+      check('an already-aborted turn launches no readers', out.length === 0)
     }
 
     check(
