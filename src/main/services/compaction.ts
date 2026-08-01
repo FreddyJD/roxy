@@ -50,13 +50,12 @@ function flatten(m: Message): string {
 export async function compactChat(
   chatId: string,
   providerId: string,
-  model: string
+  model: string,
+  signal?: AbortSignal
 ): Promise<Chat> {
   const existing = repo.getChat(chatId)
   if (!existing) throw new Error('Chat not found')
-  const all = repo
-    .listMessages(chatId)
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
+  const all = repo.listMessages(chatId).filter((m) => m.role === 'user' || m.role === 'assistant')
   if (all.length === 0) return existing
 
   // Don't summarize a trailing UNANSWERED user turn (see messagesToCompact): it's
@@ -81,14 +80,23 @@ export async function compactChat(
     model,
     messages: [
       { role: 'system', content: COMPACT_SYSTEM },
-      { role: 'user', content: `${COMPACT_STRUCTURE}\n\n${prior}Conversation to compact:\n\n${convo}` }
+      {
+        role: 'user',
+        content: `${COMPACT_STRUCTURE}\n\n${prior}Conversation to compact:\n\n${convo}`
+      }
     ],
-    signal: new AbortController().signal,
+    // Compaction is a real model call that can take many seconds on a long
+    // history, and it runs BEFORE the turn it's making room for — so a
+    // hardcoded never-aborted signal (what this used to be) meant Stop did
+    // nothing at all during it. Callers that have no signal pass none and get
+    // the old behaviour.
+    signal: signal ?? new AbortController().signal,
     onDelta: (t) => {
       summary += t
     }
   })
 
+  if (signal?.aborted) throw new Error('Compaction was stopped.')
   summary = summary.trim()
   if (!summary) throw new Error('Compaction produced an empty summary.')
   const through = messages[messages.length - 1].createdAt

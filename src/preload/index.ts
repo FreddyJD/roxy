@@ -136,6 +136,7 @@ const roxy: RoxyApi = {
   llm: {
     start: (input) => ipcRenderer.invoke(CHANNELS.llmStart, input),
     abort: (requestId) => ipcRenderer.invoke(CHANNELS.llmAbort, requestId),
+    abortSession: (sessionId) => ipcRenderer.invoke(CHANNELS.llmAbortSession, sessionId),
     onDelta: (callback) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: LlmDelta): void =>
         callback(payload)
@@ -157,6 +158,7 @@ const roxy: RoxyApi = {
     snapshot: (subChatId) => ipcRenderer.invoke(CHANNELS.subagentSnapshot, subChatId),
     listRunning: () => ipcRenderer.invoke(CHANNELS.subagentListRunning),
     setViewed: (chatId) => ipcRenderer.invoke(CHANNELS.subagentSetViewed, chatId),
+    cancel: (subChatId) => ipcRenderer.invoke(CHANNELS.subagentCancel, subChatId),
     onDelta: (callback) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: SubagentDelta): void =>
         callback(payload)

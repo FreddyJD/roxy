@@ -268,6 +268,16 @@ export type LlmEvent =
       tool: string
       title?: string
       input?: Record<string, unknown>
+      /**
+       * For a `task` call: the delegate's own session id.
+       *
+       * Carried beside `input` rather than inside it on purpose — `input` is
+       * replayed verbatim as the model's `tool_calls` arguments on later turns
+       * (see reconstructTurn), and an id the model never passed has no business
+       * in its history. This is UI addressing: it's what lets the card's cancel
+       * button name the one delegate to stop.
+       */
+      subChatId?: string
     }
   | { type: 'tool-delta'; callId: string; chunk: string }
   | {
@@ -665,6 +675,12 @@ export interface RoxyApi {
     /** Stream a completion; text deltas arrive via onDelta. Resolves when done. */
     start(input: LlmStartInput): Promise<LlmResult>
     abort(requestId: string): Promise<void>
+    /**
+     * Stop everything in flight for a session — the streaming turn, any
+     * compaction running ahead of it, and every subagent it spawned. Works even
+     * before a requestId exists, which `abort` cannot.
+     */
+    abortSession(sessionId: string): Promise<void>
     onDelta(callback: (payload: LlmDelta) => void): () => void
   }
   tasks: {
@@ -689,6 +705,12 @@ export interface RoxyApi {
      * session the user is reading. Pass null when the open chat isn't a sub.
      */
     setViewed(chatId: string | null): Promise<void>
+    /**
+     * Cancel ONE running subagent, foreground or background, without touching
+     * the turn that spawned it. Resolves false when nothing was running for that
+     * id (it finished between the click and the call).
+     */
+    cancel(subChatId: string): Promise<boolean>
     /**
      * Subscribe to a subagent's own live stream, keyed by ITS session id, so its
      * individual chat view streams like any other. Returns an unsubscribe fn.

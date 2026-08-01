@@ -5,6 +5,7 @@ import type { MessagePart } from '@shared/types'
 import { streamSignature } from '@shared/parts'
 import { ToolCall } from './ToolCall'
 import { ThinkingIndicator } from './ThinkingIndicator'
+import { useRoxyStore } from '../lib/store'
 import { cn } from '../lib/cn'
 
 // Fade streamed markdown in as it arrives. `stagger: 0` is deliberate: the
@@ -79,11 +80,22 @@ export function MessageParts({
     [streaming]
   )
 
+  // Selected (not called through `getState()`) so the identity is stable and the
+  // per-card callbacks below stay memo-friendly.
+  const cancelSubagent = useRoxyStore((s) => s.cancelSubagent)
+
   return (
     <div className="flex flex-col gap-1 text-sm leading-relaxed text-text">
       {parts.map((part, i) => {
         const isLast = i === parts.length - 1
         if (part.type === 'tool') {
+          // Only a live `task` card that knows its delegate's session can offer a
+          // cancel. Everything else gets undefined, and ToolCall draws nothing.
+          const subChatId = part.subChatId
+          const cancel =
+            part.tool === 'task' && part.state === 'running' && subChatId
+              ? () => void cancelSubagent(subChatId)
+              : undefined
           return (
             <ToolCall
               key={i}
@@ -93,6 +105,7 @@ export function MessageParts({
               output={part.output}
               image={part.image}
               diff={part.diff}
+              onCancel={cancel}
               nested={part.children}
               // A subagent's transcript renders through this same component, so a
               // nested tool card looks and behaves exactly like a top-level one.

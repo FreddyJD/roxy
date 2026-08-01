@@ -53,7 +53,9 @@ import {
   endSubagentRuns,
   listRunningSubagents,
   setViewedSubChat,
-  subagentSnapshot
+  subagentSnapshot,
+  cancelSubagentRun,
+  cancelSubagentRunsFor
 } from '../services/subagent-stream'
 import { mcpServerSummaries, reconnectMcpServer, disposeConnection } from '../services/mcp'
 import {
@@ -72,6 +74,45 @@ import { BUNDLE_FILENAME } from '../../shared/portable'
 
 /** In-flight streamed completions, keyed by requestId, so they can be aborted. */
 const llmControllers = new Map<string, AbortController>()
+
+/**
+ * Every abortable piece of model work a SESSION currently owns.
+ *
+ * `llmControllers` alone was not enough for Stop to be reliable. The renderer
+ * only learns a requestId once the turn is actually starting, and real work
+ * happens before that — most of all compaction, which is a full model call on a
+ * long history and used to run with a hardcoded never-aborted signal. Stop
+ * during that window found no requestId and silently did nothing, which is a
+ * large part of why the button felt stuck.
+ *
+ * Keyed by session id (the one handle the UI always has) and holding a SET,
+ * because a session can legitimately have more than one thing in flight.
+ */
+const sessionControllers = new Map<string, Set<AbortController>>()
+
+/** Track a controller against its session; returns the matching untrack. */
+function trackSession(sessionId: string | undefined, controller: AbortController): () => void {
+  if (!sessionId) return () => {}
+  let set = sessionControllers.get(sessionId)
+  if (!set) {
+    set = new Set()
+    sessionControllers.set(sessionId, set)
+  }
+  set.add(controller)
+  return () => {
+    const live = sessionControllers.get(sessionId)
+    if (!live) return
+    live.delete(controller)
+    // Drop the empty set rather than leaving it: this map is keyed by session id
+    // and would otherwise grow one entry per session for the app's lifetime.
+    if (live.size === 0) sessionControllers.delete(sessionId)
+  }
+}
+
+/** Abort everything in flight for a session (its turn, and any compaction). */
+function abortSession(sessionId: string): void {
+  for (const controller of sessionControllers.get(sessionId) ?? []) controller.abort()
+}
 
 /** Merge persisted MCP server rows with their live connection status for the UI. */
 function listMcpServersWithStatus(): McpServerView[] {
@@ -490,6 +531,15 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.llmStart, async (event, input: LlmStartInput) => {
     const controller = new AbortController()
     llmControllers.set(input.requestId, controller)
+    const untrack = trackSession(input.sessionId, controller)
+    // Stop can be pressed in the gap between the renderer asking for the turn
+    // and this handler running. `abortSession` would have found nothing to
+    // abort, so honour a stop that already landed for this session.
+    if (controller.signal.aborted) {
+      llmControllers.delete(input.requestId)
+      untrack()
+      return { ok: false, error: 'Stopped.' }
+    }
     // If this session is shared to a phone, relay the turn there too so the phone
     // streams a desktop-typed reply live (the mirror of a phone turn on the PC).
     // The current prompt is the last user message; announce it so the phone shows
@@ -509,11 +559,20 @@ export function registerIpc(): void {
       )
     } finally {
       llmControllers.delete(input.requestId)
+      untrack()
       if (relay) remote.relayLocalTurnEnd(relay)
     }
   })
   ipcMain.handle(CHANNELS.llmAbort, (_e, requestId: string) => {
     llmControllers.get(requestId)?.abort()
+  })
+  // Stop, as the UI means it: end everything this session has in flight,
+  // whatever stage it's at. Also cancels the session's delegates — stopping a
+  // turn while it waits on a subagent has to stop the subagent, or the work
+  // carries on invisibly after the transcript says it stopped.
+  ipcMain.handle(CHANNELS.llmAbortSession, (_e, sessionId: string) => {
+    abortSession(sessionId)
+    cancelSubagentRunsFor(sessionId)
   })
 
   // ---- background subagent tasks (Phase 11) ----
@@ -533,13 +592,29 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.subagentSetViewed, (_e, chatId: string | null) =>
     setViewedSubChat(chatId)
   )
+  // Cancel one delegate without stopping the turn that launched it. The run
+  // tears itself down through its own exit path (see cancelSubagentRun), so
+  // there's nothing to clean up here.
+  ipcMain.handle(CHANNELS.subagentCancel, (_e, subChatId: string) => cancelSubagentRun(subChatId))
 
   // ---- models (models.dev catalog) ----
   ipcMain.handle(CHANNELS.modelsList, (_e, providerId: string) => listModels(providerId))
 
   // ---- context (compaction) ----
-  ipcMain.handle(CHANNELS.contextCompact, (_e, chatId: string, providerId: string, model: string) =>
-    compactChat(chatId, providerId, model)
+  ipcMain.handle(
+    CHANNELS.contextCompact,
+    async (_e, chatId: string, providerId: string, model: string) => {
+      // Registered against the session so Stop reaches it: compaction runs
+      // ahead of the turn it makes room for, and is often the longest thing
+      // standing between pressing Stop and anything happening.
+      const controller = new AbortController()
+      const untrack = trackSession(chatId, controller)
+      try {
+        return await compactChat(chatId, providerId, model, controller.signal)
+      } finally {
+        untrack()
+      }
+    }
   )
   ipcMain.handle(CHANNELS.contextInstructions, (_e, cwd: string) => projectInstructions(cwd))
 

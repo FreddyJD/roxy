@@ -202,6 +202,12 @@ export type MessagePart =
       input?: Record<string, unknown>
       /** One-line summary shown on the tool card (e.g. the command run). */
       title?: string
+      /**
+       * For a `task` card: the subagent session it spawned, so the card can
+       * offer to cancel that one delegate (and link to its transcript). Absent
+       * on every other tool, and on task cards from before this existed.
+       */
+      subChatId?: string
       /** Result body, shown when the card is expanded. */
       output?: string
       /** Optional inline image (data URL), e.g. a browser screenshot. */

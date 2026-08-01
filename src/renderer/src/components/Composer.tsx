@@ -39,6 +39,15 @@ export function Composer({
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Escape stops the turn. The button alone was not enough: it hides as soon
+    // as you type (the composer switches to "add to queue"), so drafting a
+    // follow-up while a turn ran left no visible way to stop it — you had to
+    // clear the box first to get the button back. The draft is preserved.
+    if (event.key === 'Escape' && sending && onStop) {
+      event.preventDefault()
+      onStop()
+      return
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       submit()
@@ -125,7 +134,13 @@ export function Composer({
           ref={ref}
           value={value}
           rows={1}
-          placeholder={sending ? 'Queue a follow-up…' : 'Ask Roxy anything… (paste or drop images)'}
+          placeholder={
+            sending
+              ? onStop
+                ? 'Queue a follow-up… (Esc to stop)'
+                : 'Queue a follow-up…'
+              : 'Ask Roxy anything… (paste or drop images)'
+          }
           onChange={(e) => {
             setValue(e.target.value)
             autoGrow()
@@ -158,7 +173,7 @@ export function Composer({
           {showStop ? (
             <button
               onClick={onStop}
-              title="Stop"
+              title="Stop (Esc)"
               className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-black hover:bg-white/90"
             >
               <Square className="h-3 w-3 fill-current" />
