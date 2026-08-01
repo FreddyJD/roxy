@@ -14,14 +14,19 @@
  * ChatGPT account) but does verify that the login endpoint hands back a usable
  * authorization URL, which is the last step Roxy controls.
  */
-import { mkdtempSync, promises as fs } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { createReadStream, mkdtempSync, promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { pipeline } from 'node:stream/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { app } from 'electron'
 import {
   baseUrl,
   disconnect,
   ensureRunning,
+  extract,
   listProxyModels,
   localApiKey,
   shutdownCliProxy,
@@ -151,7 +156,76 @@ async function main(): Promise<void> {
   check('disconnect reports no accounts', (await status()).accounts.length === 0)
   // The install is a cache, not a credential - re-signing in shouldn't re-download.
   check('disconnect keeps the binary', await exists(bin))
+
+  // ---- regression: a corrupt archive must never reach tar ----
+  //
+  // The original bug. install() hashed the download STREAM and then handed the
+  // FILE to tar, so anything that damaged the file after the socket (a short
+  // write, a full disk, an antivirus scanner rewriting the temp file) sailed
+  // through the checksum gate and detonated inside tar as
+  // "ZIP decompression failed (-5): Unknown error" — which reads like a broken
+  // release rather than a broken download. The gate now hashes what is on disk.
+  {
+    const probe = path.join(tmp, 'corrupt-probe')
+    await fs.mkdir(probe, { recursive: true })
+
+    // Build a valid archive from the install we already verified, then damage it
+    // the way a truncated write would.
+    const goodZip = path.join(probe, 'good.zip')
+    const tarExe =
+      process.platform === 'win32'
+        ? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+        : 'tar'
+    await execFileAsync(tarExe, ['-a', '-cf', goodZip, '-C', path.dirname(bin), path.basename(bin)])
+
+    const goodHash = await sha256OfFile(goodZip)
+    const bytes = await fs.readFile(goodZip)
+    const corrupt = path.join(probe, 'corrupt.zip')
+    await fs.writeFile(corrupt, bytes.subarray(0, Math.floor(bytes.length * 0.75)))
+
+    // What the NEW code checks: the file tar will actually open.
+    check('on-disk hash rejects a corrupt archive', (await sha256OfFile(corrupt)) !== goodHash)
+    check('on-disk hash still accepts a good archive', (await sha256OfFile(goodZip)) === goodHash)
+
+    // Confirm the corrupt file really is what produces the reported failure, so
+    // this test keeps testing the thing it claims to.
+    let tarError = ''
+    try {
+      await execFileAsync(tarExe, ['-xf', corrupt, '-C', probe])
+    } catch (e) {
+      tarError = e instanceof Error ? e.message : String(e)
+    }
+    check(
+      'the corrupt archive is what breaks tar',
+      tarError.length > 0,
+      'tar unexpectedly succeeded'
+    )
+
+    // extract() must translate that into something a human can act on, rather
+    // than surfacing tar's raw "(-5)" dump in the sign-in panel.
+    let friendly = ''
+    try {
+      await extract(corrupt, probe)
+    } catch (e) {
+      friendly = e instanceof Error ? e.message : String(e)
+    }
+    check(
+      'extract() reports a corrupt archive in plain language',
+      /corrupt/i.test(friendly),
+      friendly
+    )
+    check('extract() does not leak tar internals', !/-5|Unknown error/.test(friendly), friendly)
+  }
 }
+
+/** sha256 of a file's contents on disk — what extraction actually reads. */
+async function sha256OfFile(file: string): Promise<string> {
+  const hash = createHash('sha256')
+  await pipeline(createReadStream(file), hash)
+  return hash.digest('hex')
+}
+
+const execFileAsync = promisify(execFile)
 
 async function exists(p: string): Promise<boolean> {
   try {

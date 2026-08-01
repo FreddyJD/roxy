@@ -30,7 +30,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import { promises as fsp } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -63,6 +63,13 @@ const HOST = '127.0.0.1'
 /** Port window for the sidecar, above Roxy's per-session dev-server range (3100-3999). */
 const PORT_RANGE_START = 8317
 const PORT_RANGE_END = 8399
+
+/**
+ * Download attempts before giving up. A corrupt archive is usually transient
+ * (network blip, antivirus), so one failure should not end the feature.
+ */
+const DOWNLOAD_ATTEMPTS = 3
+const RETRY_BACKOFF_MS = 750
 
 /** How long to wait for the process to answer a health check before giving up. */
 const HEALTH_TIMEOUT_MS = 30_000
@@ -168,11 +175,14 @@ async function isInstalled(): Promise<boolean> {
 }
 
 /**
- * Download + verify + extract the pinned release.
+ * Download + verify + extract the pinned release, retrying a bad download.
  *
- * The asset is streamed to a temp file, hashed, and compared against the
- * release's `checksums.txt` BEFORE anything is extracted or executed. A missing
- * checksum entry aborts: unverifiable is treated as failed, not as fine.
+ * Retrying matters more than it looks. What this guards against is a corrupt
+ * archive, and a corrupt archive is exactly what a flaky network, a proxy that
+ * closes early, or an antivirus scanner touching the temp file produces. Those
+ * are transient by nature, so dead-ending on the first one — with a raw
+ * `ZIP decompression failed (-5)` from tar, no less — turns a retryable blip
+ * into "this feature is broken".
  */
 async function install(): Promise<void> {
   const asset = releaseAsset(process.platform, process.arch)
@@ -185,25 +195,49 @@ async function install(): Promise<void> {
 
   update({ status: 'downloading', progress: 0, error: undefined })
 
+  // Fetched once: it describes the pinned release, so it cannot change between
+  // attempts.
+  const sumsRes = await fetch(checksumsUrl())
+  if (!sumsRes.ok) throw new Error(`Couldn't fetch checksums (${sumsRes.status}).`)
+  const expected = sha256For(await sumsRes.text(), asset)
+  if (!expected) throw new Error(`The release doesn't list a checksum for ${asset}.`)
+
+  let lastError: Error | null = null
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      await downloadAndExtract(asset, expected)
+      return
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e))
+      // A platform or permission problem repeats identically; only integrity
+      // and transport failures are worth another round trip.
+      if (!isRetryable(lastError) || attempt === DOWNLOAD_ATTEMPTS) throw lastError
+      update({ progress: 0 })
+      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS * attempt))
+    }
+  }
+  throw lastError ?? new Error('Download failed.')
+}
+
+/** Whether another attempt could plausibly succeed. */
+function isRetryable(error: Error): boolean {
+  return /corrupt|truncat|checksum|stopped early|download failed|decompress|network|fetch|socket|ECONN|ETIMEDOUT/i.test(
+    error.message
+  )
+}
+
+/** One download + verify + extract attempt. */
+async function downloadAndExtract(asset: string, expected: string): Promise<void> {
   const staging = await fsp.mkdtemp(join(tmpdir(), 'roxy-cliproxy-'))
   const archive = join(staging, asset)
   try {
-    // 1. Expected digest first, so a bad download is caught rather than run.
-    const sumsRes = await fetch(checksumsUrl())
-    if (!sumsRes.ok) throw new Error(`Couldn't fetch checksums (${sumsRes.status}).`)
-    const expected = sha256For(await sumsRes.text(), asset)
-    if (!expected) throw new Error(`The release doesn't list a checksum for ${asset}.`)
-
-    // 2. Stream the asset down, reporting progress as it goes.
     const res = await fetch(releaseAssetUrl(asset))
     if (!res.ok || !res.body) throw new Error(`Download failed (${res.status}).`)
     const total = Number(res.headers.get('content-length') || 0)
     let received = 0
-    const hash = createHash('sha256')
     const out = createWriteStream(archive)
     const source = Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0])
     source.on('data', (chunk: Buffer) => {
-      hash.update(chunk)
       received += chunk.length
       if (total > 0) {
         // Cap at 99: the last percent is extraction, so the bar doesn't sit at
@@ -214,24 +248,56 @@ async function install(): Promise<void> {
     })
     await pipeline(source, out)
 
-    // 3. Verify before extracting. This is the gate that matters.
-    const actual = hash.digest('hex')
-    if (actual !== expected) {
-      throw new Error('Checksum mismatch — the download was corrupted or tampered with.')
+    // Length check first: nearly free, and it names the actual problem
+    // ("stopped early") instead of the generic checksum failure that a short
+    // file would otherwise produce.
+    const written = (await fsp.stat(archive)).size
+    if (total > 0 && written !== total) {
+      throw new Error(
+        `The download stopped early (${written} of ${total} bytes) — usually a network blip.`
+      )
     }
 
-    // 4. Extract into a temp dir, then swap it into place, so an interrupted
-    //    extraction can never leave a half-populated install that looks valid.
+    // Verify the FILE ON DISK, not the bytes that streamed past on the way in.
+    //
+    // Hashing the stream was a real bug: it attests to what was RECEIVED, while
+    // tar extracts what was WRITTEN. Anything that corrupts the file after the
+    // socket — a short write, a full disk, an antivirus scanner rewriting the
+    // temp file — sails straight through a stream hash and then explodes inside
+    // tar as "ZIP decompression failed (-5)", which reads like a broken release
+    // rather than a broken download. Hash what we are about to execute.
+    const actual = await sha256OfFile(archive)
+    if (actual !== expected) {
+      throw new Error(
+        'The downloaded file is corrupt (checksum mismatch). This is usually a network or ' +
+          'antivirus problem rather than a bad release.'
+      )
+    }
+
+    // Extract into a temp dir, then swap it into place, so an interrupted
+    // extraction can never leave a half-populated install that looks valid.
     const extracted = join(staging, 'x')
     await fsp.mkdir(extracted, { recursive: true })
     await extract(archive, extracted)
+
+    // The archive verified, so a missing binary here means the release layout
+    // changed — worth saying plainly instead of failing later at spawn time.
+    const staged = join(
+      extracted,
+      process.platform === 'win32' ? 'cli-proxy-api.exe' : 'cli-proxy-api'
+    )
+    try {
+      await fsp.access(staged)
+    } catch {
+      throw new Error("The release didn't contain the expected cli-proxy-api binary.")
+    }
 
     const dest = installDir()
     await fsp.rm(dest, { recursive: true, force: true })
     await fsp.mkdir(join(dest, '..'), { recursive: true })
     await fsp.rename(extracted, dest)
 
-    // 5. The tar/zip bit is not preserved everywhere; make it executable.
+    // The tar/zip executable bit is not preserved everywhere; set it.
     if (process.platform !== 'win32') {
       await fsp.chmod(binPath(), 0o755).catch(() => undefined)
     }
@@ -241,17 +307,45 @@ async function install(): Promise<void> {
   }
 }
 
+/** sha256 of a file's actual contents on disk. */
+async function sha256OfFile(file: string): Promise<string> {
+  const hash = createHash('sha256')
+  await pipeline(createReadStream(file), hash)
+  return hash.digest('hex')
+}
+
 /**
  * Unpack a release archive. `tar` handles both .tar.gz and .zip and ships with
  * every platform we target (Windows has had bsdtar in System32 since 1803), so
  * this needs no archive dependency in the bundle.
+ *
+ * Failures are rewritten before they escape. The checksum has already passed by
+ * the time we get here, so a tar error means either the archive was damaged
+ * between verify and read, or this machine's tar is unusable — and the user
+ * should be told that, not shown a raw
+ * `ZIP decompression failed (-5): Unknown error` dump with a temp path in it.
  */
-async function extract(archive: string, dest: string): Promise<void> {
+// Exported so the integration test can assert the message a corrupt archive
+// produces; not part of the service's public surface.
+export async function extract(archive: string, dest: string): Promise<void> {
   const tar =
     process.platform === 'win32'
       ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
       : 'tar'
-  await execFileAsync(tar, ['-xf', archive, '-C', dest])
+  try {
+    await execFileAsync(tar, ['-xf', archive, '-C', dest])
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    if (/ENOENT/i.test(detail)) {
+      throw new Error(
+        `Couldn't run ${tar}, which is needed to unpack the download. ` +
+          'On Windows it ships with the OS (build 17063 and later).'
+      )
+    }
+    // Deliberately worded as "corrupt": that is what a post-checksum tar
+    // failure means, and it tells install() this is worth retrying.
+    throw new Error('The downloaded archive is corrupt and could not be unpacked.')
+  }
 }
 
 // ---- Config ------------------------------------------------------------------
