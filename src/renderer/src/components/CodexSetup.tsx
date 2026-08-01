@@ -58,6 +58,28 @@ export function CodexSetup({ onConnected }: { onConnected: () => void }): JSX.El
     }
   }
 
+  /**
+   * Escape hatch for networks that block or rewrite the download: the user
+   * supplies the archive themselves, then sign-in continues as normal.
+   */
+  const installManually = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      const next = await api.cliproxy.installFromFile()
+      // A cancelled picker leaves the state untouched - don't claim success.
+      if (next.status === 'not-installed') {
+        if (next.error) setError(next.error)
+        return
+      }
+      await signIn()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const connected = state.accounts.length > 0
 
   return (
@@ -83,7 +105,22 @@ export function CodexSetup({ onConnected }: { onConnected: () => void }): JSX.El
 
       {busy && <Progress state={state} />}
 
-      {error && <p className="text-xs text-danger">{error}</p>}
+      {error && (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-danger">{error}</p>
+          {/* Only offered after a failure. Some networks rewrite or block the
+              download outright, and retrying cannot fix that — but the user can
+              fetch the file another way. It is still checksum-verified. */}
+          <button
+            type="button"
+            onClick={installManually}
+            disabled={busy}
+            className="self-start text-xs text-text-subtle underline-offset-2 transition-colors hover:text-text hover:underline disabled:opacity-40"
+          >
+            Download blocked? Install from a file instead
+          </button>
+        </div>
+      )}
 
       <Button variant="primary" onClick={signIn} disabled={busy}>
         {busy ? (

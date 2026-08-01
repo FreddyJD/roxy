@@ -39,7 +39,7 @@ import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, net as electronNet } from 'electron'
 import { CHANNELS } from '../../shared/ipc'
 import {
   CLIPROXY_VERSION,
@@ -63,6 +63,28 @@ const HOST = '127.0.0.1'
 /** Port window for the sidecar, above Roxy's per-session dev-server range (3100-3999). */
 const PORT_RANGE_START = 8317
 const PORT_RANGE_END = 8399
+
+/**
+ * sha256 of each pinned release asset, recorded when CLIPROXY_VERSION was set.
+ *
+ * Normally the digest comes from the release's checksums.txt. These exist for
+ * the offline case: when github.com is unreachable, a manual install still has
+ * something to verify against instead of being waved through.
+ */
+const PINNED_SHA256: Record<string, string> = {
+  'CLIProxyAPI_7.2.112_windows_amd64.zip':
+    'e2a59965f73e5e32c00cb711a09412f8a7898ca8c10a4e682bb963dafde764f4',
+  'CLIProxyAPI_7.2.112_windows_aarch64.zip':
+    '23225aecfcdd4c680e6c3eda8e74f9bee16457bd4249d6b30e9f70185e14b550',
+  'CLIProxyAPI_7.2.112_darwin_aarch64.tar.gz':
+    'd8e41dd24f7f1ab68ed57d1637a928a13e7d217268093aa7d2177cf95010feff',
+  'CLIProxyAPI_7.2.112_darwin_amd64.tar.gz':
+    'c9c1c36e7f134bb43e4155321d3c75037a4ba6c3173e8c6cfa70caff49903a55',
+  'CLIProxyAPI_7.2.112_linux_amd64.tar.gz':
+    'a64de846ac2920b82cfbdfac988a3ae4f637eae9d2ff2fe00e4022cd451ca6e7',
+  'CLIProxyAPI_7.2.112_linux_aarch64.tar.gz':
+    '254bb551ac71eb54720a6ee848ca8de559cdee5feb2dc1e44dbda59a03233220'
+}
 
 /**
  * Download attempts before giving up. A corrupt archive is usually transient
@@ -175,6 +197,46 @@ async function isInstalled(): Promise<boolean> {
 }
 
 /**
+ * Fetch through Chromium's network stack instead of Node's.
+ *
+ * Node's global `fetch` knows nothing about the machine's proxy configuration or
+ * the enterprise root certificates in the OS trust store. On a corporate network,
+ * a VPN, or behind TLS inspection, that is the difference between a working
+ * download and a mangled one — which is precisely the failure this whole code
+ * path keeps tripping over.
+ *
+ * Electron's `net` module uses Chromium, so it picks up system proxy settings
+ * (including PAC scripts) and the OS certificate store for free.
+ */
+async function netFetch(url: string): Promise<Response> {
+  // net.fetch is only usable once the app is ready; every caller here is well
+  // past that, but guard rather than throw a confusing internal error.
+  if (!app.isReady()) return fetch(url)
+  return electronNet.fetch(url)
+}
+
+/**
+ * Fetch a URL, falling back to the other network stack when the first fails.
+ *
+ * Neither stack is strictly better. Chromium handles proxies and enterprise
+ * roots; Node's is unaffected by Chromium's own policy quirks. Trying both turns
+ * "this environment is unsupported" into "one of them worked", which for a
+ * download that is otherwise a dead end is worth the extra round trip.
+ */
+async function fetchWithFallback(url: string): Promise<Response> {
+  try {
+    const res = await netFetch(url)
+    if (res.ok) return res
+    // A non-2xx from Chromium may be an intercepting proxy; Node might see past
+    // it. Fall through rather than accept the failure.
+    const viaNode = await fetch(url)
+    return viaNode.ok ? viaNode : res
+  } catch {
+    return fetch(url)
+  }
+}
+
+/**
  * Download + verify + extract the pinned release, retrying a bad download.
  *
  * Retrying matters more than it looks. What this guards against is a corrupt
@@ -197,7 +259,7 @@ async function install(): Promise<void> {
 
   // Fetched once: it describes the pinned release, so it cannot change between
   // attempts.
-  const sumsRes = await fetch(checksumsUrl())
+  const sumsRes = await fetchWithFallback(checksumsUrl())
   if (!sumsRes.ok) throw new Error(`Couldn't fetch checksums (${sumsRes.status}).`)
   const expected = sha256For(await sumsRes.text(), asset)
   if (!expected) throw new Error(`The release doesn't list a checksum for ${asset}.`)
@@ -231,7 +293,7 @@ async function downloadAndExtract(asset: string, expected: string): Promise<void
   const staging = await fsp.mkdtemp(join(tmpdir(), 'roxy-cliproxy-'))
   const archive = join(staging, asset)
   try {
-    const res = await fetch(releaseAssetUrl(asset))
+    const res = await fetchWithFallback(releaseAssetUrl(asset))
     if (!res.ok || !res.body) throw new Error(`Download failed (${res.status}).`)
     const total = Number(res.headers.get('content-length') || 0)
     let received = 0
@@ -248,30 +310,18 @@ async function downloadAndExtract(asset: string, expected: string): Promise<void
     })
     await pipeline(source, out)
 
-    // Length check first: nearly free, and it names the actual problem
-    // ("stopped early") instead of the generic checksum failure that a short
-    // file would otherwise produce.
-    const written = (await fsp.stat(archive)).size
-    if (total > 0 && written !== total) {
-      throw new Error(
-        `The download stopped early (${written} of ${total} bytes) — usually a network blip.`
-      )
-    }
-
     // Verify the FILE ON DISK, not the bytes that streamed past on the way in.
     //
     // Hashing the stream was a real bug: it attests to what was RECEIVED, while
     // tar extracts what was WRITTEN. Anything that corrupts the file after the
-    // socket — a short write, a full disk, an antivirus scanner rewriting the
-    // temp file — sails straight through a stream hash and then explodes inside
-    // tar as "ZIP decompression failed (-5)", which reads like a broken release
-    // rather than a broken download. Hash what we are about to execute.
+    // socket — a short write, a full disk, a scanner rewriting the temp file —
+    // sails straight through a stream hash and then explodes inside tar as
+    // "ZIP decompression failed (-5)", which reads like a broken release rather
+    // than a broken download. Hash what we are about to execute.
+    const written = (await fsp.stat(archive)).size
     const actual = await sha256OfFile(archive)
     if (actual !== expected) {
-      throw new Error(
-        'The downloaded file is corrupt (checksum mismatch). This is usually a network or ' +
-          'antivirus problem rather than a bad release.'
-      )
+      throw new Error(await describeBadDownload(archive, written, total, received))
     }
 
     // Extract into a temp dir, then swap it into place, so an interrupted
@@ -305,6 +355,91 @@ async function downloadAndExtract(asset: string, expected: string): Promise<void
   } finally {
     await fsp.rm(staging, { recursive: true, force: true }).catch(() => undefined)
   }
+}
+
+/**
+ * Explain a failed integrity check by INSPECTING the file, rather than asserting
+ * a cause we never checked.
+ *
+ * The first version of this message blamed "network or antivirus" unconditionally.
+ * That was a guess dressed as a diagnosis: it sent people to disable their AV for
+ * what is usually a captive portal or a TLS-inspecting proxy handing back an HTML
+ * error page. The bytes on disk already say which it was, so read them.
+ */
+// Exported for the integration test: the whole point of this function is the
+// message it produces, so that message needs to be assertable.
+export async function describeBadDownload(
+  archive: string,
+  written: number,
+  total: number,
+  received: number
+): Promise<string> {
+  const head = Buffer.alloc(512)
+  let sniffed = 0
+  try {
+    const fh = await fsp.open(archive, 'r')
+    try {
+      sniffed = (await fh.read(head, 0, head.length, 0)).bytesRead
+    } finally {
+      await fh.close()
+    }
+  } catch {
+    // Unreadable is itself informative, but not worth failing over here.
+  }
+  const text = head.subarray(0, sniffed).toString('utf8')
+
+  // An intercepting proxy or captive portal returns a page, not an archive.
+  if (/^\s*(<!doctype|<html|\{|<\?xml)/i.test(text)) {
+    return (
+      'The download returned a web page instead of the release file. A proxy, VPN, or ' +
+      'network sign-in page is intercepting the request to github.com.'
+    )
+  }
+
+  // Archives have stable magic bytes; a wrong one means substituted content.
+  const isZip = head[0] === 0x50 && head[1] === 0x4b
+  const isGzip = head[0] === 0x1f && head[1] === 0x8b
+  const wantsZip = archive.endsWith('.zip')
+  if (sniffed > 0 && ((wantsZip && !isZip) || (!wantsZip && !isGzip))) {
+    return (
+      'The downloaded file is not a valid archive — something replaced its contents ' +
+      'in transit (usually a proxy or content filter).'
+    )
+  }
+
+  // Order matters here: these overlap, and the most specific cause has to be
+  // tested first or it can never be reported.
+  //
+  // A short write (we received N bytes but only M reached the file) is the one
+  // case that genuinely implicates local software - antivirus holding the handle,
+  // or a full disk. Check it before the length comparison, which would otherwise
+  // absorb it and blame the network.
+  if (written !== received) {
+    return (
+      `The file was damaged while being written (${received} bytes downloaded, ${written} on disk). ` +
+      'Antivirus software or a full disk is the usual cause.'
+    )
+  }
+
+  // The transfer itself ended early.
+  if (total > 0 && written !== total) {
+    return `The download stopped early (${written} of ${total} bytes). This is usually a network drop.`
+  }
+
+  // No content-length to compare against - typically a proxy that re-chunked the
+  // response. Say exactly that rather than asserting a cause we cannot see.
+  if (total === 0) {
+    return (
+      `The download is incomplete or damaged (${written} bytes received, and the server ` +
+      'sent no length to check against). This usually means a proxy altered the response.'
+    )
+  }
+
+  // Full length, correct shape, wrong hash: genuinely different bytes.
+  return (
+    'The downloaded file failed its integrity check. The bytes arrived intact but do not ' +
+    'match the published checksum, so it was modified in transit.'
+  )
 }
 
 /** sha256 of a file's actual contents on disk. */
@@ -777,6 +912,80 @@ export async function listProxyModels(): Promise<{ id: string; name?: string }[]
   } catch {
     return []
   }
+}
+
+/**
+ * Install from a file the user already has, bypassing the download entirely.
+ *
+ * The escape hatch. Some networks cannot be fixed from inside the app: a proxy
+ * that rewrites binaries, a filter that blocks github.com outright, an
+ * air-gapped machine. Retries and a second network stack do not help there, and
+ * without this the feature is simply unavailable — with no way out.
+ *
+ * The archive still has to match the pinned release's checksum. A local file is
+ * a different delivery route, not a reason to run unverified code.
+ */
+export async function installFromFile(archivePath: string): Promise<CliProxyState> {
+  return enqueue(async () => {
+    const asset = releaseAsset(process.platform, process.arch)
+    if (!asset) throw new Error('Codex sign-in is unavailable on this platform.')
+
+    update({ status: 'downloading', progress: 50, error: undefined })
+    try {
+      const sumsRes = await fetchWithFallback(checksumsUrl())
+      let expected: string | null = null
+      if (sumsRes.ok) expected = sha256For(await sumsRes.text(), asset)
+
+      // The checksums file lives on the same host that may be blocked. Fall back
+      // to the digest recorded at pin time so an offline install still verifies.
+      const want = expected ?? PINNED_SHA256[asset]
+      if (!want) {
+        throw new Error("Couldn't determine the expected checksum for this platform.")
+      }
+
+      const actual = await sha256OfFile(archivePath)
+      if (actual !== want) {
+        throw new Error(
+          `That file doesn't match the expected ${asset} for v${CLIPROXY_VERSION}. ` +
+            'Download it from the CLIProxyAPI releases page and try again.'
+        )
+      }
+
+      const staging = await fsp.mkdtemp(join(tmpdir(), 'roxy-cliproxy-local-'))
+      try {
+        const extracted = join(staging, 'x')
+        await fsp.mkdir(extracted, { recursive: true })
+        await extract(archivePath, extracted)
+
+        const staged = join(
+          extracted,
+          process.platform === 'win32' ? 'cli-proxy-api.exe' : 'cli-proxy-api'
+        )
+        try {
+          await fsp.access(staged)
+        } catch {
+          throw new Error("That archive didn't contain the expected cli-proxy-api binary.")
+        }
+
+        const dest = installDir()
+        await fsp.rm(dest, { recursive: true, force: true })
+        await fsp.mkdir(join(dest, '..'), { recursive: true })
+        await fsp.rename(extracted, dest)
+        if (process.platform !== 'win32') {
+          await fsp.chmod(binPath(), 0o755).catch(() => undefined)
+        }
+      } finally {
+        await fsp.rm(staging, { recursive: true, force: true }).catch(() => undefined)
+      }
+
+      update({ status: 'stopped', progress: 100 })
+      return state
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      update({ status: 'not-installed', progress: 0, error: message })
+      throw e
+    }
+  })
 }
 
 /** Kill the sidecar on app quit. Best-effort and synchronous — quit won't wait. */

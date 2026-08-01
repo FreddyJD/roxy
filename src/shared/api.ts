@@ -653,6 +653,12 @@ export interface RoxyApi {
     signOut(file: string): Promise<CliProxyState>
     /** Stop the local proxy (keeps the install and the signed-in accounts). */
     stop(): Promise<CliProxyState>
+    /**
+     * Install from an archive the user downloaded themselves, for networks that
+     * block or rewrite the download. Opens a file picker; the archive still has
+     * to match the pinned release's checksum.
+     */
+    installFromFile(): Promise<CliProxyState>
     /** Subscribe to sidecar state pushes; returns an unsubscribe fn. */
     onState(callback: (state: CliProxyState) => void): () => void
   }

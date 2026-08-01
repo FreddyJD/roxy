@@ -104,6 +104,7 @@ const roxy: RoxyApi = {
     login: () => ipcRenderer.invoke(CHANNELS.cliproxyLogin),
     signOut: (file) => ipcRenderer.invoke(CHANNELS.cliproxySignOut, file),
     stop: () => ipcRenderer.invoke(CHANNELS.cliproxyStop),
+    installFromFile: () => ipcRenderer.invoke(CHANNELS.cliproxyInstallFile),
     onState: (callback) => {
       const handler = (_event: Electron.IpcRendererEvent, state: CliProxyState): void =>
         callback(state)
