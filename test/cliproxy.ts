@@ -23,6 +23,7 @@ import { pipeline } from 'node:stream/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { app } from 'electron'
+import { checksumsUrl, releaseAsset, sha256For } from '../src/shared/cliproxy'
 import {
   baseUrl,
   disconnect,
@@ -32,6 +33,7 @@ import {
   extract,
   listProxyModels,
   localApiKey,
+  PINNED_SHA256,
   shutdownCliProxy,
   startLogin,
   status,
@@ -298,13 +300,50 @@ async function main(): Promise<void> {
 
     // Full length, right shape, wrong hash.
     check(
-      'intact-but-wrong-hash is named as modification in transit',
-      /modified in transit/.test(await describeBadDownload(zip, 1004, 1004, 1004))
+      'intact-but-wrong-hash reports evidence, not just a verdict',
+      /contents differ from the published release/.test(
+        await describeBadDownload(zip, 1004, 1004, 1004)
+      )
     )
 
     // If several shapes collapse to one message this is theatre, not diagnosis.
     const messages = new Set([mPortal, mShort, mNoLen, mWrite])
     check('the failure modes stay distinguishable', messages.size === 4, `${messages.size}/4`)
+  }
+
+  // ---- the pinned digest must be right, because we now trust it over the network ----
+  //
+  // install() prefers PINNED_SHA256 to whatever checksums.txt says, since a
+  // proxy that can corrupt a 20MB archive can trivially rewrite 1KB of text.
+  // That inverts the risk: a WRONG pin now breaks every install instead of
+  // being silently corrected by the network. So verify it against upstream.
+  {
+    const asset = releaseAsset(process.platform, process.arch)
+    check('this platform has a release asset', !!asset)
+    check('...and it has a pinned digest', !!asset && !!PINNED_SHA256[asset])
+
+    const res = await fetch(checksumsUrl())
+    check('upstream checksums.txt is reachable', res.ok, `status ${res.status}`)
+    if (res.ok && asset) {
+      const text = await res.text()
+      const upstream = sha256For(text, asset)
+      check('upstream publishes a digest for this asset', !!upstream)
+      check(
+        'the pinned digest matches upstream exactly',
+        upstream === PINNED_SHA256[asset],
+        `pinned=${PINNED_SHA256[asset]} upstream=${upstream}`
+      )
+      // Every pin, not just this platform's - a bad entry only breaks the
+      // machines that use it, which is exactly the bug that hides in review.
+      let allMatch = true
+      for (const [name, digest] of Object.entries(PINNED_SHA256)) {
+        if (sha256For(text, name) !== digest) {
+          allMatch = false
+          check(`pin for ${name} matches upstream`, false, digest)
+        }
+      }
+      check('every pinned digest matches upstream', allMatch)
+    }
   }
 
   // ---- manual install (the escape hatch for blocked networks) ----

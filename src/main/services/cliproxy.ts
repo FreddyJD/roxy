@@ -71,7 +71,10 @@ const PORT_RANGE_END = 8399
  * the offline case: when github.com is unreachable, a manual install still has
  * something to verify against instead of being waved through.
  */
-const PINNED_SHA256: Record<string, string> = {
+// Exported so the integration test can assert it against upstream. Now that we
+// trust this over the network, a wrong entry breaks every install - it has to be
+// checkable.
+export const PINNED_SHA256: Record<string, string> = {
   'CLIProxyAPI_7.2.112_windows_amd64.zip':
     'e2a59965f73e5e32c00cb711a09412f8a7898ca8c10a4e682bb963dafde764f4',
   'CLIProxyAPI_7.2.112_windows_aarch64.zip':
@@ -260,12 +263,24 @@ async function install(): Promise<void> {
 
   update({ status: 'downloading', progress: 0, error: undefined })
 
-  // Fetched once: it describes the pinned release, so it cannot change between
-  // attempts.
-  const sumsRes = await fetchWithFallback(checksumsUrl())
-  if (!sumsRes.ok) throw new Error(`Couldn't fetch checksums (${sumsRes.status}).`)
-  const expected = sha256For(await sumsRes.text(), asset)
-  if (!expected) throw new Error(`The release doesn't list a checksum for ${asset}.`)
+  // Prefer the digest compiled into this build over anything fetched.
+  //
+  // checksums.txt is ~1KB of plain text on the same host as the archive, so any
+  // proxy able to corrupt the download can trivially rewrite it too - and then
+  // we would verify a perfectly good archive against a bad expectation and tell
+  // the user their download was "modified in transit". Blaming the 20MB file for
+  // the corruption of the 1KB one.
+  //
+  // PINNED_SHA256 was recorded when CLIPROXY_VERSION was set and ships inside the
+  // application. It cannot be altered in flight, which makes it strictly more
+  // trustworthy than the network. Fetch only when we have no pin for this asset.
+  let expected: string | null = PINNED_SHA256[asset] ?? null
+  if (!expected) {
+    const sumsRes = await fetchWithFallback(checksumsUrl())
+    if (!sumsRes.ok) throw new Error(`Couldn't fetch checksums (${sumsRes.status}).`)
+    expected = sha256For(await sumsRes.text(), asset)
+  }
+  if (!expected) throw new Error(`Couldn't determine the expected checksum for ${asset}.`)
 
   let lastError: Error | null = null
   for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
@@ -360,6 +375,13 @@ async function downloadAndExtract(asset: string, expected: string): Promise<void
   }
 }
 
+/** First bytes as hex, for identifying what a rewritten file actually is. */
+function head4(buf: Buffer): string {
+  return Array.from(buf.subarray(0, 4))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join(' ')
+}
+
 /**
  * Explain a failed integrity check by INSPECTING the file, rather than asserting
  * a cause we never checked.
@@ -438,10 +460,16 @@ export async function describeBadDownload(
     )
   }
 
-  // Full length, correct shape, wrong hash: genuinely different bytes.
+  // Full length, correct shape, wrong hash. Everything structural checks out, so
+  // report the evidence instead of a verdict: whatever is rewriting the file is
+  // doing it competently, and the next person to debug this needs the actual
+  // numbers rather than another confident-sounding sentence.
   return (
-    'The downloaded file failed its integrity check. The bytes arrived intact but do not ' +
-    'match the published checksum, so it was modified in transit.'
+    'The downloaded file failed its integrity check. It is the right size and a valid ' +
+    `archive, but its contents differ from the published release (${written} bytes, ` +
+    `starts ${head4(head)}). Something on the network is rewriting the file — a proxy, VPN, or ` +
+    'security product doing TLS inspection is the usual cause. "Install from a file" below ' +
+    'bypasses the network entirely.'
   )
 }
 
@@ -992,13 +1020,14 @@ export async function installFromFile(archivePath: string): Promise<CliProxyStat
 
     update({ status: 'downloading', progress: 50, error: undefined })
     try {
-      const sumsRes = await fetchWithFallback(checksumsUrl())
-      let expected: string | null = null
-      if (sumsRes.ok) expected = sha256For(await sumsRes.text(), asset)
-
-      // The checksums file lives on the same host that may be blocked. Fall back
-      // to the digest recorded at pin time so an offline install still verifies.
-      const want = expected ?? PINNED_SHA256[asset]
+      // Same ordering as the download path: the compiled-in digest wins. Anyone
+      // installing by hand is usually doing so BECAUSE the network is hostile,
+      // which is the worst case in which to trust it for the expected value.
+      let want: string | null = PINNED_SHA256[asset] ?? null
+      if (!want) {
+        const sumsRes = await fetchWithFallback(checksumsUrl())
+        if (sumsRes.ok) want = sha256For(await sumsRes.text(), asset)
+      }
       if (!want) {
         throw new Error("Couldn't determine the expected checksum for this platform.")
       }
