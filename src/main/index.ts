@@ -15,6 +15,7 @@ import { cancelAllBackgroundJobs } from './services/background-tasks'
 import { shutdownAllLsp } from './services/lsp'
 import { shutdownAllMcp } from './services/mcp'
 import { shutdownRemote } from './services/remote'
+import { shutdownCliProxy } from './services/cliproxy'
 import { initAutoUpdater } from './services/updater'
 import { killAllBackground, setPromptText, setAgentPromptText } from './harness'
 import { PROMPT_TEXT, AGENT_PROMPT_TEXT } from '../shared/prompt-text'
@@ -136,4 +137,7 @@ app.on('will-quit', () => {
   shutdownAllLsp()
   void shutdownAllMcp()
   shutdownRemote()
+  // The Codex sidecar holds the user's subscription tokens - never leave it
+  // running (and listening on loopback) after the app that owns it is gone.
+  shutdownCliProxy()
 })

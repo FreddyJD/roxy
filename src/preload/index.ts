@@ -13,6 +13,7 @@ import type {
   SubagentDelta,
   UpdateState
 } from '../shared/api'
+import type { CliProxyState } from '../shared/cliproxy'
 
 /**
  * The typed bridge exposed to the renderer as `window.roxy`. Every method maps
@@ -97,6 +98,18 @@ const roxy: RoxyApi = {
   copilot: {
     start: () => ipcRenderer.invoke(CHANNELS.copilotStart),
     poll: (deviceCode, interval) => ipcRenderer.invoke(CHANNELS.copilotPoll, deviceCode, interval)
+  },
+  cliproxy: {
+    status: () => ipcRenderer.invoke(CHANNELS.cliproxyStatus),
+    login: () => ipcRenderer.invoke(CHANNELS.cliproxyLogin),
+    signOut: (file) => ipcRenderer.invoke(CHANNELS.cliproxySignOut, file),
+    stop: () => ipcRenderer.invoke(CHANNELS.cliproxyStop),
+    onState: (callback) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: CliProxyState): void =>
+        callback(state)
+      ipcRenderer.on(CHANNELS.cliproxyState, handler)
+      return () => ipcRenderer.removeListener(CHANNELS.cliproxyState, handler)
+    }
   },
   dialog: {
     openWorkspace: () => ipcRenderer.invoke(CHANNELS.dialogOpenWorkspace)

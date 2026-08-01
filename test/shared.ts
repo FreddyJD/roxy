@@ -13,6 +13,15 @@ import {
   DEFAULT_AGENT_ID
 } from '../src/shared/agents'
 import { SEED_PROVIDERS, resolveSeed, isConnectableNow } from '../src/shared/providers'
+import {
+  CLIPROXY_VERSION,
+  CODEX_PROVIDER_ID,
+  IDLE_CLIPROXY_STATE,
+  isUsable,
+  releaseAsset,
+  releaseAssetUrl,
+  sha256For
+} from '../src/shared/cliproxy'
 import { pickDefaultModel } from '../src/shared/models'
 import { randomSlug, uniqueSlug, slugToBranchSegment, isGeneratedSlug } from '../src/shared/slugs'
 import { formatInterval } from '../src/shared/format'
@@ -285,6 +294,65 @@ check(
 )
 check('isConnectableNow returns boolean', typeof isConnectableNow(SEED_PROVIDERS[0]) === 'boolean')
 
+// ---- codex subscription (CLIProxyAPI sidecar) ----
+const codexSeed = SEED_PROVIDERS.find((p) => p.id === CODEX_PROVIDER_ID)
+check('codex: seeded', !!codexSeed)
+check('codex: speaks the openai-chat wire', codexSeed?.wire === 'openai-chat')
+check('codex: uses the subscription auth flow', codexSeed?.auth === 'subscription')
+// The base URL is a loopback port chosen at start time, so a fixed one in the
+// seed would be a lie that survives long enough to route a real request.
+check('codex: no hardcoded base URL', codexSeed?.baseURL === undefined)
+check('codex: connectable from onboarding', isConnectableNow(codexSeed!))
+
+// Asset naming: a wrong name is a 404 the user only discovers mid-download.
+check(
+  'cliproxy asset: windows x64 -> zip',
+  releaseAsset('win32', 'x64', '7.0.0') === 'CLIProxyAPI_7.0.0_windows_amd64.zip'
+)
+check(
+  'cliproxy asset: mac arm64 -> aarch64 tar.gz',
+  releaseAsset('darwin', 'arm64', '7.0.0') === 'CLIProxyAPI_7.0.0_darwin_aarch64.tar.gz'
+)
+check(
+  'cliproxy asset: linux x64 -> amd64 tar.gz',
+  releaseAsset('linux', 'x64', '7.0.0') === 'CLIProxyAPI_7.0.0_linux_amd64.tar.gz'
+)
+check('cliproxy asset: unsupported arch is null', releaseAsset('linux', 'ia32') === null)
+check('cliproxy asset: unsupported platform is null', releaseAsset('aix', 'x64') === null)
+check(
+  'cliproxy asset url points at the pinned tag',
+  releaseAssetUrl('a.zip', '7.0.0') ===
+    'https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.0.0/a.zip'
+)
+
+// Checksum parsing gates whether an unverified binary can ever be executed.
+const checksumFile = [
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  CLIProxyAPI_1_linux_amd64.tar.gz',
+  'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  CLIProxyAPI_1_windows_amd64.zip'
+].join('\n')
+check(
+  'sha256For finds the right entry',
+  sha256For(checksumFile, 'CLIProxyAPI_1_windows_amd64.zip') === 'b'.repeat(64)
+)
+check('sha256For returns null for an unlisted asset', sha256For(checksumFile, 'nope.zip') === null)
+check('sha256For returns null on a malformed file', sha256For('garbage', 'nope.zip') === null)
+
+// isUsable gates whether a request may be sent: `starting` binds the port before
+// credentials are loaded, and no account means nothing can be served.
+check('cliproxy: idle state is not usable', !isUsable(IDLE_CLIPROXY_STATE))
+const readyState = {
+  ...IDLE_CLIPROXY_STATE,
+  status: 'running' as const,
+  port: 8317,
+  accounts: [{ file: 'codex-a.json', type: 'codex' }]
+}
+check('cliproxy: running with an account is usable', isUsable(readyState))
+check(
+  'cliproxy: running without an account is not usable',
+  !isUsable({ ...readyState, accounts: [] })
+)
+check('cliproxy: starting is not usable', !isUsable({ ...readyState, status: 'starting' as const }))
+check('cliproxy: version is pinned, not a range', /^\d+\.\d+\.\d+$/.test(CLIPROXY_VERSION))
 // ---- default model auto-pick ----
 const mkModel = (id: string, toolCall = false): import('../src/shared/api').ModelInfo => ({
   id,

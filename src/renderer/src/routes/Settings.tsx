@@ -20,6 +20,7 @@ import { McpServers } from '../components/McpServers'
 import { ConfigBackup } from '../components/ConfigBackup'
 import { ActivitySection } from '../components/ActivitySection'
 import { ProviderLogo } from '../lib/providerLogos'
+import { CodexAccounts } from '../components/CodexSetup'
 import { useRoxyStore } from '../lib/store'
 
 export default function Settings(): JSX.Element {
@@ -386,8 +387,16 @@ function ProviderRow({
           )}
         </div>
         <p className="mt-0.5 text-xs text-text-subtle">
-          {AUTH_LABELS[provider.auth]} · {provider.hasCredential ? 'key stored' : 'no credential'}
+          {AUTH_LABELS[provider.auth]} ·{' '}
+          {provider.auth === 'subscription'
+            ? 'signed in locally'
+            : provider.hasCredential
+              ? 'key stored'
+              : 'no credential'}
         </p>
+        {/* Subscription providers hold their credential in the sidecar, not in
+            Roxy - so the row lists the signed-in accounts instead of a key. */}
+        {provider.auth === 'subscription' && <CodexAccounts />}
       </div>
       <Button size="sm" variant="ghost" onClick={onDisconnect}>
         Disconnect

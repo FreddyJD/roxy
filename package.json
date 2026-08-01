@@ -37,6 +37,7 @@
     "smoke:shared": "esbuild test/shared.ts --bundle --platform=node --format=cjs --packages=external --outfile=test/.out/shared.cjs && node test/.out/shared.cjs",
     "smoke:app": "esbuild test/smoke.ts --bundle --platform=node --format=cjs --packages=external --outfile=test/.out/smoke.cjs && electron test/.out/smoke.cjs",
     "smoke": "npm run smoke:shared && npm run smoke:store && npm run smoke:app",
+    "smoke:cliproxy": "esbuild test/cliproxy.ts --bundle --platform=node --format=cjs --packages=external --outfile=test/.out/cliproxy.cjs && electron test/.out/cliproxy.cjs",
     "worktree:setup": "npm ci --prefer-offline --no-audit --no-fund && electron-builder install-app-deps",
     "smoke:store": "node test/store-guard.mjs"
   },

@@ -25,6 +25,7 @@ import type {
   WorktreeIntent
 } from './types'
 import type { McpServerConfig } from './mcp'
+import type { CliProxyLoginResult, CliProxyState } from './cliproxy'
 import type { ForgeStatusView, ForgeHostView, ForgeKind } from './forge'
 import type { SessionConfigPatch } from './session-config'
 
@@ -633,6 +634,27 @@ export interface RoxyApi {
   copilot: {
     start(): Promise<DeviceFlowStart>
     poll(deviceCode: string, interval: number): Promise<ConnectedProvider>
+  }
+  /**
+   * The CLIProxyAPI sidecar behind the ChatGPT/Codex subscription provider. The
+   * main process owns the binary + process; the renderer only drives sign-in
+   * and reflects status.
+   */
+  cliproxy: {
+    /** Current install/run state, reconciled against what is on disk. */
+    status(): Promise<CliProxyState>
+    /**
+     * Run the whole Codex sign-in: install + start the sidecar if needed, open
+     * the ChatGPT OAuth page in the user's browser, wait for the callback, then
+     * connect the provider. Resolves when the flow reaches a terminal state.
+     */
+    login(): Promise<CliProxyLoginResult>
+    /** Sign one account out by deleting its token file. */
+    signOut(file: string): Promise<CliProxyState>
+    /** Stop the local proxy (keeps the install and the signed-in accounts). */
+    stop(): Promise<CliProxyState>
+    /** Subscribe to sidecar state pushes; returns an unsubscribe fn. */
+    onState(callback: (state: CliProxyState) => void): () => void
   }
   dialog: {
     openWorkspace(): Promise<string | null>
