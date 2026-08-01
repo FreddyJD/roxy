@@ -27,6 +27,7 @@ import {
   disconnect,
   describeBadDownload,
   ensureRunning,
+  installFromFile,
   extract,
   listProxyModels,
   localApiKey,
@@ -282,6 +283,33 @@ async function main(): Promise<void> {
     // If several shapes collapse to one message this is theatre, not diagnosis.
     const messages = new Set([mPortal, mShort, mNoLen, mWrite])
     check('the failure modes stay distinguishable', messages.size === 4, `${messages.size}/4`)
+  }
+
+  // ---- manual install (the escape hatch for blocked networks) ----
+  //
+  // Retries and a second network stack cannot help a network that blocks
+  // github.com outright, so the user can supply the archive themselves. It must
+  // still be checksum-verified: a different delivery route is not a reason to
+  // run unverified code.
+  {
+    const d = path.join(tmp, 'manual')
+    await fs.mkdir(d, { recursive: true })
+
+    const bogus = path.join(d, 'bogus.zip')
+    await fs.writeFile(bogus, Buffer.alloc(4096, 0x42))
+    let rejected = ''
+    try {
+      await installFromFile(bogus)
+    } catch (e) {
+      rejected = e instanceof Error ? e.message : String(e)
+    }
+    check('a mismatched archive is refused', rejected.length > 0)
+    check(
+      '...and the message names what was expected',
+      /doesn't match the expected/.test(rejected),
+      rejected
+    )
+    check('...and nothing was installed from it', (await status()).status !== 'running')
   }
 }
 

@@ -443,6 +443,17 @@ export function registerIpc(): void {
     return cliproxy.status()
   })
   ipcMain.handle(CHANNELS.cliproxyStop, () => cliproxy.stop())
+  ipcMain.handle(CHANNELS.cliproxyInstallFile, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const filters = [
+      { name: 'CLIProxyAPI release', extensions: process.platform === 'win32' ? ['zip'] : ['gz'] }
+    ]
+    const result = win
+      ? await dialog.showOpenDialog(win, { properties: ['openFile'], filters })
+      : await dialog.showOpenDialog({ properties: ['openFile'], filters })
+    if (result.canceled || result.filePaths.length === 0) return cliproxy.status()
+    return cliproxy.installFromFile(result.filePaths[0])
+  })
 
   // ---- dialogs ----
   ipcMain.handle(CHANNELS.dialogOpenWorkspace, async (event) => {
