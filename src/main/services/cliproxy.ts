@@ -104,6 +104,9 @@ const LOGIN_POLL_MS = 1_000
 /** Codex's OAuth callback listener, opened by the sidecar for the login flow. */
 const CODEX_CALLBACK_PORT = 1455
 
+/** How long to wait for the sidecar to bind that port before calling it a failure. */
+const CALLBACK_BIND_TIMEOUT_MS = 5_000
+
 // ---- Paths -------------------------------------------------------------------
 
 /** Root for everything this service owns, under Electron's userData. */
@@ -822,11 +825,68 @@ export async function startLogin(): Promise<CliProxyLoginStart> {
         'Close any running Codex CLI or proxy and try again.'
     )
   }
+
+  // `is_webui=true` is what makes the sidecar OPEN the callback listener on
+  // :1455 and wait for the browser to come back.
+  //
+  // Without it the endpoint still returns a perfectly valid authorization URL,
+  // but nothing ever binds the port - that mode expects the CALLER to host the
+  // redirect, which is right for its own terminal flow and wrong for ours. The
+  // failure lands at the worst possible moment: the user signs in, approves
+  // consent, and only then gets ERR_CONNECTION_REFUSED, with the authorization
+  // code stranded in the address bar.
   const body = await management<{ status?: string; url?: string; state?: string; error?: string }>(
-    '/codex-auth-url'
+    '/codex-auth-url?is_webui=true'
   )
   if (!body.url || !body.state) throw new Error(body.error || 'Sign-in could not be started.')
+
+  // Confirm the listener is actually up before sending anyone to the browser.
+  // The endpoint returning 200 is not evidence that the port got bound, and this
+  // is the last moment we can fail cheaply.
+  if (!(await waitForCallbackListener())) {
+    throw new Error(
+      'The sign-in listener could not start. Something may be blocking port ' +
+        `${CODEX_CALLBACK_PORT} on this machine.`
+    )
+  }
   return { url: body.url, state: body.state }
+}
+
+/**
+ * Wait for the sidecar to bind the OAuth callback port.
+ *
+ * It binds asynchronously after the auth-url call returns, so a naive check
+ * races it. Polling briefly turns "signed in, then refused" into a clear error
+ * raised before the browser is ever opened.
+ *
+ * This CONNECTS rather than reusing isPortFree, which tests availability by
+ * binding. Binding here would be actively harmful: polling every 100ms while the
+ * sidecar is trying to bind the same port means we eventually win the race and
+ * take it ourselves, causing the exact failure this function exists to detect.
+ */
+function waitForCallbackListener(): Promise<boolean> {
+  const deadline = Date.now() + CALLBACK_BIND_TIMEOUT_MS
+  const attempt = (): Promise<boolean> =>
+    new Promise((resolve) => {
+      const socket = new net.Socket()
+      const done = (ok: boolean): void => {
+        socket.destroy()
+        resolve(ok)
+      }
+      socket.setTimeout(500)
+      socket.once('connect', () => done(true))
+      socket.once('timeout', () => done(false))
+      socket.once('error', () => done(false))
+      socket.connect(CODEX_CALLBACK_PORT, HOST)
+    })
+
+  return (async () => {
+    while (Date.now() < deadline) {
+      if (await attempt()) return true
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    return false
+  })()
 }
 
 /**
