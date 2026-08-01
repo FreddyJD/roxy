@@ -25,6 +25,7 @@ import { app } from 'electron'
 import {
   baseUrl,
   disconnect,
+  describeBadDownload,
   ensureRunning,
   extract,
   listProxyModels,
@@ -215,6 +216,72 @@ async function main(): Promise<void> {
       friendly
     )
     check('extract() does not leak tar internals', !/-5|Unknown error/.test(friendly), friendly)
+  }
+
+  // ---- a failed integrity check must DIAGNOSE, not guess ----
+  //
+  // The first version of this message blamed "network or antivirus"
+  // unconditionally. That is a guess wearing a diagnosis's clothes: it sends
+  // people to disable their AV for what is usually a captive portal or a
+  // TLS-inspecting proxy. The bytes on disk already say which it was, so these
+  // assert that each distinct failure gets its own accurate explanation.
+  {
+    const d = path.join(tmp, 'diagnosis')
+    await fs.mkdir(d, { recursive: true })
+
+    // A captive portal / intercepting proxy answers with a web page.
+    const portal = path.join(d, 'portal.zip')
+    await fs.writeFile(portal, '<!DOCTYPE html>\n<html><body>Sign in</body></html>')
+    const mPortal = await describeBadDownload(portal, 48, 48, 48)
+    check('captive portal is named as interception', /proxy, VPN, or network sign-in/.test(mPortal))
+    check('captive portal does not blame antivirus', !/antivirus/i.test(mPortal), mPortal)
+
+    // Content replaced with something that is not an archive at all.
+    const junk = path.join(d, 'junk.zip')
+    await fs.writeFile(junk, Buffer.alloc(2048, 0x41))
+    check(
+      'substituted content is named as a replaced archive',
+      /not a valid archive/.test(await describeBadDownload(junk, 2048, 2048, 2048))
+    )
+
+    // A real zip header, but the transfer ended early.
+    const zip = path.join(d, 'short.zip')
+    await fs.writeFile(
+      zip,
+      Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(1000)])
+    )
+    const mShort = await describeBadDownload(zip, 1004, 20854695, 1004)
+    check('a truncated download reports both byte counts', /1004 of 20854695/.test(mShort))
+    check('a truncated download does not blame antivirus', !/antivirus/i.test(mShort), mShort)
+
+    // THE REPORTED CASE. With no content-length (a proxy that re-chunks the
+    // response) the length check cannot fire, and the old code fell through to
+    // a flat antivirus claim with nothing behind it.
+    const mNoLen = await describeBadDownload(zip, 1004, 0, 1004)
+    check(
+      'a missing content-length is admitted, not papered over',
+      /no length to check against/.test(mNoLen)
+    )
+    check('a missing content-length points at the proxy', /proxy/.test(mNoLen), mNoLen)
+
+    // Downloaded N but only M reached disk: the one case that really does
+    // implicate local software.
+    const mWrite = await describeBadDownload(zip, 1004, 20854695, 20854695)
+    check(
+      'a short write reports downloaded vs on-disk',
+      /20854695 bytes downloaded, 1004 on disk/.test(mWrite)
+    )
+    check('a short write is where antivirus is named', /Antivirus/.test(mWrite))
+
+    // Full length, right shape, wrong hash.
+    check(
+      'intact-but-wrong-hash is named as modification in transit',
+      /modified in transit/.test(await describeBadDownload(zip, 1004, 1004, 1004))
+    )
+
+    // If several shapes collapse to one message this is theatre, not diagnosis.
+    const messages = new Set([mPortal, mShort, mNoLen, mWrite])
+    check('the failure modes stay distinguishable', messages.size === 4, `${messages.size}/4`)
   }
 }
 
