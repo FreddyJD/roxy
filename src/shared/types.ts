@@ -9,7 +9,7 @@
 /** Wire protocol a provider speaks. Everything reduces to one of these. */
 export type ProviderWire = 'anthropic' | 'openai' | 'openai-chat' | 'google' | 'bedrock' | 'azure'
 
-/** Auth flow a provider needs. There are only seven. */
+/** Auth flow a provider needs. There are only eight. */
 export type ProviderAuth =
   | 'api-key'
   | 'oauth'
@@ -18,6 +18,13 @@ export type ProviderAuth =
   | 'gcp-adc'
   | 'azure-ad'
   | 'none'
+  /**
+   * Signed in through the locally-managed CLIProxyAPI sidecar: the user's own
+   * ChatGPT/Codex subscription, brokered by a proxy bound to 127.0.0.1 that
+   * holds the OAuth tokens on disk itself. Nothing lands in Roxy's own
+   * credential table, because there is no key to store.
+   */
+  | 'subscription'
 
 export type ProviderGroup =
   | 'frontier'

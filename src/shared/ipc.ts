@@ -63,6 +63,14 @@ export const CHANNELS = {
   copilotStart: 'copilot:start',
   copilotPoll: 'copilot:poll',
 
+  /** CLIProxyAPI sidecar: use a ChatGPT/Codex subscription via a local proxy. */
+  cliproxyStatus: 'cliproxy:status',
+  cliproxyLogin: 'cliproxy:login',
+  cliproxySignOut: 'cliproxy:signOut',
+  cliproxyStop: 'cliproxy:stop',
+  /** main -> renderer: sidecar install/run status changed */
+  cliproxyState: 'cliproxy:state',
+
   dialogOpenWorkspace: 'dialog:openWorkspace',
 
   /** Portable backup: export/import global skills + MCP configs to a file. */

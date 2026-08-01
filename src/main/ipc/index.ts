@@ -24,8 +24,11 @@ import type {
 } from '../../shared/types'
 import * as repo from '../db/repo'
 import * as copilot from '../services/copilot'
+import * as cliproxy from '../services/cliproxy'
 import * as browser from '../services/browser'
 import { listModels } from '../services/models'
+import { pickDefaultModel } from '../../shared/models'
+import { CODEX_PROVIDER_ID } from '../../shared/cliproxy'
 import { getUsageStats } from '../services/usage'
 import { getActivityStats } from '../services/activity'
 import { compactChat } from '../services/compaction'
@@ -177,14 +180,25 @@ export function registerIpc(): void {
     repo.setWebSearchApiKey(key)
   )
   ipcMain.handle(CHANNELS.settingsCompleteOnboarding, () => repo.completeOnboarding())
-  ipcMain.handle(CHANNELS.settingsReset, () => repo.resetAll())
+  ipcMain.handle(CHANNELS.settingsReset, async () => {
+    // "Wipes all providers" has to include the ChatGPT tokens held by the Codex
+    // sidecar, which resetAll() can't see - they aren't in the database.
+    await cliproxy.disconnect().catch(() => undefined)
+    return repo.resetAll()
+  })
 
   // ---- providers ----
   ipcMain.handle(CHANNELS.providersList, () => repo.listConnectedProviders())
   ipcMain.handle(CHANNELS.providersConnect, (_e, input: ConnectProviderInput) =>
     repo.connectProvider(input)
   )
-  ipcMain.handle(CHANNELS.providersDisconnect, (_e, id: string) => repo.disconnectProvider(id))
+  ipcMain.handle(CHANNELS.providersDisconnect, async (_e, id: string) => {
+    // The Codex provider's credential lives in the sidecar, not in `credentials`
+    // - so dropping the row alone would leave the ChatGPT tokens on disk and the
+    // proxy running. Sign out and shut down first, then remove the row.
+    if (id === CODEX_PROVIDER_ID) await cliproxy.disconnect()
+    return repo.disconnectProvider(id)
+  })
 
   // ---- chats ----
   ipcMain.handle(CHANNELS.chatsList, () => repo.listChats())
@@ -384,6 +398,51 @@ export function registerIpc(): void {
     repo.setActiveProvider(provider.id, provider.defaultModel ?? null)
     return provider
   })
+
+  // ---- codex subscription (CLIProxyAPI sidecar) ----
+  // The renderer drives one high-level `login` rather than the individual
+  // install/start/auth-url/poll steps: every one of them can fail, and the panel
+  // has nothing useful to do with a partial success except retry the whole
+  // thing. Progress reaches the UI through `cliproxy:state` pushes instead.
+  ipcMain.handle(CHANNELS.cliproxyStatus, () => cliproxy.status())
+  ipcMain.handle(CHANNELS.cliproxyLogin, async () => {
+    try {
+      const { url, state } = await cliproxy.startLogin()
+      await shell.openExternal(url)
+      const result = await cliproxy.pollLogin(state)
+      if (result.ok) {
+        // Register the provider only once a credential actually exists, so a
+        // cancelled sign-in never leaves a connected-but-dead provider row.
+        const base = cliproxy.baseUrl()
+        if (base) {
+          const provider = repo.storeCliProxyProvider(
+            CODEX_PROVIDER_ID,
+            base,
+            await cliproxy.localApiKey()
+          )
+          // Make it the active provider with its newest model, mirroring what
+          // connecting any other provider does.
+          const models = await listModels(provider.id)
+          repo.setActiveProvider(provider.id, pickDefaultModel(models) ?? null)
+        }
+      }
+      return result
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+        accounts: (await cliproxy.status()).accounts
+      }
+    }
+  })
+  ipcMain.handle(CHANNELS.cliproxySignOut, async (_e, file: string) => {
+    const accounts = await cliproxy.signOut(file)
+    // The last account just went: the provider can no longer serve a request, so
+    // drop the row rather than leave a dead entry in the picker.
+    if (accounts.length === 0) repo.disconnectProvider(CODEX_PROVIDER_ID)
+    return cliproxy.status()
+  })
+  ipcMain.handle(CHANNELS.cliproxyStop, () => cliproxy.stop())
 
   // ---- dialogs ----
   ipcMain.handle(CHANNELS.dialogOpenWorkspace, async (event) => {

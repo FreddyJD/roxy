@@ -16,6 +16,7 @@ import { api } from '../../lib/api'
 import { useRoxyStore } from '../../lib/store'
 import { Button, Input } from '../../components/ui'
 import { ProviderLogo } from '../../lib/providerLogos'
+import { CodexSetup } from '../../components/CodexSetup'
 
 // The searchable list leads with Roxy too — a fallback for anyone who breezes
 // past the featured hero card above — followed by every other provider. (Roxy
@@ -184,6 +185,8 @@ function ProviderSetup({
   const [error, setError] = useState<string | null>(null)
 
   const isCopilot = seed.auth === 'device-flow' && seed.id === 'github-copilot'
+  // Signed in through the local CLIProxyAPI sidecar - no key field, no base URL.
+  const isSubscription = seed.auth === 'subscription'
   const needsKey = seed.auth === 'api-key'
   const needsBaseURL = !seed.baseURL
   const showBaseURL = needsBaseURL || seed.auth === 'none' || seed.id === 'openai-compatible'
@@ -250,6 +253,8 @@ function ProviderSetup({
         <div className="mx-auto max-w-md px-6 py-10">
           {isCopilot ? (
             <CopilotSetup onConnected={onConnected} />
+          ) : isSubscription ? (
+            <CodexSetup onConnected={onConnected} />
           ) : isConnectableNow(seed) ? (
             <div className="flex flex-col gap-4">
               <div>

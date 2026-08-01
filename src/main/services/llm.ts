@@ -1,13 +1,19 @@
 /**
  * Live model calls. Turns a connected provider's credential into a streamed
- * chat completion. GitHub Copilot needs an extra hop: the stored GitHub OAuth
- * token is exchanged for a short-lived Copilot token, then used against the
- * OpenAI-compatible Copilot endpoint. Other `openai-chat` providers use their
- * API key + base URL directly.
+ * chat completion.
+ *
+ * Two providers need an extra hop before the request can go out. GitHub Copilot
+ * exchanges the stored GitHub OAuth token for a short-lived Copilot token. The
+ * Codex subscription provider is served by a locally-managed CLIProxyAPI
+ * sidecar, which must be running (and may need to be downloaded first) before
+ * its loopback base URL exists at all. Everything else uses its stored API key +
+ * base URL directly.
  */
 import * as repo from '../db/repo'
 import type { ChatMessage } from '../../shared/api'
 import type { ReasoningEffort } from '../../shared/types'
+import { CODEX_PROVIDER_ID } from '../../shared/cliproxy'
+import { ensureRunning as ensureCliProxy, localApiKey as cliProxyKey } from './cliproxy'
 
 const COPILOT_TOKEN_URL = 'https://api.github.com/copilot_internal/v2/token'
 const COPILOT_CHAT_URL = 'https://api.githubcopilot.com/chat/completions'
@@ -162,6 +168,24 @@ function copilotHeaders(token: string, vision = false): Record<string, string> {
   }
 }
 
+/**
+ * Resolve the base URL for a provider, booting the CLIProxyAPI sidecar first for
+ * the Codex-subscription provider.
+ *
+ * The sidecar picks a free port on each start, so its stored base URL is only
+ * ever a cache. `ensureCliProxy` is idempotent and returns the LIVE URL, which
+ * is then written back - otherwise a restart that lands on a different port
+ * would leave every request pointed at nothing.
+ */
+async function resolveBaseUrl(providerId: string, stored: string | undefined): Promise<string> {
+  if (providerId !== CODEX_PROVIDER_ID) {
+    return (stored || 'https://api.openai.com/v1').replace(/\/+$/, '')
+  }
+  const live = await ensureCliProxy()
+  if (live !== stored) repo.setProviderBaseUrl(providerId, live)
+  return live.replace(/\/+$/, '')
+}
+
 /** Resolve the OpenAI-compatible chat endpoint + headers (Copilot or openai-chat). */
 export async function openaiEndpoint(
   providerId: string,
@@ -172,8 +196,11 @@ export async function openaiEndpoint(
   }
   const provider = repo.listConnectedProviders().find((p) => p.id === providerId)
   if (!provider) throw new Error(`Provider "${providerId}" is not connected.`)
-  const key = repo.getProviderToken(providerId)
-  const base = (provider.baseURL || 'https://api.openai.com/v1').replace(/\/+$/, '')
+  // The sidecar's own key is generated per install and can be regenerated, so
+  // read it from the service rather than trusting a possibly-stale stored copy.
+  const key =
+    providerId === CODEX_PROVIDER_ID ? await cliProxyKey() : repo.getProviderToken(providerId)
+  const base = await resolveBaseUrl(providerId, provider.baseURL)
   return {
     url: `${base}/chat/completions`,
     headers: {
@@ -264,7 +291,8 @@ export async function streamChat(opts: StreamChatOptions): Promise<void> {
 
   const provider = repo.listConnectedProviders().find((p) => p.id === providerId)
   if (!provider) throw new Error(`Provider "${providerId}" is not connected.`)
-  const key = repo.getProviderToken(providerId)
+  const key =
+    providerId === CODEX_PROVIDER_ID ? await cliProxyKey() : repo.getProviderToken(providerId)
 
   switch (provider.wire) {
     case 'anthropic':
@@ -279,8 +307,10 @@ export async function streamChat(opts: StreamChatOptions): Promise<void> {
     case 'bedrock':
       throw new Error('Amazon Bedrock (AWS SigV4) is not supported yet.')
     default: {
-      // openai + openai-chat: standard /chat/completions with a Bearer key.
-      const base = (provider.baseURL || 'https://api.openai.com/v1').replace(/\/+$/, '')
+      // openai + openai-chat: standard /chat/completions with a Bearer key. For
+      // the Codex subscription this also boots the local sidecar and refreshes
+      // its (per-start) port.
+      const base = await resolveBaseUrl(providerId, provider.baseURL)
       const res = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: {

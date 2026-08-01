@@ -5,6 +5,8 @@
  */
 import type { ModelInfo, ModelCost } from '../../shared/api'
 import { getProviderToken, listConnectedProviders } from '../db/repo'
+import { CODEX_PROVIDER_ID } from '../../shared/cliproxy'
+import { ensureRunning as ensureCliProxy, listProxyModels } from './cliproxy'
 
 const CATALOG_URL = 'https://models.dev/api.json'
 const TTL_MS = 60 * 60 * 1000
@@ -89,6 +91,49 @@ async function listRoxyModels(): Promise<ModelInfo[]> {
   }
 }
 
+/**
+ * Models for the Codex-subscription provider: whatever the local CLIProxyAPI
+ * sidecar currently exposes.
+ *
+ * This deliberately does NOT come from models.dev. The available models are a
+ * function of the signed-in plan (Plus and Pro see different lists), and the
+ * sidecar already resolves that from the live credential - so it is the only
+ * source that can be right. An empty list means the proxy isn't up or nobody
+ * has signed in yet, which the picker renders as "no models" rather than as a
+ * wrong list.
+ *
+ * Every model here is a GPT-5-class reasoning model with tool calling, so both
+ * capability flags are asserted rather than guessed per id.
+ */
+async function listCodexModels(): Promise<ModelInfo[]> {
+  // Boot the sidecar first when the provider is connected. After an app restart
+  // the proxy is installed but not running, and an un-booted proxy reports no
+  // models - which would render as an empty picker for a provider the user can
+  // demonstrably use. Connected implies installed (you cannot connect without a
+  // completed login), so this is a spawn, never a download.
+  if (listConnectedProviders().some((p) => p.id === CODEX_PROVIDER_ID)) {
+    try {
+      await ensureCliProxy()
+    } catch {
+      // Couldn't start - fall through to the empty list rather than break the
+      // whole picker for every other provider.
+    }
+  }
+  const models = await listProxyModels()
+  return models
+    .map((m) => ({
+      id: m.id,
+      name: m.name || m.id,
+      reasoning: true,
+      toolCall: true,
+      // Priced at $0: the user already paid for the plan, so per-token cost
+      // accounting would invent spend that never happens.
+      contextLimit: undefined,
+      outputLimit: undefined
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
 async function getCatalog(): Promise<Record<string, ModelsDevProvider>> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.data
   const res = await fetch(CATALOG_URL)
@@ -112,6 +157,7 @@ function toModelCost(c: ModelsDevModel['cost']): ModelCost | undefined {
 /** List the models models.dev knows for a provider id (newest first). */
 export async function listModels(providerId: string): Promise<ModelInfo[]> {
   if (providerId === 'roxy') return listRoxyModels()
+  if (providerId === CODEX_PROVIDER_ID) return listCodexModels()
   try {
     const data = await getCatalog()
     const models = data[providerId]?.models

@@ -374,6 +374,63 @@ export function storeCopilotCredential(token: string): ConnectedProvider {
   return provider
 }
 
+/**
+ * Register the Codex-subscription provider, pointed at the local CLIProxyAPI
+ * sidecar.
+ *
+ * Two things make this different from `connectProvider`. First, the base URL is
+ * a loopback address whose port is chosen at start time, so it is written on
+ * every start rather than once at connect time. Second, the stored credential is
+ * only the LOCAL key Roxy generated for its own sidecar - the actual ChatGPT
+ * OAuth tokens live in the sidecar's auth-dir and never enter this table.
+ */
+export function storeCliProxyProvider(
+  providerId: string,
+  baseURL: string,
+  localKey: string
+): ConnectedProvider {
+  const seed = resolveSeed(providerId)
+  const now = Date.now()
+  const db = getDb()
+  const tx = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO providers(id, name, wire, auth, base_url, default_model, enabled, created_at)
+       VALUES(@id, @name, @wire, @auth, @base_url, NULL, 1, @now)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name, wire = excluded.wire, auth = excluded.auth,
+         base_url = excluded.base_url, enabled = 1`
+    ).run({
+      id: seed.id,
+      name: seed.name,
+      wire: seed.wire,
+      auth: seed.auth,
+      base_url: baseURL,
+      now
+    })
+    const { data, encrypted } = encryptSecret(localKey)
+    db.prepare(
+      `INSERT INTO credentials(provider_id, type, data, encrypted, created_at)
+       VALUES(?, 'key', ?, ?, ?)
+       ON CONFLICT(provider_id) DO UPDATE SET
+         type = 'key', data = excluded.data, encrypted = excluded.encrypted`
+    ).run(seed.id, data, encrypted ? 1 : 0, now)
+  })
+  tx()
+  const provider = listConnectedProviders().find((p) => p.id === seed.id)
+  if (!provider) throw new Error(`Failed to connect ${seed.name}`)
+  getDb().pragma('wal_checkpoint(TRUNCATE)')
+  return provider
+}
+
+/**
+ * Repoint a connected provider at a new base URL. The sidecar picks a fresh port
+ * on every start, so the stored URL would otherwise go stale the moment the app
+ * restarts and something else holds the old port.
+ */
+export function setProviderBaseUrl(providerId: string, baseURL: string): void {
+  getDb().prepare('UPDATE providers SET base_url = ? WHERE id = ?').run(baseURL, providerId)
+}
+
 // ---- Chats -------------------------------------------------------------------
 
 /** Parse the tasks JSON column into a checklist, tolerating malformed data. */
