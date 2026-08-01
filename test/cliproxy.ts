@@ -15,6 +15,7 @@
  * authorization URL, which is the last step Roxy controls.
  */
 import { createHash } from 'node:crypto'
+import net from 'node:net'
 import { createReadStream, mkdtempSync, promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -125,6 +126,27 @@ async function main(): Promise<void> {
   check('the auth URL uses PKCE', login.url.includes('code_challenge_method=S256'))
   check('startLogin returns a state token', login.state.length > 0)
   check('the auth URL carries that state', login.url.includes(`state=${login.state}`))
+
+  // The bug this guards against: the endpoint happily returns a valid URL while
+  // nothing binds :1455, so the user completes consent and *then* gets
+  // ERR_CONNECTION_REFUSED with the authorization code stranded in the address
+  // bar. A 200 from the management API is not evidence that a listener exists -
+  // only a connection is.
+  const callbackBound = await new Promise<boolean>((resolve) => {
+    const socket = new net.Socket()
+    socket.setTimeout(2000)
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('timeout', () => {
+      socket.destroy()
+      resolve(false)
+    })
+    socket.once('error', () => resolve(false))
+    socket.connect(1455, '127.0.0.1')
+  })
+  check('the OAuth callback listener is accepting connections', callbackBound)
 
   // ---- teardown leaves the install (and would-be tokens) in place ----
   const stopped = await stop()
