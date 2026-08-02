@@ -48,6 +48,8 @@ interface RoxyStore {
   providers: ConnectedProvider[]
   /** models.dev model lists per provider id (lazy-loaded + cached). */
   modelCatalog: Record<string, ModelInfo[]>
+  /** Last 5 distinct model picks per provider, lazy-loaded + refreshed on selection. */
+  recentModels: Record<string, { model: string; usedAt: number }[]>
   chats: Chat[]
   activeChatId: string | null
   messages: Message[]
@@ -128,6 +130,8 @@ interface RoxyStore {
   refreshLoops: () => Promise<void>
   refreshQueue: () => Promise<void>
   refreshProviders: () => Promise<void>
+  /** Persist the connected provider order (optimistic). `ids` = full list, top-to-bottom. */
+  reorderProviders: (ids: string[]) => Promise<void>
   /**
    * The config the OPEN session runs with: its own pinned values, falling back
    * to the global last-used ones. The single read path for the composer
@@ -145,6 +149,7 @@ interface RoxyStore {
   setSessionConfig: (patch: SessionConfigPatch) => Promise<void>
   selectModel: (providerId: string, model: string) => Promise<void>
   ensureModels: (providerId: string) => Promise<void>
+  ensureRecentModels: (providerId: string) => Promise<void>
   setReasoningEffort: (level: ReasoningEffort) => Promise<void>
   setContextLimit: (limit: number | null) => Promise<void>
   setWebSearchApiKey: (key: string | null) => Promise<void>
@@ -689,6 +694,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   settings: null,
   providers: [],
   modelCatalog: {},
+  recentModels: {},
   chats: [],
   activeChatId: null,
   messages: [],
@@ -896,6 +902,18 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       api.settings.getAll()
     ])
     set({ providers, settings })
+  },
+
+  reorderProviders: async (ids) => {
+    const ordered = new Set(ids)
+    set((s) => {
+      const byId = new Map(s.providers.map((p) => [p.id, p]))
+      const reordered = ids.map((id) => byId.get(id)).filter((p): p is ConnectedProvider => !!p)
+      const rest = s.providers.filter((p) => !ordered.has(p.id))
+      return { providers: [...reordered, ...rest] }
+    })
+    await api.providers.reorder(ids)
+    await get().refreshProviders()
   },
 
   startRemote: async () => {
@@ -1109,6 +1127,8 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   selectModel: async (providerId, model) => {
     // Provider + model always move together (see resolveSessionConfig).
     await get().setSessionConfig({ providerId, model })
+    const recent = await api.models.recent(providerId)
+    set((s) => ({ recentModels: { ...s.recentModels, [providerId]: recent } }))
   },
 
   ensureModels: async (providerId) => {
@@ -1116,6 +1136,12 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     const list = modelCatalogCache.get(providerId) ?? (await api.models.list(providerId))
     modelCatalogCache.set(providerId, list)
     set((s) => ({ modelCatalog: { ...s.modelCatalog, [providerId]: list } }))
+  },
+
+  ensureRecentModels: async (providerId) => {
+    if (get().recentModels[providerId]) return
+    const recent = await api.models.recent(providerId)
+    set((s) => ({ recentModels: { ...s.recentModels, [providerId]: recent } }))
   },
 
   setReasoningEffort: async (level) => {

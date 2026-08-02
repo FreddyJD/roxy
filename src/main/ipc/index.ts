@@ -199,6 +199,7 @@ export function registerIpc(): void {
     if (id === CODEX_PROVIDER_ID) await cliproxy.disconnect()
     return repo.disconnectProvider(id)
   })
+  ipcMain.handle(CHANNELS.providersReorder, (_e, ids: string[]) => repo.reorderProviders(ids))
 
   // ---- chats ----
   ipcMain.handle(CHANNELS.chatsList, () => repo.listChats())
@@ -669,6 +670,9 @@ export function registerIpc(): void {
 
   // ---- models (models.dev catalog) ----
   ipcMain.handle(CHANNELS.modelsList, (_e, providerId: string) => listModels(providerId))
+  ipcMain.handle(CHANNELS.modelsRecent, (_e, providerId: string) =>
+    repo.listRecentModels(providerId)
+  )
 
   // ---- context (compaction) ----
   ipcMain.handle(

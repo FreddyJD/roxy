@@ -45,6 +45,7 @@ interface ProviderRow {
   base_url: string | null
   default_model: string | null
   enabled: number
+  sort_order: number
   created_at: number
   has_credential: number
 }
@@ -229,6 +230,7 @@ export function resetAll(): void {
       `DELETE FROM loops;
        DELETE FROM messages;
        DELETE FROM chats;
+       DELETE FROM recent_models;
        DELETE FROM credentials;
        DELETE FROM providers;
        DELETE FROM integrations;
@@ -252,6 +254,7 @@ function rowToProvider(row: ProviderRow): ConnectedProvider {
     defaultModel: row.default_model ?? undefined,
     hasCredential: row.has_credential > 0,
     enabled: row.enabled > 0,
+    sortOrder: row.sort_order,
     createdAt: row.created_at
   }
 }
@@ -264,9 +267,22 @@ const PROVIDER_SELECT = `
 
 export function listConnectedProviders(): ConnectedProvider[] {
   const rows = getDb()
-    .prepare(`${PROVIDER_SELECT} ORDER BY p.created_at ASC`)
+    .prepare(`${PROVIDER_SELECT} ORDER BY p.sort_order DESC, p.created_at ASC`)
     .all() as ProviderRow[]
   return rows.map(rowToProvider)
+}
+
+/** Reorder connected providers to match `orderedIds` (front = top of Settings/model picker). */
+export function reorderProviders(orderedIds: string[]): void {
+  const db = getDb()
+  const rows = db.prepare('SELECT id FROM providers').all() as { id: string }[]
+  if (rows.length < 2) return
+  const valid = new Set(rows.map((r) => r.id))
+  const ids = orderedIds.filter((id) => valid.has(id))
+  if (ids.length !== rows.length) return
+  const base = Date.now()
+  const update = db.prepare('UPDATE providers SET sort_order = ? WHERE id = ?')
+  db.transaction(() => ids.forEach((id, i) => update.run(base - i, id)))()
 }
 
 function getProvider(id: string): ConnectedProvider | undefined {
@@ -285,8 +301,8 @@ export function connectProvider(input: ConnectProviderInput): ConnectedProvider 
 
   const tx = db.transaction(() => {
     db.prepare(
-      `INSERT INTO providers(id, name, wire, auth, base_url, default_model, enabled, created_at)
-       VALUES(@id, @name, @wire, @auth, @base_url, @default_model, 1, @created_at)
+      `INSERT INTO providers(id, name, wire, auth, base_url, default_model, enabled, sort_order, created_at)
+       VALUES(@id, @name, @wire, @auth, @base_url, @default_model, 1, @sort_order, @created_at)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          wire = excluded.wire,
@@ -301,6 +317,7 @@ export function connectProvider(input: ConnectProviderInput): ConnectedProvider 
       auth: seed.auth,
       base_url: baseURL,
       default_model: defaultModel,
+      sort_order: -now,
       created_at: now
     })
 
@@ -327,6 +344,38 @@ export function disconnectProvider(id: string): void {
   getDb().prepare('DELETE FROM providers WHERE id = ?').run(id)
 }
 
+/** Track a model pick so it shows in the Latest section (per provider, last 5 distinct). */
+export function recordRecentModel(providerId: string, model: string): void {
+  const db = getDb()
+  const now = Date.now()
+  const existing = db
+    .prepare('SELECT id FROM recent_models WHERE provider_id = ? AND model = ?')
+    .get(providerId, model) as { id: number } | undefined
+  if (existing) {
+    db.prepare('UPDATE recent_models SET used_at = ? WHERE id = ?').run(now, existing.id)
+  } else {
+    db.prepare('INSERT INTO recent_models(provider_id, model, used_at) VALUES(?, ?, ?)').run(
+      providerId,
+      model,
+      now
+    )
+  }
+  db.prepare(
+    `DELETE FROM recent_models WHERE id NOT IN (
+       SELECT id FROM recent_models WHERE provider_id = ? ORDER BY used_at DESC LIMIT 5
+     ) AND provider_id = ?`
+  ).run(providerId, providerId)
+}
+
+export function listRecentModels(providerId: string): { model: string; usedAt: number }[] {
+  const rows = getDb()
+    .prepare(
+      'SELECT model, used_at FROM recent_models WHERE provider_id = ? ORDER BY used_at DESC LIMIT 5'
+    )
+    .all(providerId) as { model: string; used_at: number }[]
+  return rows.map((r) => ({ model: r.model, usedAt: r.used_at }))
+}
+
 /** Read + decrypt a provider's stored credential token (api key or oauth). */
 export function getProviderToken(providerId: string): string | null {
   const row = getDb()
@@ -347,8 +396,8 @@ export function storeCopilotCredential(token: string): ConnectedProvider {
   const db = getDb()
   const tx = db.transaction(() => {
     db.prepare(
-      `INSERT INTO providers(id, name, wire, auth, base_url, default_model, enabled, created_at)
-       VALUES(@id, @name, @wire, @auth, @base_url, NULL, 1, @now)
+      `INSERT INTO providers(id, name, wire, auth, base_url, default_model, enabled, sort_order, created_at)
+       VALUES(@id, @name, @wire, @auth, @base_url, NULL, 1, @sort_order, @now)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name, wire = excluded.wire, auth = excluded.auth, enabled = 1`
     ).run({
@@ -357,6 +406,7 @@ export function storeCopilotCredential(token: string): ConnectedProvider {
       wire: seed.wire,
       auth: seed.auth,
       base_url: seed.baseURL ?? null,
+      sort_order: -now,
       now
     })
     const { data, encrypted } = encryptSecret(token)
@@ -394,8 +444,8 @@ export function storeCliProxyProvider(
   const db = getDb()
   const tx = db.transaction(() => {
     db.prepare(
-      `INSERT INTO providers(id, name, wire, auth, base_url, default_model, enabled, created_at)
-       VALUES(@id, @name, @wire, @auth, @base_url, NULL, 1, @now)
+      `INSERT INTO providers(id, name, wire, auth, base_url, default_model, enabled, sort_order, created_at)
+       VALUES(@id, @name, @wire, @auth, @base_url, NULL, 1, @sort_order, @now)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name, wire = excluded.wire, auth = excluded.auth,
          base_url = excluded.base_url, enabled = 1`
@@ -405,6 +455,7 @@ export function storeCliProxyProvider(
       wire: seed.wire,
       auth: seed.auth,
       base_url: baseURL,
+      sort_order: -now,
       now
     })
     const { data, encrypted } = encryptSecret(localKey)
@@ -831,6 +882,9 @@ export function setChatConfig(chatId: string, patch: SessionConfigPatch): Chat {
   if ('contextLimit' in patch) {
     sets.push('context_limit = ?')
     vals.push(patch.contextLimit ?? null)
+  }
+  if (('providerId' in patch || 'model' in patch) && patch.providerId && patch.model) {
+    recordRecentModel(patch.providerId, patch.model)
   }
   if (sets.length) {
     // Deliberately does NOT touch updated_at: choosing a model is not activity,

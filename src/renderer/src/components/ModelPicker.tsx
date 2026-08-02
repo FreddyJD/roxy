@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Brain, Check, ChevronsUpDown, Search, Wrench } from 'lucide-react'
+import { Brain, Check, ChevronsUpDown, Clock, Search, Wrench } from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
 import { resolveSessionConfig } from '@shared/session-config'
 import { ProviderLogo } from '../lib/providerLogos'
@@ -10,7 +10,8 @@ import { cn } from '../lib/cn'
 /**
  * A cute, searchable model picker: the active provider's logo + model on the
  * trigger, and a popover grouped by every connected provider (with its icon)
- * listing the real models models.dev knows about, with reasoning/tools badges.
+ * listing the real models models.dev knows about. A LATEST section shows the
+ * last five distinct picks for each provider.
  */
 const MENU_W = 320
 
@@ -21,7 +22,9 @@ export function ModelPicker(): JSX.Element {
   const activeChatId = useRoxyStore((s) => s.activeChatId)
   const selectModel = useRoxyStore((s) => s.selectModel)
   const models = useRoxyStore((s) => s.modelCatalog)
+  const recentModels = useRoxyStore((s) => s.recentModels)
   const ensureModels = useRoxyStore((s) => s.ensureModels)
+  const ensureRecentModels = useRoxyStore((s) => s.ensureRecentModels)
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -46,10 +49,13 @@ export function ModelPicker(): JSX.Element {
   const activeModel = activeProvider?.id === config.providerId ? config.model : null
   const loading = providers.some((p) => !models[p.id])
 
-  // Lazy-load every connected provider's models into the shared catalog.
+  // Lazy-load every connected provider's models and recents into shared caches.
   useEffect(() => {
-    providers.forEach((p) => void ensureModels(p.id))
-  }, [providers, ensureModels])
+    providers.forEach((p) => {
+      void ensureModels(p.id)
+      void ensureRecentModels(p.id)
+    })
+  }, [providers, ensureModels, ensureRecentModels])
 
   // Close on outside click / Escape.
   useEffect(() => {
@@ -85,6 +91,36 @@ export function ModelPicker(): JSX.Element {
     setQuery('')
   }
 
+  const modelName = (providerId: string, modelId: string): string =>
+    models[providerId]?.find((m) => m.id === modelId)?.name ?? modelId
+
+  const renderModelButton = (
+    providerId: string,
+    providerName: string,
+    modelId: string,
+    label = modelName(providerId, modelId)
+  ): JSX.Element => {
+    const info = models[providerId]?.find((m) => m.id === modelId)
+    const selected = providerId === activeProvider?.id && modelId === activeModel
+    return (
+      <button
+        key={modelId}
+        type="button"
+        onClick={() => pick(providerId, modelId)}
+        className={cn(
+          'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition',
+          selected ? 'bg-accent/15 text-text' : 'text-text-muted hover:bg-white/5 hover:text-text'
+        )}
+      >
+        <ProviderLogo id={providerId} name={providerName} size={14} />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {info?.reasoning && <Brain className="h-3 w-3 shrink-0 text-accent" />}
+        {info?.toolCall && <Wrench className="h-3 w-3 shrink-0 text-success" />}
+        {selected && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
+      </button>
+    )
+  }
+
   return (
     <div ref={rootRef} className="relative">
       <button type="button" onClick={() => setOpen((o) => !o)} className={triggerClass}>
@@ -117,34 +153,26 @@ export function ModelPicker(): JSX.Element {
                 const list = (models[p.id] ?? []).filter(
                   (m) => !q || m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)
                 )
-                if (list.length === 0) return null
+                const latest = q ? [] : (recentModels[p.id] ?? [])
+                if (list.length === 0 && latest.length === 0) return null
                 return (
                   <div key={p.id}>
-                    <div className="flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] font-medium text-text-subtle">
-                      <ProviderLogo id={p.id} name={p.name} size={13} /> {p.name}
-                    </div>
-                    {list.map((m) => {
-                      const selected = p.id === activeProvider?.id && m.id === activeModel
-                      return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => pick(p.id, m.id)}
-                          className={cn(
-                            'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition',
-                            selected
-                              ? 'bg-accent/15 text-text'
-                              : 'text-text-muted hover:bg-white/5 hover:text-text'
-                          )}
-                        >
-                          <ProviderLogo id={p.id} name={p.name} size={14} />
-                          <span className="min-w-0 flex-1 truncate">{m.name}</span>
-                          {m.reasoning && <Brain className="h-3 w-3 shrink-0 text-accent" />}
-                          {m.toolCall && <Wrench className="h-3 w-3 shrink-0 text-success" />}
-                          {selected && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
-                        </button>
-                      )
-                    })}
+                    {latest.length > 0 && (
+                      <>
+                        <div className="flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-text-subtle">
+                          <Clock className="h-3 w-3" /> Latest · {p.name}
+                        </div>
+                        {latest.map((r) => renderModelButton(p.id, p.name, r.model))}
+                      </>
+                    )}
+                    {list.length > 0 && (
+                      <>
+                        <div className="flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] font-medium text-text-subtle">
+                          <ProviderLogo id={p.id} name={p.name} size={13} /> {p.name}
+                        </div>
+                        {list.map((m) => renderModelButton(p.id, p.name, m.id, m.name))}
+                      </>
+                    )}
                   </div>
                 )
               })}

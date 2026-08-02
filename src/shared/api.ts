@@ -549,6 +549,8 @@ export interface RoxyApi {
     listConnected(): Promise<ConnectedProvider[]>
     connect(input: ConnectProviderInput): Promise<ConnectedProvider>
     disconnect(id: string): Promise<void>
+    /** Reorder connected providers; `ids` is the full Settings list, top-to-bottom. */
+    reorder(ids: string[]): Promise<void>
   }
   chats: {
     list(): Promise<Chat[]>
@@ -748,6 +750,8 @@ export interface RoxyApi {
   models: {
     /** Live model list for a provider id, from models.dev. */
     list(providerId: string): Promise<ModelInfo[]>
+    /** Last 5 distinct model picks for a provider, newest first. */
+    recent(providerId: string): Promise<{ model: string; usedAt: number }[]>
   }
   context: {
     /** Summarize a chat's history into a compaction summary; returns the chat. */

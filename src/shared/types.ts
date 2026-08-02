@@ -64,6 +64,8 @@ export interface ConnectedProvider {
   defaultModel?: string
   hasCredential: boolean
   enabled: boolean
+  /** User-defined provider order (higher = higher in Settings/model picker). */
+  sortOrder: number
   createdAt: number
 }
 

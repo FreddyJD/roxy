@@ -102,6 +102,7 @@ const REPAIR_SCHEMA_SQL = /* sql */ `
         base_url      TEXT,
         default_model TEXT,
         enabled       INTEGER NOT NULL DEFAULT 1,
+        sort_order    INTEGER NOT NULL DEFAULT 0,
         created_at    INTEGER NOT NULL
       );
   CREATE TABLE IF NOT EXISTS queue (
@@ -110,6 +111,12 @@ const REPAIR_SCHEMA_SQL = /* sql */ `
         content    TEXT NOT NULL,
         created_at INTEGER NOT NULL
       , images TEXT);
+  CREATE TABLE IF NOT EXISTS recent_models (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider_id TEXT NOT NULL,
+        model       TEXT NOT NULL,
+        used_at     INTEGER NOT NULL
+      );
   CREATE TABLE IF NOT EXISTS settings (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -130,6 +137,7 @@ const REPAIR_SCHEMA_SQL = /* sql */ `
       );
   CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_queue_chat ON queue(chat_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_recent_models_provider ON recent_models(provider_id, used_at DESC);
   CREATE INDEX IF NOT EXISTS idx_usage_created ON usage(created_at);
   CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage(provider_id, created_at);
 `
@@ -398,7 +406,22 @@ export const MIGRATIONS: Migration[] = [
       FROM messages
       WHERE role = 'assistant'
       GROUP BY day;
-  `
+  `,
+
+  // ---- v19: recent model picks + user-orderable providers ----
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS recent_models (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider_id TEXT NOT NULL,
+        model       TEXT NOT NULL,
+        used_at     INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_recent_models_provider ON recent_models(provider_id, used_at DESC);
+    `)
+    addColumnIfMissing(db, 'providers', 'sort_order', 'INTEGER NOT NULL DEFAULT 0')
+    db.exec('UPDATE providers SET sort_order = -created_at WHERE sort_order = 0')
+  }
 ]
 
 /**
@@ -434,6 +457,18 @@ export function repairSchema(db: Database): void {
   addColumnIfMissing(db, 'chats', 'agent_id', 'TEXT')
   addColumnIfMissing(db, 'chats', 'reasoning_effort', 'TEXT')
   addColumnIfMissing(db, 'chats', 'context_limit', 'INTEGER')
+  // v19's provider order and recent-models table.
+  addColumnIfMissing(db, 'providers', 'sort_order', 'INTEGER NOT NULL DEFAULT 0')
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS recent_models (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider_id TEXT NOT NULL,
+      model       TEXT NOT NULL,
+      used_at     INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_recent_models_provider ON recent_models(provider_id, used_at DESC);
+  `)
+  db.exec('UPDATE providers SET sort_order = -created_at WHERE sort_order = 0')
   // `projects` is derived state — one row per workspace folder its sessions use
   // — so a restored table can be rebuilt from the chats themselves, exactly as
   // v13 did on first upgrade. Only when empty, so a hand-ordered project list is

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Globe, Plus, Trash2 } from 'lucide-react'
+import { GripVertical, Globe, Plus, Trash2 } from 'lucide-react'
 import type { AppVersions, ConnectedProvider } from '@shared/types'
 import type { UpdateInfo } from '@shared/api'
 import { AUTH_LABELS } from '@shared/providers'
@@ -28,6 +28,7 @@ export default function Settings(): JSX.Element {
   const providers = useRoxyStore((s) => s.providers)
   const settings = useRoxyStore((s) => s.settings)
   const refreshProviders = useRoxyStore((s) => s.refreshProviders)
+  const reorderProviders = useRoxyStore((s) => s.reorderProviders)
   const setWebSearchApiKey = useRoxyStore((s) => s.setWebSearchApiKey)
   const setAutoWorkstream = useRoxyStore((s) => s.setAutoWorkstream)
   const setBranchPrefix = useRoxyStore((s) => s.setBranchPrefix)
@@ -44,6 +45,34 @@ export default function Settings(): JSX.Element {
   const [resetting, setResetting] = useState(false)
   const [searchKey, setSearchKey] = useState('')
   const [searchKeySaved, setSearchKeySaved] = useState(false)
+  const [dragProviderId, setDragProviderId] = useState<string | null>(null)
+  const [dragOverProviderId, setDragOverProviderId] = useState<string | null>(null)
+  const [dropAfterProvider, setDropAfterProvider] = useState(false)
+
+  const reorderWithinProviders = (
+    sourceId: string,
+    targetId: string,
+    place: 'before' | 'after'
+  ): string[] | null => {
+    const ids = providers.map((p) => p.id)
+    const from = ids.indexOf(sourceId)
+    if (from === -1 || ids.indexOf(targetId) === -1) return null
+    ids.splice(from, 1)
+    ids.splice(ids.indexOf(targetId) + (place === 'after' ? 1 : 0), 0, sourceId)
+    if (ids.every((id, i) => id === providers[i].id)) return null
+    return ids
+  }
+
+  const onProviderDrop = (targetId: string): void => {
+    const source = dragProviderId
+    const place = dropAfterProvider ? 'after' : 'before'
+    setDragProviderId(null)
+    setDragOverProviderId(null)
+    setDropAfterProvider(false)
+    if (!source || source === targetId) return
+    const order = reorderWithinProviders(source, targetId, place)
+    if (order) void reorderProviders(order)
+  }
 
   useEffect(() => {
     setSearchKey(settings?.webSearchApiKey ?? '')
@@ -111,12 +140,53 @@ export default function Settings(): JSX.Element {
         </h2>
         <div className="flex flex-col gap-2">
           {providers.map((p) => (
-            <ProviderRow
+            <div
               key={p.id}
-              provider={p}
-              active={settings?.activeProviderId === p.id}
-              onDisconnect={() => disconnect(p.id)}
-            />
+              draggable={providers.length > 1}
+              onDragStart={(e) => {
+                setDragProviderId(p.id)
+                e.dataTransfer.effectAllowed = 'move'
+                e.dataTransfer.setData('text/plain', p.id)
+              }}
+              onDragEnter={() =>
+                dragProviderId && dragProviderId !== p.id && setDragOverProviderId(p.id)
+              }
+              onDragOver={(e) => {
+                if (!dragProviderId) return
+                e.preventDefault()
+                if (dragProviderId === p.id) return
+                const rect = e.currentTarget.getBoundingClientRect()
+                const after = e.clientY - rect.top > rect.height / 2
+                if (dragOverProviderId !== p.id) setDragOverProviderId(p.id)
+                if (after !== dropAfterProvider) setDropAfterProvider(after)
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                onProviderDrop(p.id)
+              }}
+              onDragEnd={() => {
+                setDragProviderId(null)
+                setDragOverProviderId(null)
+                setDropAfterProvider(false)
+              }}
+              className={cn(
+                'relative',
+                dragProviderId === p.id && 'opacity-40',
+                dragOverProviderId === p.id &&
+                  dragProviderId !== p.id &&
+                  (dropAfterProvider
+                    ? 'after:absolute after:inset-x-2 after:-bottom-1 after:h-0.5 after:rounded-full after:bg-accent'
+                    : 'before:absolute before:inset-x-2 before:-top-1 before:h-0.5 before:rounded-full before:bg-accent')
+              )}
+            >
+              <ProviderRow
+                provider={p}
+                active={settings?.activeProviderId === p.id}
+                draggable={providers.length > 1}
+                dragging={dragProviderId === p.id}
+                onDisconnect={() => disconnect(p.id)}
+              />
+            </div>
           ))}
           <button
             type="button"
@@ -366,14 +436,31 @@ export default function Settings(): JSX.Element {
 function ProviderRow({
   provider,
   active,
+  draggable,
+  dragging,
   onDisconnect
 }: {
   provider: ConnectedProvider
   active: boolean
+  draggable: boolean
+  dragging: boolean
   onDisconnect: () => void
 }): JSX.Element {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border bg-surface p-3.5">
+    <div
+      className={cn(
+        'flex items-center gap-3 rounded-xl border border-border bg-surface p-3.5 transition',
+        dragging && 'cursor-grabbing',
+        draggable && !dragging && 'cursor-grab'
+      )}
+    >
+      <GripVertical
+        className={cn(
+          'h-4 w-4 shrink-0 text-text-subtle transition',
+          draggable ? 'opacity-70' : 'opacity-20'
+        )}
+        aria-hidden="true"
+      />
       <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-2">
         <ProviderLogo id={provider.id} name={provider.name} size={18} />
       </div>
