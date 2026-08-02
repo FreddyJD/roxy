@@ -27,6 +27,9 @@ export const CODEX_PROVIDER_ID = 'codex-subscription'
 /** Provider id for the Google/Gemini-subscription provider backed by the sidecar. */
 export const GEMINI_PROVIDER_ID = 'gemini-subscription'
 
+/** Provider id for the Claude/Anthropic-subscription provider backed by the sidecar. */
+export const CLAUDE_PROVIDER_ID = 'claude-subscription'
+
 /**
  * The upstreams Roxy can sign into through the sidecar.
  *
@@ -45,15 +48,26 @@ export const GEMINI_PROVIDER_ID = 'gemini-subscription'
  * written by the main-process service). Antigravity is the only Gemini login the
  * pinned binary can perform on its own.
  */
-export type CliProxyUpstream = 'codex' | 'antigravity'
+export type CliProxyUpstream = 'codex' | 'antigravity' | 'claude'
 
 /** Everything that differs between one sidecar-backed subscription and another. */
 export interface CliProxyUpstreamSpec {
-  /** The sidecar's key for this upstream (login route + auth-file `type`). */
+  /**
+   * The sidecar's key for this upstream: the `type`/provider it stamps on an
+   * auth file, and the filename prefix it writes. This is what identifies an
+   * account as belonging to this subscription.
+   */
   upstream: CliProxyUpstream
   /** The Roxy provider id it registers as. */
   providerId: string
-  /** Management API path that starts the OAuth flow. */
+  /**
+   * Management API path that starts the OAuth flow.
+   *
+   * Deliberately independent of `upstream`, because for Claude the two disagree:
+   * the route is `/anthropic-auth-url` while the credential it writes is typed
+   * `claude` (`claude-<email>.json`). Deriving one from the other would work for
+   * Codex, work for Antigravity, and silently break exactly one provider.
+   */
   authUrlPath: string
   /**
    * Loopback port the sidecar opens for this provider's OAuth callback.
@@ -96,6 +110,17 @@ export const CLIPROXY_UPSTREAMS: Record<string, CliProxyUpstreamSpec> = {
     // future relabel upstream doesn't silently empty the picker.
     modelOwners: ['antigravity', 'google'],
     accountLabel: 'Google'
+  },
+  [CLAUDE_PROVIDER_ID]: {
+    // Note the split spelling: the login route is ANTHROPIC-named, but the
+    // credential it writes is typed `claude`. Both are upstream's, and each is
+    // used exactly where upstream uses it.
+    upstream: 'claude',
+    providerId: CLAUDE_PROVIDER_ID,
+    authUrlPath: '/anthropic-auth-url',
+    callbackPort: 54545,
+    modelOwners: ['anthropic'],
+    accountLabel: 'Claude'
   }
 }
 

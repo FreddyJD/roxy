@@ -20,8 +20,9 @@ export type ProviderAuth =
   | 'none'
   /**
    * Signed in through the locally-managed CLIProxyAPI sidecar: one of the user's
-   * own paid subscriptions (ChatGPT/Codex, or Google's Gemini plan), brokered by
-   * a proxy bound to 127.0.0.1 that holds the OAuth tokens on disk itself.
+   * own paid subscriptions (ChatGPT/Codex, Google's Gemini plan, or Claude
+   * Pro/Max), brokered by a proxy bound to 127.0.0.1 that holds the OAuth
+   * tokens on disk itself.
    * Nothing lands in Roxy's own credential table, because there is no key to
    * store. One sidecar process serves every such provider.
    */

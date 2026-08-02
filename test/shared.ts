@@ -14,6 +14,7 @@ import {
 } from '../src/shared/agents'
 import { SEED_PROVIDERS, resolveSeed, isConnectableNow } from '../src/shared/providers'
 import {
+  CLAUDE_PROVIDER_ID,
   CLIPROXY_PROVIDER_IDS,
   CLIPROXY_UPSTREAMS,
   CLIPROXY_VERSION,
@@ -314,11 +315,74 @@ for (const providerId of CLIPROXY_PROVIDER_IDS) {
   check(`${providerId}: no hardcoded base URL`, seed?.baseURL === undefined)
   check(`${providerId}: connectable from onboarding`, isConnectableNow(seed!))
 }
-check('cliproxy: both subscriptions are registered', CLIPROXY_PROVIDER_IDS.length === 2)
+check('cliproxy: all three subscriptions are registered', CLIPROXY_PROVIDER_IDS.length === 3)
 check('cliproxy: codex is sidecar-backed', isCliProxyProvider(CODEX_PROVIDER_ID))
 check('cliproxy: gemini is sidecar-backed', isCliProxyProvider(GEMINI_PROVIDER_ID))
+check('cliproxy: claude is sidecar-backed', isCliProxyProvider(CLAUDE_PROVIDER_ID))
 check('cliproxy: a normal provider is not sidecar-backed', !isCliProxyProvider('openai'))
 check('cliproxy: unknown provider has no upstream spec', upstreamFor('openai') === undefined)
+
+// Every spec must be internally consistent and mutually distinct. Written as a
+// sweep rather than per-provider asserts so a FOURTH subscription is covered the
+// day it is added, instead of the day someone remembers to add checks for it.
+{
+  const specs = CLIPROXY_PROVIDER_IDS.map((id) => CLIPROXY_UPSTREAMS[id])
+  check(
+    'cliproxy: every spec is keyed by its own providerId',
+    CLIPROXY_PROVIDER_IDS.every((id) => CLIPROXY_UPSTREAMS[id].providerId === id)
+  )
+  check(
+    'cliproxy: every upstream key is unique',
+    new Set(specs.map((s) => s.upstream)).size === specs.length
+  )
+  // A shared callback port would mean one login silently swallowing another's
+  // OAuth redirect - the failure would look like a broken sign-in, not a clash.
+  check(
+    'cliproxy: every callback port is unique',
+    new Set(specs.map((s) => s.callbackPort)).size === specs.length
+  )
+  check(
+    'cliproxy: every auth route is unique',
+    new Set(specs.map((s) => s.authUrlPath)).size === specs.length
+  )
+  // The whole point of modelOwners: one /v1/models, partitioned. Any overlap
+  // means a model shows up under two providers and one of those routes is dead.
+  const allOwners = specs.flatMap((s) => s.modelOwners)
+  check('cliproxy: no model owner is claimed twice', new Set(allOwners).size === allOwners.length)
+  check(
+    'cliproxy: every spec declares at least one model owner',
+    specs.every((s) => s.modelOwners.length > 0)
+  )
+  check(
+    'cliproxy: every auth route is management-API shaped',
+    specs.every((s) => s.authUrlPath.startsWith('/') && s.authUrlPath.endsWith('-auth-url'))
+  )
+}
+
+// Claude is the one provider whose login ROUTE and credential TYPE disagree:
+// upstream serves it at /anthropic-auth-url but writes claude-<email>.json. Any
+// refactor that derives one from the other passes for Codex and Gemini and
+// breaks only here, so both halves are pinned explicitly.
+check(
+  'cliproxy: claude signs in through the anthropic route',
+  CLIPROXY_UPSTREAMS[CLAUDE_PROVIDER_ID].authUrlPath === '/anthropic-auth-url'
+)
+check(
+  'cliproxy: claude credentials are typed claude, not anthropic',
+  CLIPROXY_UPSTREAMS[CLAUDE_PROVIDER_ID].upstream === 'claude'
+)
+check(
+  'cliproxy: claude callback port is 54545',
+  CLIPROXY_UPSTREAMS[CLAUDE_PROVIDER_ID].callbackPort === 54545
+)
+check(
+  'cliproxy: claude claims anthropic-owned models',
+  CLIPROXY_UPSTREAMS[CLAUDE_PROVIDER_ID].modelOwners.includes('anthropic')
+)
+check(
+  'cliproxy: claude upstream maps back to its provider id',
+  providerIdForUpstream('claude') === CLAUDE_PROVIDER_ID
+)
 
 // The Gemini provider signs in through Antigravity, NOT the sidecar's `gemini`
 // key - that one means a Generative Language API key, i.e. the pay-per-token
@@ -383,9 +447,28 @@ check('cliproxy: unknown upstream maps to nothing', providerIdForUpstream('kimi'
     port: 8317,
     accounts: [
       { file: 'codex-a@example.com.json', type: 'codex' },
-      { file: 'antigravity-b@example.com.json', type: 'antigravity' }
+      { file: 'antigravity-b@example.com.json', type: 'antigravity' },
+      { file: 'claude-c@example.com.json', type: 'claude' }
     ]
   }
+  check(
+    'cliproxy: claude sees only its account',
+    accountsFor(mixed, CLAUDE_PROVIDER_ID).length === 1
+  )
+  check(
+    'cliproxy: claude sees the right account',
+    accountsFor(mixed, CLAUDE_PROVIDER_ID)[0].file === 'claude-c@example.com.json'
+  )
+  // Three subscriptions, one shared list: every account must land in exactly one
+  // provider's panel. A prefix that matched loosely would double-count here.
+  check(
+    'cliproxy: every account is claimed by exactly one provider',
+    mixed.accounts.every(
+      (a) =>
+        CLIPROXY_PROVIDER_IDS.filter((id) => accountsFor(mixed, id).some((x) => x.file === a.file))
+          .length === 1
+    )
+  )
   check('cliproxy: codex sees only its account', accountsFor(mixed, CODEX_PROVIDER_ID).length === 1)
   check(
     'cliproxy: codex sees the right account',

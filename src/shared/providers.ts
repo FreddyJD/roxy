@@ -408,6 +408,16 @@ export const SEED_PROVIDERS: SeedProvider[] = [
     notes:
       'Sign in with the Google account behind your Gemini plan and run on the Gemini models it already includes - no API key, no per-token billing. Uses the same local proxy (CLIProxyAPI) as the ChatGPT provider, keeping your tokens on this machine.'
   },
+  {
+    id: 'claude-subscription',
+    name: 'Claude (subscription)',
+    wire: 'openai-chat',
+    auth: 'subscription',
+    group: 'frontier',
+    recommended: true,
+    notes:
+      'Sign in with the Anthropic account behind your Claude Pro or Max plan and run on the Claude models it already includes - no API key, no per-token billing. Uses the same local proxy (CLIProxyAPI) as the other subscription providers, keeping your tokens on this machine.'
+  },
 
   // ---- G. GitHub ----
   {
@@ -489,6 +499,7 @@ export const FEATURED_PROVIDER_IDS = [
   'roxy',
   'codex-subscription',
   'gemini-subscription',
+  'claude-subscription',
   'openai',
   'anthropic',
   'google',
@@ -532,10 +543,10 @@ const SUPPORTED_WIRES: ProviderWire[] = ['openai-chat', 'openai', 'anthropic', '
  * Whether onboarding can fully connect this provider now.
  *
  * `api-key` / `none` connect inline from the key form. `device-flow` (Copilot)
- * and `subscription` (ChatGPT and Gemini, via the local CLIProxyAPI sidecar)
- * each render their own guided panel instead, so they are connectable too -
- * they just don't go through `providers.connect` with a pasted key. Everything
- * else is still "coming soon".
+ * and `subscription` (ChatGPT, Gemini and Claude, via the local CLIProxyAPI
+ * sidecar) each render their own guided panel instead, so they are connectable
+ * too - they just don't go through `providers.connect` with a pasted key.
+ * Everything else is still "coming soon".
  */
 export function isConnectableNow(seed: SeedProvider): boolean {
   if (!SUPPORTED_WIRES.includes(seed.wire)) return false

@@ -44,6 +44,13 @@ const COPY: Record<string, { title: string; blurb: string; cta: string; browser:
       'Sign in with the Google account behind your Gemini plan and run Roxy on the Gemini models it already includes — no API key and no per-token bill.',
     cta: 'Continue with Google',
     browser: 'Finish signing in with Google in your browser.'
+  },
+  'claude-subscription': {
+    title: 'Use your Claude subscription',
+    blurb:
+      'Sign in with the Anthropic account behind your Claude Pro or Max plan and run Roxy on the Claude models it already includes — no API key and no per-token bill.',
+    cta: 'Continue with Claude',
+    browser: 'Finish signing in with Claude in your browser.'
   }
 }
 

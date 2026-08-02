@@ -24,6 +24,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { app } from 'electron'
 import {
+  CLAUDE_PROVIDER_ID,
   CODEX_PROVIDER_ID,
   GEMINI_PROVIDER_ID,
   checksumsUrl,
@@ -197,6 +198,33 @@ async function main(): Promise<void> {
   })
   check('the gemini OAuth callback listener is accepting connections', geminiCallbackBound)
 
+  // ---- Claude, the third subscription on the same proxy ----
+  const claudeLogin = await startLogin(CLAUDE_PROVIDER_ID)
+  check(
+    'claude startLogin returns an Anthropic authorization URL',
+    claudeLogin.url.startsWith('https://claude.ai/') ||
+      claudeLogin.url.startsWith('https://console.anthropic.com/'),
+    claudeLogin.url.slice(0, 60)
+  )
+  check('the claude auth URL uses PKCE', claudeLogin.url.includes('code_challenge_method=S256'))
+  check('claude startLogin returns a state token', claudeLogin.state.length > 0)
+  check('the claude auth URL redirects to its own callback port', claudeLogin.url.includes('54545'))
+  const claudeCallbackBound = await new Promise<boolean>((resolve) => {
+    const socket = new net.Socket()
+    socket.setTimeout(2000)
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('timeout', () => {
+      socket.destroy()
+      resolve(false)
+    })
+    socket.once('error', () => resolve(false))
+    socket.connect(54545, '127.0.0.1')
+  })
+  check('the claude OAuth callback listener is accepting connections', claudeCallbackBound)
+
   // ---- teardown leaves the install (and would-be tokens) in place ----
   const stopped = await stop()
   check('stop() reports stopped, not not-installed', stopped.status === 'stopped')
@@ -226,16 +254,26 @@ async function main(): Promise<void> {
   const auths = path.join(tmp, 'cliproxy', 'auths')
   const codexToken = path.join(auths, 'codex-test.json')
   const geminiToken = path.join(auths, 'antigravity-test.json')
+  // Claude writes `claude-*.json`, NOT `anthropic-*.json` - the on-disk sweep
+  // matches the credential type, not the login route it came from.
+  const claudeToken = path.join(auths, 'claude-test.json')
   await fs.mkdir(auths, { recursive: true })
   await fs.writeFile(codexToken, '{"type":"codex"}')
   await fs.writeFile(geminiToken, '{"type":"antigravity"}')
+  await fs.writeFile(claudeToken, '{"type":"claude"}')
   check('a token file exists before disconnect', await exists(codexToken))
 
   await disconnect(CODEX_PROVIDER_ID)
   check("disconnect removes that provider's token file", !(await exists(codexToken)))
   check("disconnect leaves the other subscription's token file", await exists(geminiToken))
-  // The other subscription is still signed in, so the proxy has work to do.
+  check("disconnect leaves claude's token file", await exists(claudeToken))
+  // Other subscriptions are still signed in, so the proxy has work to do.
   check('disconnect keeps the proxy up for the other subscription', (await status()).port !== null)
+
+  await disconnect(CLAUDE_PROVIDER_ID)
+  check('disconnect removes the claude token file', !(await exists(claudeToken)))
+  check('disconnect leaves gemini alone', await exists(geminiToken))
+  check('the proxy is still up for the last subscription', (await status()).port !== null)
 
   await disconnect(GEMINI_PROVIDER_ID)
   check('disconnecting the last provider removes its token too', !(await exists(geminiToken)))
