@@ -28,6 +28,7 @@ import type { McpServerConfig } from './mcp'
 import type { CliProxyLoginResult, CliProxyState } from './cliproxy'
 import type { ForgeStatusView, ForgeHostView, ForgeKind } from './forge'
 import type { SessionConfigPatch } from './session-config'
+import type { ClipboardAction } from './context-menu'
 
 /** A configured MCP server merged with its live connection status (for Settings). */
 export interface McpServerView {
@@ -622,6 +623,25 @@ export interface RoxyApi {
   system: {
     getVersions(): Promise<AppVersions>
     openExternal(url: string): Promise<void>
+  }
+  /**
+   * The right-click editing menu's main-process half. The menu itself is drawn
+   * in React (see components/AppContextMenu.tsx) so it matches the app; these
+   * two calls are the parts a renderer cannot do for itself.
+   */
+  clipboard: {
+    /**
+     * Whether Paste has anything to offer. Read in main because
+     * `navigator.clipboard.read()` triggers a permission prompt and can reject,
+     * and a menu is not worth a permission dialog.
+     */
+    hasContent(): Promise<boolean>
+    /**
+     * Run one command against the focused element as a native editing command,
+     * so the field's own undo stack and input events stay consistent with what
+     * the keyboard shortcut would have done.
+     */
+    exec(action: ClipboardAction, linkUrl?: string): Promise<void>
   }
   updates: {
     /** Manually trigger an update check. */

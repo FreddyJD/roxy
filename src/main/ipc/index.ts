@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { CHANNELS } from '../../shared/ipc'
 import type { SessionConfigPatch } from '../../shared/session-config'
+import type { ClipboardAction } from '../../shared/context-menu'
+import { clipboardHasContent, runClipboardAction } from '../services/context-menu'
 import type {
   CreateChatInput,
   CreateLoopInput,
@@ -376,6 +378,18 @@ export function registerIpc(): void {
     chrome: process.versions.chrome,
     node: process.versions.node
   }))
+
+  // ---- clipboard / right-click editing menu ----
+  //
+  // The menu is drawn in the renderer (themed, portalled) but the two things it
+  // needs from the OS live here: whether Paste has anything to offer, and the
+  // commands themselves. Both act on `event.sender`, so a call from the app
+  // window and one from the browser chrome each hit their own webContents
+  // rather than a guessed "focused window".
+  ipcMain.handle(CHANNELS.clipboardHasContent, () => clipboardHasContent())
+  ipcMain.handle(CHANNELS.clipboardExec, (event, action: ClipboardAction, linkUrl?: string) =>
+    runClipboardAction(event.sender, action, linkUrl)
+  )
 
   // ---- auto-update (GitHub Releases) ----
   ipcMain.handle(CHANNELS.updateCheck, () => checkForUpdates())

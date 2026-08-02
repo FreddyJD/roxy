@@ -217,6 +217,11 @@ import {
   MAX_MENU_H,
   type Rect
 } from '../src/renderer/src/lib/anchor'
+import {
+  contextMenuItems as clipboardMenuItems,
+  hasUsableItems,
+  type ClickContext
+} from '../src/shared/context-menu'
 
 let pass = 0
 const fails: string[] = []
@@ -4224,6 +4229,163 @@ async function main(): Promise<void> {
   }
   check('context menu: never opens underneath the cursor', covered === 0, String(covered))
   check('context menu: never lands outside the viewport', offscreen === 0, String(offscreen))
+
+  // ---- the right-click editing menu (Cut/Copy/Paste/Select All) -----------
+  //
+  // The rules are small and the edge cases are all about NOT offering a row
+  // that would lie: a password field can't be copied, a read-only field can't
+  // be cut or pasted into, and an empty clipboard can't be pasted from.
+  const clickCtx = (over: Partial<ClickContext> = {}): ClickContext => ({
+    editable: false,
+    hasSelection: false,
+    clipboardHasContent: false,
+    ...over
+  })
+  const labels = (ctx: ClickContext, platform = 'win32'): string[] =>
+    clipboardMenuItems(ctx, platform).map((i) => i.label)
+  const enabledLabels = (ctx: ClickContext, platform = 'win32'): string[] =>
+    clipboardMenuItems(ctx, platform)
+      .filter((i) => i.enabled)
+      .map((i) => i.label)
+
+  const inField = clickCtx({ editable: true, hasSelection: true, clipboardHasContent: true })
+  check(
+    'clipboard menu: a field with a selection offers the full set',
+    labels(inField).join(',') === 'Cut,Copy,Paste,Select All',
+    labels(inField).join(',')
+  )
+  check(
+    'clipboard menu: all four are live when everything is available',
+    enabledLabels(inField).length === 4
+  )
+
+  // Rows keep their POSITIONS in a field even when unusable - a menu whose
+  // layout shifts with clipboard state can't be used from muscle memory.
+  const emptyClip = clickCtx({ editable: true, hasSelection: true })
+  check(
+    'clipboard menu: an empty clipboard greys Paste rather than removing it',
+    labels(emptyClip).join(',') === 'Cut,Copy,Paste,Select All' &&
+      enabledLabels(emptyClip).join(',') === 'Cut,Copy,Select All'
+  )
+  const noSelection = clickCtx({ editable: true, clipboardHasContent: true })
+  check(
+    'clipboard menu: no selection greys Cut and Copy but keeps Paste live',
+    labels(noSelection).length === 4 && enabledLabels(noSelection).join(',') === 'Paste,Select All'
+  )
+
+  // A read-only/disabled field: its text is worth copying, but nothing can be
+  // written to it.
+  const readOnly = clickCtx({
+    editable: true,
+    hasSelection: true,
+    clipboardHasContent: true,
+    readOnly: true
+  })
+  check(
+    'clipboard menu: a read-only field can be copied but not cut or pasted into',
+    enabledLabels(readOnly).join(',') === 'Copy,Select All',
+    enabledLabels(readOnly).join(',')
+  )
+
+  // Chromium refuses to cut or copy a password field, so offering those rows as
+  // live would be offering rows that silently do nothing.
+  const password = clickCtx({
+    editable: true,
+    hasSelection: true,
+    clipboardHasContent: true,
+    password: true
+  })
+  check(
+    'clipboard menu: a password field never offers Cut or Copy',
+    enabledLabels(password).join(',') === 'Paste,Select All',
+    enabledLabels(password).join(',')
+  )
+
+  // Outside a field there is nothing to cut or paste into, so the menu shrinks
+  // instead of showing rows that could never fire.
+  const pageSelection = clickCtx({ hasSelection: true, clipboardHasContent: true })
+  check(
+    'clipboard menu: a page selection offers Copy alone',
+    labels(pageSelection).join(',') === 'Copy'
+  )
+  check(
+    'clipboard menu: Select All is confined to fields',
+    !labels(pageSelection).includes('Select All')
+  )
+
+  // The empty case is the one every caller must handle: show NO menu, rather
+  // than a box of greyed-out words.
+  check(
+    'clipboard menu: a bare click with no selection yields nothing',
+    clipboardMenuItems(clickCtx({ clipboardHasContent: true }), 'win32').length === 0
+  )
+  check(
+    'clipboard menu: a link still earns a menu with no selection',
+    labels(clickCtx({ linkUrl: 'https://example.com' })).join(',') === 'Copy Link'
+  )
+  // An EMPTY field with an empty clipboard has genuinely nothing to offer:
+  // every row would be a no-op, including Select All. Callers use this to
+  // suppress the menu entirely rather than pop a box of greyed-out words.
+  check(
+    'clipboard menu: an empty field with an empty clipboard has no usable row',
+    !hasUsableItems(clipboardMenuItems(clickCtx({ editable: true, empty: true }), 'win32')) &&
+      hasUsableItems(clipboardMenuItems(inField, 'win32'))
+  )
+  check(
+    'clipboard menu: Select All is dead in an empty field, live otherwise',
+    !enabledLabels(clickCtx({ editable: true, empty: true })).includes('Select All') &&
+      enabledLabels(clickCtx({ editable: true })).includes('Select All')
+  )
+
+  // Accelerators are platform text AND real Electron accelerator strings, so
+  // the same list feeds the themed menu and the native one.
+  check(
+    'clipboard menu: mac accelerators say Cmd, everyone else says Ctrl',
+    clipboardMenuItems(inField, 'darwin')[0].accelerator === 'Cmd+X' &&
+      clipboardMenuItems(inField, 'linux')[0].accelerator === 'Ctrl+X'
+  )
+  // Group numbers drive the dividers; they must never go backwards or the
+  // renderer would draw a separator mid-list.
+  let outOfOrder = 0
+  for (const ctx of [inField, readOnly, password, pageSelection, emptyClip, noSelection]) {
+    const groups = clipboardMenuItems(ctx, 'darwin').map((i) => i.group)
+    for (let i = 1; i < groups.length; i++) if (groups[i] < groups[i - 1]) outOfOrder++
+  }
+  check('clipboard menu: groups are non-decreasing', outOfOrder === 0, String(outOfOrder))
+
+  // Exhaustive sweep of every context combination: a row must never be ENABLED
+  // when the thing it acts on is missing. This is the invariant that keeps the
+  // menu honest as the rules grow.
+  let dishonest = 0
+  for (const editable of [false, true]) {
+    for (const hasSelection of [false, true]) {
+      for (const clip of [false, true]) {
+        for (const readOnlyFlag of [false, true]) {
+          for (const pw of [false, true]) {
+            // An empty field can't also have a selection - skip the impossible
+            // combination rather than assert nonsense about it.
+            const empty = !hasSelection && editable && clip === false
+            const ctx = clickCtx({
+              editable,
+              hasSelection,
+              clipboardHasContent: clip,
+              readOnly: readOnlyFlag,
+              password: pw,
+              empty
+            })
+            for (const item of clipboardMenuItems(ctx, 'darwin')) {
+              if (!item.enabled) continue
+              if (item.action === 'cut' && (!hasSelection || readOnlyFlag || pw)) dishonest++
+              if (item.action === 'copy' && (!hasSelection || pw)) dishonest++
+              if (item.action === 'paste' && (!clip || readOnlyFlag)) dishonest++
+              if (item.action === 'selectAll' && (!editable || empty)) dishonest++
+            }
+          }
+        }
+      }
+    }
+  }
+  check('clipboard menu: no enabled row can ever be a no-op', dishonest === 0, String(dishonest))
 
   if (fails.length) {
     console.error(`\nSHARED FAILED \u2014 ${fails.length} failing: ${fails.join(', ')}`)

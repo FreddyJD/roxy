@@ -154,6 +154,11 @@ export const CHANNELS = {
   /** main -> renderer: auto-update status changes */
   updateStatus: 'update:status',
 
+  /** Does the system clipboard hold anything pasteable (text or an image)? */
+  clipboardHasContent: 'clipboard:has-content',
+  /** Run cut/copy/paste/selectAll as a real editing command on the sender. */
+  clipboardExec: 'clipboard:exec',
+
   browserOpen: 'browser:open',
   browserNavigate: 'browser:navigate',
   browserBack: 'browser:back',

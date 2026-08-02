@@ -20,6 +20,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { CHANNELS } from '../../shared/ipc'
 import type { BrowserState, BrowserTab } from '../../shared/api'
+import { attachNativeContextMenu } from './context-menu'
 
 /** Persisted session → cookies, localStorage and logins survive app restarts. */
 const PARTITION = 'persist:roxy-browser'
@@ -146,9 +147,13 @@ function ensureWindow(s: Session): BrowserWindow {
     pushTabs(s)
   })
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    void win.webContents.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/browser.html`).catch(() => undefined)
+    void win.webContents
+      .loadURL(`${process.env['ELECTRON_RENDERER_URL']}/browser.html`)
+      .catch(() => undefined)
   } else {
-    void win.webContents.loadFile(path.join(__dirname, '../renderer/browser.html')).catch(() => undefined)
+    void win.webContents
+      .loadFile(path.join(__dirname, '../renderer/browser.html'))
+      .catch(() => undefined)
   }
 
   win.on('resize', () => layout(s))
@@ -195,15 +200,16 @@ function createTab(s: Session, rawUrl?: string): string {
   s.activeTabId = id
   layout(s)
   pushTabs(s)
-  void view.webContents
-    .loadURL(rawUrl ? normalizeUrl(rawUrl) : HOME_URL)
-    .catch(() => undefined)
+  void view.webContents.loadURL(rawUrl ? normalizeUrl(rawUrl) : HOME_URL).catch(() => undefined)
   return id
 }
 
 /** Console + navigation listeners for a tab's page. */
 function wireTab(s: Session, tab: Tab): void {
   const wc = tab.view.webContents
+  // Real websites in a BrowserView have no React tree of ours to portal a
+  // themed menu into, so these pages get the NATIVE right-click editing menu.
+  attachNativeContextMenu(wc)
   wc.on('console-message', (_e, level, message, line, sourceId) => {
     s.consoleLog.push({ level, message, line, url: sourceId, ts: Date.now() })
     if (s.consoleLog.length > MAX_CONSOLE) s.consoleLog = s.consoleLog.slice(-MAX_CONSOLE)
@@ -349,9 +355,11 @@ export async function getHtml(selector?: string, key: string = DEFAULT_KEY): Pro
   return typeof html === 'string' ? html : String(html)
 }
 
-export function getConsole(
-  key: string = DEFAULT_KEY
-): { entries: ConsoleEntry[]; errors: number; warnings: number } {
+export function getConsole(key: string = DEFAULT_KEY): {
+  entries: ConsoleEntry[]
+  errors: number
+  warnings: number
+} {
   const s = peek(key)
   const log = s?.consoleLog ?? []
   const errors = log.filter((e) => e.level >= 3).length
@@ -369,7 +377,8 @@ export function currentUrl(key: string = DEFAULT_KEY): string | null {
 export function close(key: string = DEFAULT_KEY): void {
   const s = sessions.get(key)
   if (!s) return
-  if (s.win && !s.win.isDestroyed()) s.win.close() // fires 'closed' → sessions.delete
+  if (s.win && !s.win.isDestroyed())
+    s.win.close() // fires 'closed' → sessions.delete
   else sessions.delete(key)
 }
 
@@ -520,7 +529,11 @@ export async function scroll(
 }
 
 /** Type text into an input/textarea/contenteditable matching a selector. */
-export async function type(selector: string, text: string, key: string = DEFAULT_KEY): Promise<string> {
+export async function type(
+  selector: string,
+  text: string,
+  key: string = DEFAULT_KEY
+): Promise<string> {
   if (!selector.trim()) return 'browser_type: missing "selector"'
   const code = `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return 'not-found'; el.focus(); if ('value' in el) { el.value = ${JSON.stringify(text)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } else { el.textContent = ${JSON.stringify(text)}; } return 'ok'; })()`
   const r = await pageContents(key).executeJavaScript(code, true)

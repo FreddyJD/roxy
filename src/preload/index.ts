@@ -86,6 +86,10 @@ const roxy: RoxyApi = {
     getVersions: () => ipcRenderer.invoke(CHANNELS.systemGetVersions),
     openExternal: (url) => ipcRenderer.invoke(CHANNELS.systemOpenExternal, url)
   },
+  clipboard: {
+    hasContent: () => ipcRenderer.invoke(CHANNELS.clipboardHasContent),
+    exec: (action, linkUrl) => ipcRenderer.invoke(CHANNELS.clipboardExec, action, linkUrl)
+  },
   updates: {
     check: () => ipcRenderer.invoke(CHANNELS.updateCheck),
     install: () => ipcRenderer.invoke(CHANNELS.updateInstall),
