@@ -316,8 +316,14 @@ async function downloadAndExtract(asset: string, expected: string): Promise<void
     const total = Number(res.headers.get('content-length') || 0)
     let received = 0
     const out = createWriteStream(archive)
+    // Hash the stream as well as the file. Verification uses the DISK hash (the
+    // bytes that get executed), but knowing whether the two agree is what
+    // separates "the network sent us something else" from "something changed the
+    // file after we wrote it" - and we were guessing between those.
+    const streamHash = createHash('sha256')
     const source = Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0])
     source.on('data', (chunk: Buffer) => {
+      streamHash.update(chunk)
       received += chunk.length
       if (total > 0) {
         // Cap at 99: the last percent is extraction, so the bar doesn't sit at
@@ -339,7 +345,14 @@ async function downloadAndExtract(asset: string, expected: string): Promise<void
     const written = (await fsp.stat(archive)).size
     const actual = await sha256OfFile(archive)
     if (actual !== expected) {
-      throw new Error(await describeBadDownload(archive, written, total, received))
+      throw new Error(
+        await describeBadDownload(archive, written, total, received, {
+          expected,
+          actual,
+          stream: streamHash.digest('hex'),
+          asset
+        })
+      )
     }
 
     // Extract into a temp dir, then swap it into place, so an interrupted
@@ -397,7 +410,8 @@ export async function describeBadDownload(
   archive: string,
   written: number,
   total: number,
-  received: number
+  received: number,
+  digests?: { expected: string; actual: string; stream: string; asset: string }
 ): Promise<string> {
   const head = Buffer.alloc(512)
   let sniffed = 0
@@ -460,17 +474,45 @@ export async function describeBadDownload(
     )
   }
 
-  // Full length, correct shape, wrong hash. Everything structural checks out, so
-  // report the evidence instead of a verdict: whatever is rewriting the file is
-  // doing it competently, and the next person to debug this needs the actual
-  // numbers rather than another confident-sounding sentence.
-  return (
-    'The downloaded file failed its integrity check. It is the right size and a valid ' +
-    `archive, but its contents differ from the published release (${written} bytes, ` +
-    `starts ${head4(head)}). Something on the network is rewriting the file — a proxy, VPN, or ` +
-    'security product doing TLS inspection is the usual cause. "Install from a file" below ' +
-    'bypasses the network entirely.'
-  )
+  // Full length, correct shape, wrong hash.
+  //
+  // The previous version of this branch announced "something on the network is
+  // rewriting the file". On a real report that turned out to be false: the bytes
+  // were the correct published asset. Blaming the network was a third guess in a
+  // row, so this now reports what it can actually prove.
+  if (digests) {
+    // The archive matches a DIFFERENT platform's release. That is an asset
+    // selection bug on our side, not a network problem, and it is worth naming
+    // precisely because the file is otherwise perfectly valid.
+    const matched = Object.entries(PINNED_SHA256).find(([, d]) => d === digests.actual)
+    if (matched) {
+      return (
+        `Downloaded ${matched[0]} but verified it against ${digests.asset}. ` +
+        'This is a bug in Roxy - the wrong build was selected for this machine.'
+      )
+    }
+
+    // The bytes we received and the bytes on disk disagree: something altered
+    // the file locally, after the transfer.
+    if (digests.stream !== digests.actual) {
+      return (
+        'The download was altered after it arrived (the bytes received and the bytes ' +
+        'written to disk differ). Antivirus or endpoint-security software is the usual ' +
+        'cause on this machine.'
+      )
+    }
+
+    // Received and written agree, and match no other known release: what the
+    // server sent genuinely is not the published file.
+    return (
+      `The downloaded file does not match the published ${digests.asset} ` +
+      `(${written} bytes, starts ${head4(head)}, sha256 ${digests.actual.slice(0, 12)}…, ` +
+      `expected ${digests.expected.slice(0, 12)}…). "Install from a file" below bypasses ` +
+      'the download entirely.'
+    )
+  }
+
+  return `The downloaded file failed its integrity check (${written} bytes, starts ${head4(head)}).`
 }
 
 /** sha256 of a file's actual contents on disk. */
