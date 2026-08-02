@@ -301,9 +301,57 @@ async function main(): Promise<void> {
     // Full length, right shape, wrong hash.
     check(
       'intact-but-wrong-hash reports evidence, not just a verdict',
-      /contents differ from the published release/.test(
-        await describeBadDownload(zip, 1004, 1004, 1004)
-      )
+      /failed its integrity check/.test(await describeBadDownload(zip, 1004, 1004, 1004))
+    )
+
+    // With digests available it must distinguish the three real causes rather
+    // than blaming the network for all of them - which is what a live report
+    // proved it was doing.
+    const D = (over: Record<string, string>): Record<string, string> => ({
+      expected: 'a'.repeat(64),
+      actual: 'b'.repeat(64),
+      stream: 'b'.repeat(64),
+      asset: 'CLIProxyAPI_7.2.112_darwin_aarch64.tar.gz',
+      ...over
+    })
+
+    // (a) We downloaded a real release, just the wrong one. Our bug, not theirs.
+    const wrongAsset = await describeBadDownload(
+      zip,
+      1004,
+      1004,
+      1004,
+      D({
+        actual: PINNED_SHA256['CLIProxyAPI_7.2.112_linux_amd64.tar.gz'],
+        stream: PINNED_SHA256['CLIProxyAPI_7.2.112_linux_amd64.tar.gz']
+      }) as never
+    )
+    check(
+      'a wrong-platform archive is named as a Roxy bug',
+      /bug in Roxy/.test(wrongAsset),
+      wrongAsset
+    )
+    check('...and it does not blame the network', !/network/i.test(wrongAsset), wrongAsset)
+
+    // (b) Received and written disagree -> altered locally after transfer.
+    const localAlt = await describeBadDownload(
+      zip,
+      1004,
+      1004,
+      1004,
+      D({ stream: 'c'.repeat(64) }) as never
+    )
+    check(
+      'a stream/disk mismatch is named as local alteration',
+      /altered after it arrived/.test(localAlt)
+    )
+
+    // (c) Consistent bytes that match nothing known -> genuinely not the release.
+    const notRelease = await describeBadDownload(zip, 1004, 1004, 1004, D({}) as never)
+    check('otherwise it reports both hashes', /sha256 bbbbbbbbbbbb/.test(notRelease), notRelease)
+    check(
+      'the three digest cases are distinguishable',
+      new Set([wrongAsset, localAlt, notRelease]).size === 3
     )
 
     // If several shapes collapse to one message this is theatre, not diagnosis.
