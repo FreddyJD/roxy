@@ -36,7 +36,8 @@ const roxy: RoxyApi = {
   providers: {
     listConnected: () => ipcRenderer.invoke(CHANNELS.providersList),
     connect: (input) => ipcRenderer.invoke(CHANNELS.providersConnect, input),
-    disconnect: (id) => ipcRenderer.invoke(CHANNELS.providersDisconnect, id)
+    disconnect: (id) => ipcRenderer.invoke(CHANNELS.providersDisconnect, id),
+    reorder: (ids) => ipcRenderer.invoke(CHANNELS.providersReorder, ids)
   },
   chats: {
     list: () => ipcRenderer.invoke(CHANNELS.chatsList),
@@ -181,7 +182,8 @@ const roxy: RoxyApi = {
     }
   },
   models: {
-    list: (providerId) => ipcRenderer.invoke(CHANNELS.modelsList, providerId)
+    list: (providerId) => ipcRenderer.invoke(CHANNELS.modelsList, providerId),
+    recent: (providerId) => ipcRenderer.invoke(CHANNELS.modelsRecent, providerId)
   },
   context: {
     compact: (chatId, providerId, model) =>

@@ -14,6 +14,7 @@ export const CHANNELS = {
   providersList: 'providers:listConnected',
   providersConnect: 'providers:connect',
   providersDisconnect: 'providers:disconnect',
+  providersReorder: 'providers:reorder',
 
   chatsList: 'chats:list',
   chatsCreate: 'chats:create',
@@ -138,6 +139,7 @@ export const CHANNELS = {
   subagentCancel: 'subagent:cancel',
 
   modelsList: 'models:list',
+  modelsRecent: 'models:recent',
 
   contextCompact: 'context:compact',
   /** Load project instruction files (AGENTS.md/CLAUDE.md/CONTEXT.md) for a cwd. */
