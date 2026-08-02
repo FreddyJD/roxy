@@ -14,13 +14,20 @@ import {
 } from '../src/shared/agents'
 import { SEED_PROVIDERS, resolveSeed, isConnectableNow } from '../src/shared/providers'
 import {
+  CLIPROXY_PROVIDER_IDS,
+  CLIPROXY_UPSTREAMS,
   CLIPROXY_VERSION,
   CODEX_PROVIDER_ID,
+  GEMINI_PROVIDER_ID,
   IDLE_CLIPROXY_STATE,
+  accountsFor,
+  isCliProxyProvider,
   isUsable,
+  providerIdForUpstream,
   releaseAsset,
   releaseAssetUrl,
-  sha256For
+  sha256For,
+  upstreamFor
 } from '../src/shared/cliproxy'
 import { pickDefaultModel } from '../src/shared/models'
 import { randomSlug, uniqueSlug, slugToBranchSegment, isGeneratedSlug } from '../src/shared/slugs'
@@ -294,15 +301,127 @@ check(
 )
 check('isConnectableNow returns boolean', typeof isConnectableNow(SEED_PROVIDERS[0]) === 'boolean')
 
-// ---- codex subscription (CLIProxyAPI sidecar) ----
-const codexSeed = SEED_PROVIDERS.find((p) => p.id === CODEX_PROVIDER_ID)
-check('codex: seeded', !!codexSeed)
-check('codex: speaks the openai-chat wire', codexSeed?.wire === 'openai-chat')
-check('codex: uses the subscription auth flow', codexSeed?.auth === 'subscription')
-// The base URL is a loopback port chosen at start time, so a fixed one in the
-// seed would be a lie that survives long enough to route a real request.
-check('codex: no hardcoded base URL', codexSeed?.baseURL === undefined)
-check('codex: connectable from onboarding', isConnectableNow(codexSeed!))
+// ---- subscription providers (CLIProxyAPI sidecar) ----
+// Both are seeded the same way, so assert them the same way rather than writing
+// the Codex checks twice with a different noun.
+for (const providerId of CLIPROXY_PROVIDER_IDS) {
+  const seed = SEED_PROVIDERS.find((p) => p.id === providerId)
+  check(`${providerId}: seeded`, !!seed)
+  check(`${providerId}: speaks the openai-chat wire`, seed?.wire === 'openai-chat')
+  check(`${providerId}: uses the subscription auth flow`, seed?.auth === 'subscription')
+  // The base URL is a loopback port chosen at start time, so a fixed one in the
+  // seed would be a lie that survives long enough to route a real request.
+  check(`${providerId}: no hardcoded base URL`, seed?.baseURL === undefined)
+  check(`${providerId}: connectable from onboarding`, isConnectableNow(seed!))
+}
+check('cliproxy: both subscriptions are registered', CLIPROXY_PROVIDER_IDS.length === 2)
+check('cliproxy: codex is sidecar-backed', isCliProxyProvider(CODEX_PROVIDER_ID))
+check('cliproxy: gemini is sidecar-backed', isCliProxyProvider(GEMINI_PROVIDER_ID))
+check('cliproxy: a normal provider is not sidecar-backed', !isCliProxyProvider('openai'))
+check('cliproxy: unknown provider has no upstream spec', upstreamFor('openai') === undefined)
+
+// The Gemini provider signs in through Antigravity, NOT the sidecar's `gemini`
+// key - that one means a Generative Language API key, i.e. the pay-per-token
+// path this feature exists to avoid. Pinning it here because it is the single
+// least obvious decision in the whole feature.
+check(
+  'cliproxy: gemini uses the antigravity upstream',
+  CLIPROXY_UPSTREAMS[GEMINI_PROVIDER_ID].upstream === 'antigravity'
+)
+check(
+  'cliproxy: gemini hits the antigravity auth route',
+  CLIPROXY_UPSTREAMS[GEMINI_PROVIDER_ID].authUrlPath === '/antigravity-auth-url'
+)
+check(
+  'cliproxy: codex hits the codex auth route',
+  CLIPROXY_UPSTREAMS[CODEX_PROVIDER_ID].authUrlPath === '/codex-auth-url'
+)
+// The callback ports are fixed by each upstream's registered redirect URI. If
+// they ever collided, one login would silently steal the other's callback.
+check(
+  'cliproxy: callback ports differ per upstream',
+  CLIPROXY_UPSTREAMS[CODEX_PROVIDER_ID].callbackPort !==
+    CLIPROXY_UPSTREAMS[GEMINI_PROVIDER_ID].callbackPort
+)
+check(
+  'cliproxy: codex callback port is 1455',
+  CLIPROXY_UPSTREAMS[CODEX_PROVIDER_ID].callbackPort === 1455
+)
+check(
+  'cliproxy: antigravity callback port is 51121',
+  CLIPROXY_UPSTREAMS[GEMINI_PROVIDER_ID].callbackPort === 51121
+)
+check(
+  'cliproxy: upstream key maps back to its provider id',
+  providerIdForUpstream('antigravity') === GEMINI_PROVIDER_ID
+)
+check('cliproxy: unknown upstream maps to nothing', providerIdForUpstream('kimi') === undefined)
+
+// Model partitioning. One sidecar serves ONE /v1/models for every signed-in
+// subscription, so the owner sets must not overlap - if they did, a model would
+// appear under both providers and one of those routes would be dead.
+{
+  const codexOwners = new Set(CLIPROXY_UPSTREAMS[CODEX_PROVIDER_ID].modelOwners)
+  const overlap = CLIPROXY_UPSTREAMS[GEMINI_PROVIDER_ID].modelOwners.filter((o) =>
+    codexOwners.has(o)
+  )
+  check('cliproxy: model owners do not overlap between upstreams', overlap.length === 0)
+  check('cliproxy: codex claims openai-owned models', codexOwners.has('openai'))
+  check(
+    'cliproxy: gemini claims antigravity-owned models',
+    CLIPROXY_UPSTREAMS[GEMINI_PROVIDER_ID].modelOwners.includes('antigravity')
+  )
+}
+
+// Account partitioning. The state carries EVERY upstream's accounts in one
+// list, so a panel that forgot to filter would show the other subscription as
+// its own - and `isUsable` would greenlight a request that cannot be served.
+{
+  const mixed = {
+    ...IDLE_CLIPROXY_STATE,
+    status: 'running' as const,
+    port: 8317,
+    accounts: [
+      { file: 'codex-a@example.com.json', type: 'codex' },
+      { file: 'antigravity-b@example.com.json', type: 'antigravity' }
+    ]
+  }
+  check('cliproxy: codex sees only its account', accountsFor(mixed, CODEX_PROVIDER_ID).length === 1)
+  check(
+    'cliproxy: codex sees the right account',
+    accountsFor(mixed, CODEX_PROVIDER_ID)[0].file === 'codex-a@example.com.json'
+  )
+  check(
+    'cliproxy: gemini sees only its account',
+    accountsFor(mixed, GEMINI_PROVIDER_ID).length === 1
+  )
+  check(
+    'cliproxy: gemini sees the right account',
+    accountsFor(mixed, GEMINI_PROVIDER_ID)[0].file === 'antigravity-b@example.com.json'
+  )
+  check(
+    'cliproxy: a non-subscription provider owns no accounts',
+    accountsFor(mixed, 'openai').length === 0
+  )
+  // The auth-dir-scan fallback reports no type at all, so the filename prefix
+  // has to carry it - otherwise accounts vanish whenever the runtime auth
+  // manager is still coming up.
+  const untyped = {
+    ...mixed,
+    accounts: [{ file: 'antigravity-c@example.com.json', type: 'unknown' }]
+  }
+  check(
+    'cliproxy: falls back to the filename prefix when type is unknown',
+    accountsFor(untyped, GEMINI_PROVIDER_ID).length === 1
+  )
+  // Signed into ChatGPT only: Gemini must NOT report itself as usable.
+  const codexOnly = { ...mixed, accounts: [mixed.accounts[0]] }
+  check('cliproxy: codex-only state is usable for codex', isUsable(codexOnly, CODEX_PROVIDER_ID))
+  check(
+    'cliproxy: codex-only state is NOT usable for gemini',
+    !isUsable(codexOnly, GEMINI_PROVIDER_ID)
+  )
+}
 
 // Asset naming: a wrong name is a 404 the user only discovers mid-download.
 check(

@@ -1,21 +1,121 @@
 /**
  * Shared contract for the CLIProxyAPI sidecar — the local process that lets a
- * user spend their *own* ChatGPT/Codex subscription from inside Roxy.
+ * user spend their *own* AI subscriptions from inside Roxy.
  *
- * Why a sidecar at all: Codex's subscription tier isn't reachable with an API
- * key. It speaks the Responses API behind an OAuth login bound to the official
- * Codex client id, refreshes its own tokens, and expects a specific request
- * shape. Re-implementing all of that inside Roxy would mean shipping (and
- * chasing) someone else's undocumented protocol. CLIProxyAPI already does it and
- * exposes the result as a plain OpenAI-compatible endpoint on 127.0.0.1, which
- * is a shape Roxy already drives everywhere else. So Roxy manages a process
- * instead of a protocol.
+ * Why a sidecar at all: these subscription tiers aren't reachable with an API
+ * key. Codex speaks the Responses API behind an OAuth login bound to the
+ * official Codex client id; Google's Gemini subscription sits behind its own
+ * Google OAuth client and a Cloud Code endpoint. Both refresh their own tokens
+ * and expect a specific request shape. Re-implementing all of that inside Roxy
+ * would mean shipping (and chasing) someone else's undocumented protocol.
+ * CLIProxyAPI already does it and exposes the result as a plain
+ * OpenAI-compatible endpoint on 127.0.0.1, which is a shape Roxy already drives
+ * everywhere else. So Roxy manages a process instead of a protocol.
+ *
+ * ONE process serves EVERY signed-in subscription. That is the fact that shapes
+ * this module: a single install, a single port, a single `/v1/models` — but
+ * per-upstream accounts, logins, and model lists. Anything keyed globally that
+ * should have been keyed per upstream shows up as one provider claiming the
+ * other's accounts or models.
  *
  * This module is isomorphic: types + pure helpers only, no Node or Electron.
  */
 
 /** Provider id for the Codex-subscription provider backed by the sidecar. */
 export const CODEX_PROVIDER_ID = 'codex-subscription'
+
+/** Provider id for the Google/Gemini-subscription provider backed by the sidecar. */
+export const GEMINI_PROVIDER_ID = 'gemini-subscription'
+
+/**
+ * The upstreams Roxy can sign into through the sidecar.
+ *
+ * These are the sidecar's OWN provider keys, not Roxy provider ids: each names
+ * a Management API login route and appears as the `type` on the auth files that
+ * login writes. Keeping the two namespaces distinct matters, because one
+ * process serves both and every per-account operation (sign out, disconnect,
+ * model filtering) has to be told WHICH subscription it applies to.
+ *
+ * `antigravity` is Google's OAuth-backed Gemini subscription. It is deliberately
+ * NOT the sidecar's `gemini` key: that one means a Generative Language API key,
+ * which is the pay-per-token path this whole feature exists to avoid. The pinned
+ * release also publishes no `gemini-auth-url` route — upstream ships Gemini CLI
+ * as a separate native plugin, and loading third-party plugins would mean
+ * turning on a plugin host we keep switched off on purpose (see the config
+ * written by the main-process service). Antigravity is the only Gemini login the
+ * pinned binary can perform on its own.
+ */
+export type CliProxyUpstream = 'codex' | 'antigravity'
+
+/** Everything that differs between one sidecar-backed subscription and another. */
+export interface CliProxyUpstreamSpec {
+  /** The sidecar's key for this upstream (login route + auth-file `type`). */
+  upstream: CliProxyUpstream
+  /** The Roxy provider id it registers as. */
+  providerId: string
+  /** Management API path that starts the OAuth flow. */
+  authUrlPath: string
+  /**
+   * Loopback port the sidecar opens for this provider's OAuth callback.
+   *
+   * Fixed by the redirect URI registered with the upstream, so it is not
+   * negotiable. Checking it is free BEFORE opening a browser, and that check is
+   * the difference between a clear error and a failure that only lands after the
+   * user has already signed in and approved consent.
+   */
+  callbackPort: number
+  /**
+   * `owned_by` values on `/v1/models` that belong to this upstream.
+   *
+   * The sidecar serves every signed-in subscription from ONE `/v1/models`, so
+   * without this a user signed into both would see Gemini models listed under
+   * the ChatGPT provider and vice versa — and picking one would route the
+   * request to a subscription that cannot serve it.
+   */
+  modelOwners: string[]
+  /** What to call the account in UI copy ("your ChatGPT account"). */
+  accountLabel: string
+}
+
+/** The sidecar-backed subscriptions, keyed by Roxy provider id. */
+export const CLIPROXY_UPSTREAMS: Record<string, CliProxyUpstreamSpec> = {
+  [CODEX_PROVIDER_ID]: {
+    upstream: 'codex',
+    providerId: CODEX_PROVIDER_ID,
+    authUrlPath: '/codex-auth-url',
+    callbackPort: 1455,
+    modelOwners: ['openai'],
+    accountLabel: 'ChatGPT'
+  },
+  [GEMINI_PROVIDER_ID]: {
+    upstream: 'antigravity',
+    providerId: GEMINI_PROVIDER_ID,
+    authUrlPath: '/antigravity-auth-url',
+    callbackPort: 51121,
+    // The catalog tags these models `antigravity`; `google` is accepted too so a
+    // future relabel upstream doesn't silently empty the picker.
+    modelOwners: ['antigravity', 'google'],
+    accountLabel: 'Google'
+  }
+}
+
+/** Every sidecar-backed provider id, for callers that must handle both. */
+export const CLIPROXY_PROVIDER_IDS = Object.keys(CLIPROXY_UPSTREAMS)
+
+/** Whether a provider id is served by the sidecar. */
+export function isCliProxyProvider(providerId: string): boolean {
+  return providerId in CLIPROXY_UPSTREAMS
+}
+
+/** The spec for a provider id, or undefined when it isn't sidecar-backed. */
+export function upstreamFor(providerId: string): CliProxyUpstreamSpec | undefined {
+  return CLIPROXY_UPSTREAMS[providerId]
+}
+
+/** The Roxy provider id for a sidecar upstream key, or undefined. */
+export function providerIdForUpstream(upstream: string): string | undefined {
+  return CLIPROXY_PROVIDER_IDS.find((id) => CLIPROXY_UPSTREAMS[id].upstream === upstream)
+}
 
 /**
  * The release the app pins. Upgrading is a deliberate, reviewed act: the sidecar
@@ -49,13 +149,13 @@ export type CliProxyStatus =
 export interface CliProxyAccount {
   /** Auth filename on disk (`codex-user@example.com.json`) — the stable id. */
   file: string
-  /** Which upstream it authenticates against (`codex`, `claude`, …). */
+  /** Which upstream it authenticates against (`codex`, `antigravity`, …). */
   type: string
   /** Account email, when the token file records one. */
   email?: string
 }
 
-/** Everything the renderer needs to render the Codex panel. */
+/** Everything the renderer needs to render a subscription panel. */
 export interface CliProxyState {
   status: CliProxyStatus
   /** Loopback port the proxy listens on, once it's up. */
@@ -64,7 +164,12 @@ export interface CliProxyState {
   progress: number
   /** Human-readable failure for the `error` status. */
   error?: string
-  /** Signed-in accounts (empty until someone completes a login). */
+  /**
+   * Signed-in accounts across EVERY upstream (empty until someone completes a
+   * login). Per-provider surfaces filter this with `accountsFor`, rather than
+   * the service keeping one list per upstream: the sidecar reports them in a
+   * single call, and splitting them here keeps a single source of truth.
+   */
   accounts: CliProxyAccount[]
   /** Pinned release the local install corresponds to. */
   version: string
@@ -93,6 +198,21 @@ export const IDLE_CLIPROXY_STATE: CliProxyState = {
   accounts: [],
   version: CLIPROXY_VERSION,
   rev: 0
+}
+
+/**
+ * The accounts belonging to one provider.
+ *
+ * Matching is on the auth file's `type`, which the sidecar sets to the upstream
+ * key. The filename prefix is used only as a fallback, for the auth-dir-scan
+ * response shape that reports no type at all.
+ */
+export function accountsFor(state: CliProxyState, providerId: string): CliProxyAccount[] {
+  const spec = upstreamFor(providerId)
+  if (!spec) return []
+  return state.accounts.filter(
+    (a) => a.type === spec.upstream || a.file.startsWith(`${spec.upstream}-`)
+  )
 }
 
 /**
@@ -155,11 +275,18 @@ export function sha256For(checksums: string, asset: string): string | null {
 }
 
 /**
- * Whether the sidecar can serve requests right now. `starting` is deliberately
- * excluded: the port is bound but the proxy may not have loaded its credentials
- * yet, and a request sent into that window fails in a way that looks like a
- * broken login rather than a race.
+ * Whether the sidecar can serve requests for a provider right now.
+ *
+ * `starting` is deliberately excluded: the port is bound but the proxy may not
+ * have loaded its credentials yet, and a request sent into that window fails in
+ * a way that looks like a broken login rather than a race.
+ *
+ * The account check is per-provider. A running proxy with only a ChatGPT login
+ * cannot serve Gemini, so a global "any account" test would report the Gemini
+ * provider as usable and route a request that is guaranteed to fail.
  */
-export function isUsable(state: CliProxyState): boolean {
-  return state.status === 'running' && state.port !== null && state.accounts.length > 0
+export function isUsable(state: CliProxyState, providerId = CODEX_PROVIDER_ID): boolean {
+  return (
+    state.status === 'running' && state.port !== null && accountsFor(state, providerId).length > 0
+  )
 }

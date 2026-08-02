@@ -638,21 +638,29 @@ export interface RoxyApi {
     poll(deviceCode: string, interval: number): Promise<ConnectedProvider>
   }
   /**
-   * The CLIProxyAPI sidecar behind the ChatGPT/Codex subscription provider. The
-   * main process owns the binary + process; the renderer only drives sign-in
-   * and reflects status.
+   * The CLIProxyAPI sidecar behind the subscription providers (ChatGPT/Codex and
+   * Google Gemini). The main process owns the binary + process; the renderer
+   * only drives sign-in and reflects status.
+   *
+   * ONE process serves both providers, so `status()` is global while everything
+   * account-shaped is scoped by provider id. `accountsFor(state, providerId)`
+   * from `@shared/cliproxy` is how a panel narrows the shared state to its own.
    */
   cliproxy: {
     /** Current install/run state, reconciled against what is on disk. */
     status(): Promise<CliProxyState>
     /**
-     * Run the whole Codex sign-in: install + start the sidecar if needed, open
-     * the ChatGPT OAuth page in the user's browser, wait for the callback, then
+     * Run one provider's whole sign-in: install + start the sidecar if needed,
+     * open its OAuth page in the user's browser, wait for the callback, then
      * connect the provider. Resolves when the flow reaches a terminal state.
      */
-    login(): Promise<CliProxyLoginResult>
-    /** Sign one account out by deleting its token file. */
-    signOut(file: string): Promise<CliProxyState>
+    login(providerId: string): Promise<CliProxyLoginResult>
+    /**
+     * Sign one account out by deleting its token file. The provider id is what
+     * decides whether that was its LAST account, and so whether the provider row
+     * should be dropped.
+     */
+    signOut(providerId: string, file: string): Promise<CliProxyState>
     /** Stop the local proxy (keeps the install and the signed-in accounts). */
     stop(): Promise<CliProxyState>
     /**

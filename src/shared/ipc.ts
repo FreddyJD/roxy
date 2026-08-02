@@ -64,7 +64,10 @@ export const CHANNELS = {
   copilotStart: 'copilot:start',
   copilotPoll: 'copilot:poll',
 
-  /** CLIProxyAPI sidecar: use a ChatGPT/Codex subscription via a local proxy. */
+  /**
+   * CLIProxyAPI sidecar: use a ChatGPT/Codex or Google Gemini subscription via a
+   * local proxy. Every call is scoped by provider id - one process serves both.
+   */
   cliproxyStatus: 'cliproxy:status',
   cliproxyLogin: 'cliproxy:login',
   cliproxySignOut: 'cliproxy:signOut',

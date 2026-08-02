@@ -1,13 +1,22 @@
 /**
- * CLIProxyAPI sidecar — lets a user spend their own ChatGPT/Codex subscription
- * inside Roxy.
+ * CLIProxyAPI sidecar — lets a user spend their own AI subscriptions (ChatGPT /
+ * Codex, and Google's Gemini plan) inside Roxy.
  *
  * The shape of the thing: Roxy downloads a pinned CLIProxyAPI release into
  * userData, writes a config that binds it to 127.0.0.1 on a free port, spawns
- * it, and drives its Management API to run the Codex OAuth login. From then on
- * the sidecar is just an OpenAI-compatible endpoint at
- * http://127.0.0.1:<port>/v1 — a wire Roxy already speaks — and the provider row
- * for it looks like any other `openai-chat` provider.
+ * it, and drives its Management API to run an OAuth login. From then on the
+ * sidecar is just an OpenAI-compatible endpoint at http://127.0.0.1:<port>/v1 —
+ * a wire Roxy already speaks — and the provider row for it looks like any other
+ * `openai-chat` provider.
+ *
+ * ONE process backs EVERY subscription. Running a second copy to serve a second
+ * login would double the download, the memory, and the number of things that can
+ * crash, for no gain: the sidecar is explicitly multi-account and multi-upstream.
+ * What that buys in simplicity it charges in care — the install, the port, and
+ * the health check are GLOBAL, while accounts, logins, and model lists are
+ * strictly PER-UPSTREAM. Every exported function below is on one side of that
+ * line, and conflating them is how one provider ends up claiming the other's
+ * accounts or serving models it cannot reach.
  *
  * Three invariants shape everything below.
  *
@@ -43,16 +52,20 @@ import { app, BrowserWindow, net as electronNet } from 'electron'
 import { CHANNELS } from '../../shared/ipc'
 import {
   CLIPROXY_VERSION,
+  CODEX_PROVIDER_ID,
   IDLE_CLIPROXY_STATE,
+  accountsFor,
   checksumsUrl,
   releaseAsset,
   releaseAssetUrl,
   sha256For,
+  upstreamFor,
   type CliProxyAccount,
   type CliProxyLoginResult,
   type CliProxyLoginStart,
   type CliProxyState,
-  type CliProxyStatus
+  type CliProxyStatus,
+  type CliProxyUpstreamSpec
 } from '../../shared/cliproxy'
 
 const execFileAsync = promisify(execFile)
@@ -104,10 +117,11 @@ const HEALTH_INTERVAL_MS = 250
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
 const LOGIN_POLL_MS = 1_000
 
-/** Codex's OAuth callback listener, opened by the sidecar for the login flow. */
-const CODEX_CALLBACK_PORT = 1455
-
-/** How long to wait for the sidecar to bind that port before calling it a failure. */
+/**
+ * How long to wait for the sidecar to bind a provider's OAuth callback port
+ * before calling it a failure. The port itself is per-upstream (each redirect
+ * URI is registered with its own provider), so it lives in the upstream spec.
+ */
 const CALLBACK_BIND_TIMEOUT_MS = 5_000
 
 // ---- Paths -------------------------------------------------------------------
@@ -161,6 +175,19 @@ let secrets: Secrets | null = null
 let lifecycle: Promise<unknown> = Promise.resolve()
 /** Set during an intentional stop so the `exit` handler doesn't report a crash. */
 let stopping = false
+
+/**
+ * The upstream spec for a provider id, or a thrown error naming the id.
+ *
+ * Every per-subscription entry point goes through this. A wrong or missing id
+ * here would otherwise surface much later as an empty account list or a login
+ * that silently targets the wrong provider.
+ */
+function specFor(providerId: string): CliProxyUpstreamSpec {
+  const spec = upstreamFor(providerId)
+  if (!spec) throw new Error(`"${providerId}" is not a subscription provider.`)
+  return spec
+}
 
 /** Push the current state to every open window. */
 function broadcast(): void {
@@ -879,25 +906,29 @@ export async function status(): Promise<CliProxyState> {
 // ---- Login -------------------------------------------------------------------
 
 /**
- * Begin the Codex OAuth login. Boots the sidecar if needed, then asks it for an
- * authorization URL; the caller opens that URL in the user's browser.
+ * Begin one provider's OAuth login. Boots the sidecar if needed, then asks it
+ * for an authorization URL; the caller opens that URL in the user's browser.
  *
- * The sidecar itself listens on :1455 for the OAuth callback — that's the
- * redirect URI registered for the official Codex client, so it isn't negotiable.
- * We check it's free first, because the failure otherwise happens *after* the
- * user has signed in, which is the worst possible moment to discover it.
+ * The sidecar listens on a fixed loopback port for the callback — :1455 for
+ * Codex, :51121 for Google/Antigravity — because those are the redirect URIs
+ * registered with each upstream, so they aren't negotiable. We check the port is
+ * free FIRST, because the failure otherwise happens *after* the user has signed
+ * in, which is the worst possible moment to discover it.
  */
-export async function startLogin(): Promise<CliProxyLoginStart> {
+export async function startLogin(
+  providerId: string = CODEX_PROVIDER_ID
+): Promise<CliProxyLoginStart> {
+  const spec = specFor(providerId)
   await ensureRunning()
-  if (!(await isPortFree(CODEX_CALLBACK_PORT))) {
+  if (!(await isPortFree(spec.callbackPort))) {
     throw new Error(
-      `Port ${CODEX_CALLBACK_PORT} is already in use, and the Codex sign-in redirect requires it. ` +
-        'Close any running Codex CLI or proxy and try again.'
+      `Port ${spec.callbackPort} is already in use, and the ${spec.accountLabel} sign-in redirect ` +
+        `requires it. Close any running ${spec.accountLabel} CLI or proxy and try again.`
     )
   }
 
-  // `is_webui=true` is what makes the sidecar OPEN the callback listener on
-  // :1455 and wait for the browser to come back.
+  // `is_webui=true` is what makes the sidecar OPEN the callback listener and
+  // wait for the browser to come back.
   //
   // Without it the endpoint still returns a perfectly valid authorization URL,
   // but nothing ever binds the port - that mode expects the CALLER to host the
@@ -906,17 +937,17 @@ export async function startLogin(): Promise<CliProxyLoginStart> {
   // consent, and only then gets ERR_CONNECTION_REFUSED, with the authorization
   // code stranded in the address bar.
   const body = await management<{ status?: string; url?: string; state?: string; error?: string }>(
-    '/codex-auth-url?is_webui=true'
+    `${spec.authUrlPath}?is_webui=true`
   )
   if (!body.url || !body.state) throw new Error(body.error || 'Sign-in could not be started.')
 
   // Confirm the listener is actually up before sending anyone to the browser.
   // The endpoint returning 200 is not evidence that the port got bound, and this
   // is the last moment we can fail cheaply.
-  if (!(await waitForCallbackListener())) {
+  if (!(await waitForCallbackListener(spec.callbackPort))) {
     throw new Error(
       'The sign-in listener could not start. Something may be blocking port ' +
-        `${CODEX_CALLBACK_PORT} on this machine.`
+        `${spec.callbackPort} on this machine.`
     )
   }
   return { url: body.url, state: body.state }
@@ -934,7 +965,7 @@ export async function startLogin(): Promise<CliProxyLoginStart> {
  * sidecar is trying to bind the same port means we eventually win the race and
  * take it ourselves, causing the exact failure this function exists to detect.
  */
-function waitForCallbackListener(): Promise<boolean> {
+function waitForCallbackListener(port: number): Promise<boolean> {
   const deadline = Date.now() + CALLBACK_BIND_TIMEOUT_MS
   const attempt = (): Promise<boolean> =>
     new Promise((resolve) => {
@@ -947,7 +978,7 @@ function waitForCallbackListener(): Promise<boolean> {
       socket.once('connect', () => done(true))
       socket.once('timeout', () => done(false))
       socket.once('error', () => done(false))
-      socket.connect(CODEX_CALLBACK_PORT, HOST)
+      socket.connect(port, HOST)
     })
 
   return (async () => {
@@ -998,38 +1029,127 @@ export async function signOut(file: string): Promise<CliProxyAccount[]> {
 }
 
 /**
- * Fully disconnect: forget every signed-in account, then stop the proxy.
+ * Fully disconnect ONE provider: forget its signed-in accounts, then stop the
+ * proxy if nothing else still needs it.
  *
  * "Disconnect" wipes the stored credential for every other provider in Settings,
  * so it has to mean the same thing here. If it only dropped the provider row,
  * someone disconnecting to remove their ChatGPT account from the app would have
  * left the tokens sitting in auth-dir - the opposite of what they asked for.
  *
+ * Scoping this to one provider is the part that matters now that two of them
+ * share a process. The obvious implementation - `DELETE /auth-files?all=true`,
+ * then wipe auth-dir - is what this used to do, and doing that today would sign
+ * a user out of their Google plan because they disconnected ChatGPT. Files are
+ * therefore deleted one by one, and the proxy is only stopped once no
+ * subscription is left to serve.
+ *
  * Deleting requires the Management API, so the proxy is briefly started if it
  * isn't already. Every step is best-effort: the caller drops the provider row
  * regardless, because a failure here must not leave a row that cannot be removed.
  */
-export async function disconnect(): Promise<void> {
+export async function disconnect(providerId: string = CODEX_PROVIDER_ID): Promise<void> {
+  const spec = specFor(providerId)
+  let removed: CliProxyAccount[] = []
   try {
     await ensureRunning()
-    await management('/auth-files?all=true', { method: 'DELETE' })
+    // Re-read rather than trusting the cached list: this is the last chance to
+    // see a file that another window's login just added.
+    removed = accountsFor({ ...state, accounts: await readAccounts() }, providerId)
+    for (const account of removed) {
+      await management(`/auth-files?name=${encodeURIComponent(account.file)}`, {
+        method: 'DELETE'
+      }).catch(() => undefined)
+    }
   } catch {
-    // Couldn't reach the proxy - the auth-dir wipe below is the backstop.
+    // Couldn't reach the proxy - the on-disk sweep below is the backstop.
   }
-  await stop()
-  // Belt and braces. The API call above is the clean path (it also drops the
+
+  // Belt and braces. The API calls above are the clean path (they also drop the
   // credentials from the running process), but "disconnect" must not silently
   // leave subscription tokens on disk just because the proxy wouldn't start.
-  await fsp.rm(authDir(), { recursive: true, force: true }).catch(() => undefined)
-  update({ accounts: [] })
+  //
+  // Only this upstream's files are touched. A blanket `rm -rf auth-dir` would
+  // take the other subscription's tokens with it.
+  await removeAuthFilesFor(spec, removed)
+
+  const left = await refreshAccounts().catch(() => state.accounts)
+  // Nothing signed in anywhere: the process has no reason to keep running (and
+  // holding a port). If the other subscription is still live, leave it alone.
+  //
+  // The DISK decides this, not the parsed account list. `readAccounts` reflects
+  // what the sidecar's runtime auth manager has loaded, which lags a credential
+  // that was just written and reports nothing at all while the manager is still
+  // coming up - and stopping on that would kill a proxy the other subscription
+  // is actively using. The auth-dir is where credentials actually live, so it is
+  // the only answer that cannot be a race.
+  if (left.length === 0 && !(await hasStoredCredentials())) await stop()
 }
 
 /**
- * The models the sidecar currently exposes (i.e. what the signed-in
- * subscription actually grants). Returns [] when it isn't running, so the
- * caller degrades to an empty picker instead of throwing.
+ * Whether any subscription still has a token file in the auth-dir.
+ *
+ * Deliberately counts FILES rather than parsed accounts: this gates shutting the
+ * shared process down, so the safe failure is believing a credential exists when
+ * it does not (the proxy stays up until quit) rather than the reverse (a live
+ * subscription loses its proxy mid-session).
  */
-export async function listProxyModels(): Promise<{ id: string; name?: string }[]> {
+async function hasStoredCredentials(): Promise<boolean> {
+  try {
+    const names = await fsp.readdir(authDir())
+    // `.oauth-*.oauth` files are in-flight login handshakes, not credentials.
+    return names.some((n) => n.endsWith('.json') && !n.startsWith('.'))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Delete one upstream's token files from disk.
+ *
+ * Used as the fallback when the Management API is unreachable, so it cannot
+ * rely on the account list the API would have provided: it matches the auth-dir
+ * by filename prefix (`codex-*.json`, `antigravity-*.json`), which is the naming
+ * the sidecar writes, plus any file the caller already identified.
+ */
+async function removeAuthFilesFor(
+  spec: CliProxyUpstreamSpec,
+  known: CliProxyAccount[]
+): Promise<void> {
+  const dir = authDir()
+  const targets = new Set(known.map((a) => a.file))
+  try {
+    for (const name of await fsp.readdir(dir)) {
+      if (name === `${spec.upstream}.json` || name.startsWith(`${spec.upstream}-`)) {
+        targets.add(name)
+      }
+    }
+  } catch {
+    // No auth dir at all - nothing to remove.
+  }
+  for (const name of targets) {
+    await fsp.rm(join(dir, name), { force: true }).catch(() => undefined)
+  }
+}
+
+/**
+ * The models one subscription currently grants.
+ *
+ * The sidecar serves EVERY signed-in subscription from a single `/v1/models`,
+ * so the response has to be partitioned before it reaches a provider's picker.
+ * `owned_by` is what does it: `openai` for Codex, `antigravity` for Google's
+ * plan. Without this split, a user signed into both would find Gemini models
+ * listed under the ChatGPT provider, and choosing one would send the request to
+ * a subscription that cannot serve it.
+ *
+ * Returns [] when the proxy isn't running, so the caller degrades to an empty
+ * picker instead of throwing.
+ */
+export async function listProxyModels(
+  providerId: string = CODEX_PROVIDER_ID
+): Promise<{ id: string; name?: string }[]> {
+  const spec = upstreamFor(providerId)
+  if (!spec) return []
   if (state.status !== 'running' || !state.port) return []
   try {
     const { apiKey } = await loadSecrets()
@@ -1037,8 +1157,13 @@ export async function listProxyModels(): Promise<{ id: string; name?: string }[]
       headers: { Authorization: `Bearer ${apiKey}` }
     })
     if (!res.ok) return []
-    const body = (await res.json()) as { data?: { id: string; display_name?: string }[] }
-    return (body.data ?? []).map((m) => ({ id: m.id, name: m.display_name }))
+    const body = (await res.json()) as {
+      data?: { id: string; display_name?: string; owned_by?: string }[]
+    }
+    const owners = new Set(spec.modelOwners)
+    return (body.data ?? [])
+      .filter((m) => owners.has((m.owned_by ?? '').toLowerCase()))
+      .map((m) => ({ id: m.id, name: m.display_name }))
   } catch {
     return []
   }

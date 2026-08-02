@@ -12,7 +12,7 @@
 import * as repo from '../db/repo'
 import type { ChatMessage } from '../../shared/api'
 import type { ReasoningEffort } from '../../shared/types'
-import { CODEX_PROVIDER_ID } from '../../shared/cliproxy'
+import { isCliProxyProvider } from '../../shared/cliproxy'
 import { ensureRunning as ensureCliProxy, localApiKey as cliProxyKey } from './cliproxy'
 
 const COPILOT_TOKEN_URL = 'https://api.github.com/copilot_internal/v2/token'
@@ -101,7 +101,8 @@ async function getCopilotToken(force = false): Promise<string> {
   }
 
   const github = repo.getProviderToken('github-copilot')
-  if (!github) throw new Error('GitHub Copilot is not linked. Connect it in onboarding or Settings.')
+  if (!github)
+    throw new Error('GitHub Copilot is not linked. Connect it in onboarding or Settings.')
 
   const res = await fetch(COPILOT_TOKEN_URL, {
     headers: {
@@ -170,15 +171,16 @@ function copilotHeaders(token: string, vision = false): Record<string, string> {
 
 /**
  * Resolve the base URL for a provider, booting the CLIProxyAPI sidecar first for
- * the Codex-subscription provider.
+ * any subscription-backed provider.
  *
  * The sidecar picks a free port on each start, so its stored base URL is only
  * ever a cache. `ensureCliProxy` is idempotent and returns the LIVE URL, which
  * is then written back - otherwise a restart that lands on a different port
- * would leave every request pointed at nothing.
+ * would leave every request pointed at nothing. Both subscription providers
+ * share the one process, so they resolve to the same live URL.
  */
 async function resolveBaseUrl(providerId: string, stored: string | undefined): Promise<string> {
-  if (providerId !== CODEX_PROVIDER_ID) {
+  if (!isCliProxyProvider(providerId)) {
     return (stored || 'https://api.openai.com/v1').replace(/\/+$/, '')
   }
   const live = await ensureCliProxy()
@@ -198,8 +200,9 @@ export async function openaiEndpoint(
   if (!provider) throw new Error(`Provider "${providerId}" is not connected.`)
   // The sidecar's own key is generated per install and can be regenerated, so
   // read it from the service rather than trusting a possibly-stale stored copy.
-  const key =
-    providerId === CODEX_PROVIDER_ID ? await cliProxyKey() : repo.getProviderToken(providerId)
+  const key = isCliProxyProvider(providerId)
+    ? await cliProxyKey()
+    : repo.getProviderToken(providerId)
   const base = await resolveBaseUrl(providerId, provider.baseURL)
   return {
     url: `${base}/chat/completions`,
@@ -291,19 +294,50 @@ export async function streamChat(opts: StreamChatOptions): Promise<void> {
 
   const provider = repo.listConnectedProviders().find((p) => p.id === providerId)
   if (!provider) throw new Error(`Provider "${providerId}" is not connected.`)
-  const key =
-    providerId === CODEX_PROVIDER_ID ? await cliProxyKey() : repo.getProviderToken(providerId)
+  const key = isCliProxyProvider(providerId)
+    ? await cliProxyKey()
+    : repo.getProviderToken(providerId)
 
   switch (provider.wire) {
     case 'anthropic':
-      return streamAnthropic(provider.baseURL, key, model, messages, signal, onDelta, reasoning, reasoningEffort, contextLimit)
+      return streamAnthropic(
+        provider.baseURL,
+        key,
+        model,
+        messages,
+        signal,
+        onDelta,
+        reasoning,
+        reasoningEffort,
+        contextLimit
+      )
     case 'google':
       if (provider.auth === 'gcp-adc') {
-        throw new Error('Google Vertex (ADC) auth is not supported yet. Use the Gemini API-key provider.')
+        throw new Error(
+          'Google Vertex (ADC) auth is not supported yet. Use the Gemini API-key provider.'
+        )
       }
-      return streamGemini(provider.baseURL, key, model, messages, signal, onDelta, reasoning, reasoningEffort)
+      return streamGemini(
+        provider.baseURL,
+        key,
+        model,
+        messages,
+        signal,
+        onDelta,
+        reasoning,
+        reasoningEffort
+      )
     case 'azure':
-      return streamAzure(provider.baseURL, key, model, messages, signal, onDelta, reasoning, reasoningEffort)
+      return streamAzure(
+        provider.baseURL,
+        key,
+        model,
+        messages,
+        signal,
+        onDelta,
+        reasoning,
+        reasoningEffort
+      )
     case 'bedrock':
       throw new Error('Amazon Bedrock (AWS SigV4) is not supported yet.')
     default: {
