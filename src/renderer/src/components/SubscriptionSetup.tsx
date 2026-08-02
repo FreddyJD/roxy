@@ -1,11 +1,17 @@
 /**
- * Codex subscription sign-in — the panel behind the `codex-subscription`
- * provider.
+ * Subscription sign-in — the panel behind every `auth: 'subscription'` provider
+ * (ChatGPT/Codex today, Google Gemini alongside it).
  *
  * Everything real happens in the main process (download the pinned CLIProxyAPI
- * release, run it on loopback, drive the ChatGPT OAuth flow). This component is
- * deliberately thin: one button, an honest description of what gets installed,
- * and live status pushed from `cliproxy:state`.
+ * release, run it on loopback, drive the provider's OAuth flow). This component
+ * is deliberately thin: one button, an honest description of what gets
+ * installed, and live status pushed from `cliproxy:state`.
+ *
+ * One sidecar process serves every subscription, so the pushed state is SHARED:
+ * install status, port and progress are global, while the account list covers
+ * all upstreams at once. Each panel therefore narrows that list to its own
+ * provider with `accountsFor` — without which signing into ChatGPT would light
+ * up the Gemini panel as "connected" too.
  *
  * The download is the only part that takes visible time, so it's the only part
  * with a progress bar. Everything else is fast enough that a spinner and a
@@ -13,9 +19,51 @@
  */
 import { useEffect, useState } from 'react'
 import { Check, ExternalLink, Loader2, ShieldCheck } from 'lucide-react'
-import { IDLE_CLIPROXY_STATE, type CliProxyState } from '@shared/cliproxy'
+import {
+  CODEX_PROVIDER_ID,
+  IDLE_CLIPROXY_STATE,
+  accountsFor,
+  upstreamFor,
+  type CliProxyState
+} from '@shared/cliproxy'
 import { api } from '../lib/api'
 import { Button } from './ui'
+
+/** Per-provider wording. The mechanics are identical; only the nouns differ. */
+const COPY: Record<string, { title: string; blurb: string; cta: string; browser: string }> = {
+  [CODEX_PROVIDER_ID]: {
+    title: 'Use your ChatGPT subscription',
+    blurb:
+      'Sign in with the ChatGPT account behind your Plus, Pro, or Team plan and run Roxy on the models it already includes — no API key and no per-token bill.',
+    cta: 'Continue with ChatGPT',
+    browser: 'Finish signing in with ChatGPT in your browser.'
+  },
+  'gemini-subscription': {
+    title: 'Use your Google Gemini subscription',
+    blurb:
+      'Sign in with the Google account behind your Gemini plan and run Roxy on the Gemini models it already includes — no API key and no per-token bill.',
+    cta: 'Continue with Google',
+    browser: 'Finish signing in with Google in your browser.'
+  },
+  'claude-subscription': {
+    title: 'Use your Claude subscription',
+    blurb:
+      'Sign in with the Anthropic account behind your Claude Pro or Max plan and run Roxy on the Claude models it already includes — no API key and no per-token bill.',
+    cta: 'Continue with Claude',
+    browser: 'Finish signing in with Claude in your browser.'
+  }
+}
+
+function copyFor(providerId: string): (typeof COPY)[string] {
+  return (
+    COPY[providerId] ?? {
+      title: 'Use your subscription',
+      blurb: 'Sign in with the account behind your plan and use it here — no API key required.',
+      cta: 'Continue',
+      browser: 'Finish signing in in your browser.'
+    }
+  )
+}
 
 /** Subscribe to sidecar state, seeded with its current value. */
 export function useCliProxyState(): CliProxyState {
@@ -36,16 +84,23 @@ export function useCliProxyState(): CliProxyState {
   return state
 }
 
-export function CodexSetup({ onConnected }: { onConnected: () => void }): JSX.Element {
+export function SubscriptionSetup({
+  providerId,
+  onConnected
+}: {
+  providerId: string
+  onConnected: () => void
+}): JSX.Element {
   const state = useCliProxyState()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const copy = copyFor(providerId)
 
   const signIn = async (): Promise<void> => {
     setBusy(true)
     setError(null)
     try {
-      const result = await api.cliproxy.login()
+      const result = await api.cliproxy.login(providerId)
       if (!result.ok) {
         setError(result.error ?? 'Sign-in failed.')
         return
@@ -80,21 +135,20 @@ export function CodexSetup({ onConnected }: { onConnected: () => void }): JSX.El
     }
   }
 
-  const connected = state.accounts.length > 0
+  // Only THIS provider's accounts. The state carries every upstream's.
+  const accounts = accountsFor(state, providerId)
+  const connected = accounts.length > 0
 
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-lg font-semibold">Use your ChatGPT subscription</h2>
-        <p className="mt-1 text-sm text-text-muted">
-          Sign in with the ChatGPT account behind your Plus, Pro, or Team plan and run Roxy on the
-          models it already includes — no API key and no per-token bill.
-        </p>
+        <h2 className="text-lg font-semibold">{copy.title}</h2>
+        <p className="mt-1 text-sm text-text-muted">{copy.blurb}</p>
       </div>
 
       {connected && (
         <div className="flex flex-col gap-1.5 rounded-xl border border-success/30 bg-success/10 p-3">
-          {state.accounts.map((a) => (
+          {accounts.map((a) => (
             <div key={a.file} className="flex items-center gap-2 text-sm text-success">
               <Check className="h-4 w-4 shrink-0" />
               <span className="truncate">{a.email || a.file}</span>
@@ -103,7 +157,7 @@ export function CodexSetup({ onConnected }: { onConnected: () => void }): JSX.El
         </div>
       )}
 
-      {busy && <Progress state={state} />}
+      {busy && <Progress state={state} browserLabel={copy.browser} />}
 
       {error && (
         <div className="flex flex-col gap-2">
@@ -131,7 +185,7 @@ export function CodexSetup({ onConnected }: { onConnected: () => void }): JSX.El
           'Add another account'
         ) : (
           <>
-            Continue with ChatGPT <ExternalLink className="h-4 w-4" />
+            {copy.cta} <ExternalLink className="h-4 w-4" />
           </>
         )}
       </Button>
@@ -142,7 +196,13 @@ export function CodexSetup({ onConnected }: { onConnected: () => void }): JSX.El
 }
 
 /** Live status while a sign-in is in flight. */
-function Progress({ state }: { state: CliProxyState }): JSX.Element {
+function Progress({
+  state,
+  browserLabel
+}: {
+  state: CliProxyState
+  browserLabel: string
+}): JSX.Element {
   if (state.status === 'downloading') {
     return (
       <div className="flex flex-col gap-2">
@@ -159,10 +219,7 @@ function Progress({ state }: { state: CliProxyState }): JSX.Element {
       </div>
     )
   }
-  const label =
-    state.status === 'starting'
-      ? 'Starting the local proxy…'
-      : 'Finish signing in with ChatGPT in your browser.'
+  const label = state.status === 'starting' ? 'Starting the local proxy…' : browserLabel
   return (
     <div className="flex items-center gap-2 rounded-xl border border-border bg-surface-2 p-3 text-sm text-text-muted">
       <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
@@ -173,8 +230,8 @@ function Progress({ state }: { state: CliProxyState }): JSX.Element {
 
 /**
  * What actually gets installed. This runs a third-party binary that holds the
- * user's ChatGPT credentials, so saying so plainly — before the click, not in a
- * changelog — is the only honest option.
+ * user's subscription credentials, so saying so plainly — before the click, not
+ * in a changelog — is the only honest option.
  */
 function HowItWorks({ version }: { version: string }): JSX.Element {
   return (
@@ -191,24 +248,28 @@ function HowItWorks({ version }: { version: string }): JSX.Element {
         >
           CLIProxyAPI v{version}
         </button>{' '}
-        (checksum-verified) and runs it on 127.0.0.1 while Roxy is open. It holds the ChatGPT login
-        on this machine and exposes it to Roxy as a normal model endpoint — your credentials never
-        reach Roxy&apos;s servers, and the proxy is closed when you quit.
+        (checksum-verified) and runs it on 127.0.0.1 while Roxy is open. It holds the login on this
+        machine and exposes it to Roxy as a normal model endpoint — your credentials never reach
+        Roxy&apos;s servers, and the proxy is closed when you quit.
       </div>
     </div>
   )
 }
 
-/** Signed-in accounts + proxy status, for the Settings provider row. */
-export function CodexAccounts(): JSX.Element | null {
+/** Signed-in accounts + proxy status, for a Settings provider row. */
+export function SubscriptionAccounts({ providerId }: { providerId: string }): JSX.Element | null {
   const state = useCliProxyState()
   const [busy, setBusy] = useState<string | null>(null)
-  if (state.accounts.length === 0 && state.status !== 'error') return null
+  const accounts = accountsFor(state, providerId)
+  // The error is global to the sidecar, so it is only worth showing on a row
+  // that has something at stake here - otherwise both rows would report the
+  // same failure twice.
+  if (accounts.length === 0 && state.status !== 'error') return null
 
   const signOut = async (file: string): Promise<void> => {
     setBusy(file)
     try {
-      await api.cliproxy.signOut(file)
+      await api.cliproxy.signOut(providerId, file)
     } finally {
       setBusy(null)
     }
@@ -216,7 +277,7 @@ export function CodexAccounts(): JSX.Element | null {
 
   return (
     <div className="mt-2 flex flex-col gap-1.5">
-      {state.accounts.map((a) => (
+      {accounts.map((a) => (
         <div key={a.file} className="flex items-center gap-2 text-xs text-text-muted">
           <span className="truncate">{a.email || a.file}</span>
           <button
@@ -231,4 +292,9 @@ export function CodexAccounts(): JSX.Element | null {
       {state.error && <p className="text-xs text-danger">{state.error}</p>}
     </div>
   )
+}
+
+/** Whether a provider id is one this panel knows how to sign into. */
+export function isSubscriptionProvider(providerId: string): boolean {
+  return upstreamFor(providerId) !== undefined
 }

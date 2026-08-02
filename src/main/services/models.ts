@@ -5,7 +5,7 @@
  */
 import type { ModelInfo, ModelCost } from '../../shared/api'
 import { getProviderToken, listConnectedProviders } from '../db/repo'
-import { CODEX_PROVIDER_ID } from '../../shared/cliproxy'
+import { isCliProxyProvider } from '../../shared/cliproxy'
 import { ensureRunning as ensureCliProxy, listProxyModels } from './cliproxy'
 
 const CATALOG_URL = 'https://models.dev/api.json'
@@ -92,8 +92,8 @@ async function listRoxyModels(): Promise<ModelInfo[]> {
 }
 
 /**
- * Models for the Codex-subscription provider: whatever the local CLIProxyAPI
- * sidecar currently exposes.
+ * Models for a subscription provider: whatever the local CLIProxyAPI sidecar
+ * currently exposes for THAT subscription.
  *
  * This deliberately does NOT come from models.dev. The available models are a
  * function of the signed-in plan (Plus and Pro see different lists), and the
@@ -102,16 +102,20 @@ async function listRoxyModels(): Promise<ModelInfo[]> {
  * has signed in yet, which the picker renders as "no models" rather than as a
  * wrong list.
  *
- * Every model here is a GPT-5-class reasoning model with tool calling, so both
+ * The provider id is passed through because one sidecar serves every signed-in
+ * subscription from a single model list; `listProxyModels` splits it by upstream
+ * so the ChatGPT picker never offers a Gemini model it cannot route.
+ *
+ * Every model here is a frontier reasoning model with tool calling, so both
  * capability flags are asserted rather than guessed per id.
  */
-async function listCodexModels(): Promise<ModelInfo[]> {
+async function listSubscriptionModels(providerId: string): Promise<ModelInfo[]> {
   // Boot the sidecar first when the provider is connected. After an app restart
   // the proxy is installed but not running, and an un-booted proxy reports no
   // models - which would render as an empty picker for a provider the user can
   // demonstrably use. Connected implies installed (you cannot connect without a
   // completed login), so this is a spawn, never a download.
-  if (listConnectedProviders().some((p) => p.id === CODEX_PROVIDER_ID)) {
+  if (listConnectedProviders().some((p) => p.id === providerId)) {
     try {
       await ensureCliProxy()
     } catch {
@@ -119,7 +123,7 @@ async function listCodexModels(): Promise<ModelInfo[]> {
       // whole picker for every other provider.
     }
   }
-  const models = await listProxyModels()
+  const models = await listProxyModels(providerId)
   return models
     .map((m) => ({
       id: m.id,
@@ -157,7 +161,7 @@ function toModelCost(c: ModelsDevModel['cost']): ModelCost | undefined {
 /** List the models models.dev knows for a provider id (newest first). */
 export async function listModels(providerId: string): Promise<ModelInfo[]> {
   if (providerId === 'roxy') return listRoxyModels()
-  if (providerId === CODEX_PROVIDER_ID) return listCodexModels()
+  if (isCliProxyProvider(providerId)) return listSubscriptionModels(providerId)
   try {
     const data = await getCatalog()
     const models = data[providerId]?.models

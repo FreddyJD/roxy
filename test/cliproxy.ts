@@ -23,7 +23,14 @@ import { pipeline } from 'node:stream/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { app } from 'electron'
-import { checksumsUrl, releaseAsset, sha256For } from '../src/shared/cliproxy'
+import {
+  CLAUDE_PROVIDER_ID,
+  CODEX_PROVIDER_ID,
+  GEMINI_PROVIDER_ID,
+  checksumsUrl,
+  releaseAsset,
+  sha256For
+} from '../src/shared/cliproxy'
 import {
   baseUrl,
   disconnect,
@@ -114,12 +121,16 @@ async function main(): Promise<void> {
 
   // No credential is signed in, so the catalog is legitimately empty — the point
   // is that it parses and returns a list rather than throwing.
-  const models = await listProxyModels()
+  const models = await listProxyModels(CODEX_PROVIDER_ID)
   check('listProxyModels returns an array', Array.isArray(models))
   check('no models before signing in', models.length === 0)
+  check(
+    'listProxyModels is empty for a non-subscription provider',
+    (await listProxyModels('openai')).length === 0
+  )
 
-  // ---- the management API is reachable and the login flow starts ----
-  const login = await startLogin()
+  // ---- the management API is reachable and the Codex login flow starts ----
+  const login = await startLogin(CODEX_PROVIDER_ID)
   check(
     'startLogin returns an OpenAI authorization URL',
     login.url.startsWith('https://auth.openai.com/')
@@ -150,6 +161,70 @@ async function main(): Promise<void> {
   })
   check('the OAuth callback listener is accepting connections', callbackBound)
 
+  // ---- the SECOND subscription drives a different upstream on the same proxy ----
+  //
+  // This is the check that would have caught the whole feature being wrong. The
+  // pinned release publishes no `gemini-auth-url`; Google's subscription is
+  // reachable only through the Antigravity route, and `gemini` in this sidecar
+  // means a pay-per-token API key instead. If upstream ever renames or drops
+  // that route, this fails here rather than in a user's browser.
+  const geminiLogin = await startLogin(GEMINI_PROVIDER_ID)
+  check(
+    'gemini startLogin returns a Google authorization URL',
+    geminiLogin.url.startsWith('https://accounts.google.com/'),
+    geminiLogin.url.slice(0, 60)
+  )
+  check(
+    'the gemini auth URL requests cloud-platform scope',
+    geminiLogin.url.includes('cloud-platform')
+  )
+  check('gemini startLogin returns a state token', geminiLogin.state.length > 0)
+  check('the gemini auth URL redirects to its own callback port', geminiLogin.url.includes('51121'))
+  // Two upstreams, two listeners, one process - a shared port would mean one
+  // login silently swallowing the other's callback.
+  const geminiCallbackBound = await new Promise<boolean>((resolve) => {
+    const socket = new net.Socket()
+    socket.setTimeout(2000)
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('timeout', () => {
+      socket.destroy()
+      resolve(false)
+    })
+    socket.once('error', () => resolve(false))
+    socket.connect(51121, '127.0.0.1')
+  })
+  check('the gemini OAuth callback listener is accepting connections', geminiCallbackBound)
+
+  // ---- Claude, the third subscription on the same proxy ----
+  const claudeLogin = await startLogin(CLAUDE_PROVIDER_ID)
+  check(
+    'claude startLogin returns an Anthropic authorization URL',
+    claudeLogin.url.startsWith('https://claude.ai/') ||
+      claudeLogin.url.startsWith('https://console.anthropic.com/'),
+    claudeLogin.url.slice(0, 60)
+  )
+  check('the claude auth URL uses PKCE', claudeLogin.url.includes('code_challenge_method=S256'))
+  check('claude startLogin returns a state token', claudeLogin.state.length > 0)
+  check('the claude auth URL redirects to its own callback port', claudeLogin.url.includes('54545'))
+  const claudeCallbackBound = await new Promise<boolean>((resolve) => {
+    const socket = new net.Socket()
+    socket.setTimeout(2000)
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('timeout', () => {
+      socket.destroy()
+      resolve(false)
+    })
+    socket.once('error', () => resolve(false))
+    socket.connect(54545, '127.0.0.1')
+  })
+  check('the claude OAuth callback listener is accepting connections', claudeCallbackBound)
+
   // ---- teardown leaves the install (and would-be tokens) in place ----
   const stopped = await stop()
   check('stop() reports stopped, not not-installed', stopped.status === 'stopped')
@@ -168,17 +243,41 @@ async function main(): Promise<void> {
   check('restart skips the download', elapsed < 20_000, `${elapsed}ms`)
   check('restart is running again', (await status()).status === 'running')
 
-  // ---- disconnect wipes the tokens, not just the provider row ----
-  // Stand in for a signed-in account: disconnect must remove the auth dir
-  // whether or not the Management API call succeeds.
+  // ---- disconnect wipes ONE provider's tokens, not the whole auth dir ----
+  //
+  // Stand in for two signed-in subscriptions: disconnect must remove the token
+  // files for the provider it was given, whether or not the Management API call
+  // succeeds - and must leave the OTHER subscription untouched. The naive
+  // implementation (DELETE ?all=true, then rm -rf auth-dir) passes the first
+  // half of this and silently signs the user out of their Google plan because
+  // they disconnected ChatGPT.
   const auths = path.join(tmp, 'cliproxy', 'auths')
+  const codexToken = path.join(auths, 'codex-test.json')
+  const geminiToken = path.join(auths, 'antigravity-test.json')
+  // Claude writes `claude-*.json`, NOT `anthropic-*.json` - the on-disk sweep
+  // matches the credential type, not the login route it came from.
+  const claudeToken = path.join(auths, 'claude-test.json')
   await fs.mkdir(auths, { recursive: true })
-  await fs.writeFile(path.join(auths, 'codex-test.json'), '{"type":"codex"}')
-  check('a token file exists before disconnect', await exists(path.join(auths, 'codex-test.json')))
+  await fs.writeFile(codexToken, '{"type":"codex"}')
+  await fs.writeFile(geminiToken, '{"type":"antigravity"}')
+  await fs.writeFile(claudeToken, '{"type":"claude"}')
+  check('a token file exists before disconnect', await exists(codexToken))
 
-  await disconnect()
-  check('disconnect removes the token files', !(await exists(auths)))
-  check('disconnect stops the proxy', (await status()).port === null)
+  await disconnect(CODEX_PROVIDER_ID)
+  check("disconnect removes that provider's token file", !(await exists(codexToken)))
+  check("disconnect leaves the other subscription's token file", await exists(geminiToken))
+  check("disconnect leaves claude's token file", await exists(claudeToken))
+  // Other subscriptions are still signed in, so the proxy has work to do.
+  check('disconnect keeps the proxy up for the other subscription', (await status()).port !== null)
+
+  await disconnect(CLAUDE_PROVIDER_ID)
+  check('disconnect removes the claude token file', !(await exists(claudeToken)))
+  check('disconnect leaves gemini alone', await exists(geminiToken))
+  check('the proxy is still up for the last subscription', (await status()).port !== null)
+
+  await disconnect(GEMINI_PROVIDER_ID)
+  check('disconnecting the last provider removes its token too', !(await exists(geminiToken)))
+  check('disconnect stops the proxy once nothing is signed in', (await status()).port === null)
   check('disconnect reports no accounts', (await status()).accounts.length === 0)
   // The install is a cache, not a credential - re-signing in shouldn't re-download.
   check('disconnect keeps the binary', await exists(bin))

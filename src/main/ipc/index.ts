@@ -28,7 +28,7 @@ import * as cliproxy from '../services/cliproxy'
 import * as browser from '../services/browser'
 import { listModels } from '../services/models'
 import { pickDefaultModel } from '../../shared/models'
-import { CODEX_PROVIDER_ID } from '../../shared/cliproxy'
+import { CLIPROXY_PROVIDER_IDS, accountsFor, isCliProxyProvider } from '../../shared/cliproxy'
 import { getUsageStats } from '../services/usage'
 import { getActivityStats } from '../services/activity'
 import { compactChat } from '../services/compaction'
@@ -181,9 +181,14 @@ export function registerIpc(): void {
   )
   ipcMain.handle(CHANNELS.settingsCompleteOnboarding, () => repo.completeOnboarding())
   ipcMain.handle(CHANNELS.settingsReset, async () => {
-    // "Wipes all providers" has to include the ChatGPT tokens held by the Codex
-    // sidecar, which resetAll() can't see - they aren't in the database.
-    await cliproxy.disconnect().catch(() => undefined)
+    // "Wipes all providers" has to include the subscription tokens held by the
+    // sidecar, which resetAll() can't see - they aren't in the database. Every
+    // sidecar-backed provider has to be named: disconnecting one now leaves the
+    // other's tokens in place (by design), so a single call would quietly spare
+    // whichever subscription wasn't mentioned.
+    for (const id of CLIPROXY_PROVIDER_IDS) {
+      await cliproxy.disconnect(id).catch(() => undefined)
+    }
     return repo.resetAll()
   })
 
@@ -193,10 +198,11 @@ export function registerIpc(): void {
     repo.connectProvider(input)
   )
   ipcMain.handle(CHANNELS.providersDisconnect, async (_e, id: string) => {
-    // The Codex provider's credential lives in the sidecar, not in `credentials`
-    // - so dropping the row alone would leave the ChatGPT tokens on disk and the
-    // proxy running. Sign out and shut down first, then remove the row.
-    if (id === CODEX_PROVIDER_ID) await cliproxy.disconnect()
+    // A subscription provider's credential lives in the sidecar, not in
+    // `credentials` - so dropping the row alone would leave the OAuth tokens on
+    // disk and the proxy running. Sign out first, then remove the row. The
+    // sidecar keeps running if the OTHER subscription is still signed in.
+    if (isCliProxyProvider(id)) await cliproxy.disconnect(id)
     return repo.disconnectProvider(id)
   })
   ipcMain.handle(CHANNELS.providersReorder, (_e, ids: string[]) => repo.reorderProviders(ids))
@@ -400,15 +406,18 @@ export function registerIpc(): void {
     return provider
   })
 
-  // ---- codex subscription (CLIProxyAPI sidecar) ----
+  // ---- subscription providers (CLIProxyAPI sidecar) ----
   // The renderer drives one high-level `login` rather than the individual
   // install/start/auth-url/poll steps: every one of them can fail, and the panel
   // has nothing useful to do with a partial success except retry the whole
   // thing. Progress reaches the UI through `cliproxy:state` pushes instead.
+  //
+  // Every call carries a provider id. One sidecar process serves both ChatGPT
+  // and Gemini, so "which subscription" is never inferable from the process.
   ipcMain.handle(CHANNELS.cliproxyStatus, () => cliproxy.status())
-  ipcMain.handle(CHANNELS.cliproxyLogin, async () => {
+  ipcMain.handle(CHANNELS.cliproxyLogin, async (_e, providerId: string) => {
     try {
-      const { url, state } = await cliproxy.startLogin()
+      const { url, state } = await cliproxy.startLogin(providerId)
       await shell.openExternal(url)
       const result = await cliproxy.pollLogin(state)
       if (result.ok) {
@@ -417,7 +426,7 @@ export function registerIpc(): void {
         const base = cliproxy.baseUrl()
         if (base) {
           const provider = repo.storeCliProxyProvider(
-            CODEX_PROVIDER_ID,
+            providerId,
             base,
             await cliproxy.localApiKey()
           )
@@ -436,12 +445,14 @@ export function registerIpc(): void {
       }
     }
   })
-  ipcMain.handle(CHANNELS.cliproxySignOut, async (_e, file: string) => {
-    const accounts = await cliproxy.signOut(file)
-    // The last account just went: the provider can no longer serve a request, so
-    // drop the row rather than leave a dead entry in the picker.
-    if (accounts.length === 0) repo.disconnectProvider(CODEX_PROVIDER_ID)
-    return cliproxy.status()
+  ipcMain.handle(CHANNELS.cliproxySignOut, async (_e, providerId: string, file: string) => {
+    await cliproxy.signOut(file)
+    const next = await cliproxy.status()
+    // THIS provider's last account just went: it can no longer serve a request,
+    // so drop its row rather than leave a dead entry in the picker. Scoped by
+    // provider - the other subscription's accounts are none of its business.
+    if (accountsFor(next, providerId).length === 0) repo.disconnectProvider(providerId)
+    return next
   })
   ipcMain.handle(CHANNELS.cliproxyStop, () => cliproxy.stop())
   ipcMain.handle(CHANNELS.cliproxyInstallFile, async (event) => {

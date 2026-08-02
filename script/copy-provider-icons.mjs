@@ -47,9 +47,11 @@ const MAP = {
   minimax: 'minimax-color.svg',
   stepfun: 'stepfun-color.svg',
   'github-copilot': 'copilot-color.svg',
-  // The subscription provider is Codex-branded, not generic OpenAI - it's a
-  // different product from the API-key openai row right above it.
+  // The subscription providers wear their product's brand, not the generic
+  // vendor one - each is a different product from the API-key row above it.
   'codex-subscription': 'codex.svg',
+  'gemini-subscription': 'gemini-color.svg',
+  'claude-subscription': 'claude-color.svg',
   'github-models': 'github.svg',
   ollama: 'ollama.svg',
   lmstudio: 'lmstudio.svg',

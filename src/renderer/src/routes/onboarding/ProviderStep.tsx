@@ -16,7 +16,7 @@ import { api } from '../../lib/api'
 import { useRoxyStore } from '../../lib/store'
 import { Button, Input } from '../../components/ui'
 import { ProviderLogo } from '../../lib/providerLogos'
-import { CodexSetup } from '../../components/CodexSetup'
+import { SubscriptionSetup } from '../../components/SubscriptionSetup'
 
 // The searchable list leads with Roxy too — a fallback for anyone who breezes
 // past the featured hero card above — followed by every other provider. (Roxy
@@ -185,7 +185,9 @@ function ProviderSetup({
   const [error, setError] = useState<string | null>(null)
 
   const isCopilot = seed.auth === 'device-flow' && seed.id === 'github-copilot'
-  // Signed in through the local CLIProxyAPI sidecar - no key field, no base URL.
+  // Signed in through the local CLIProxyAPI sidecar - no key field, no base
+  // URL. The panel is shared by every subscription provider and told which one
+  // it is by id, since one sidecar process serves them all.
   const isSubscription = seed.auth === 'subscription'
   const needsKey = seed.auth === 'api-key'
   const needsBaseURL = !seed.baseURL
@@ -254,7 +256,7 @@ function ProviderSetup({
           {isCopilot ? (
             <CopilotSetup onConnected={onConnected} />
           ) : isSubscription ? (
-            <CodexSetup onConnected={onConnected} />
+            <SubscriptionSetup providerId={seed.id} onConnected={onConnected} />
           ) : isConnectableNow(seed) ? (
             <div className="flex flex-col gap-4">
               <div>

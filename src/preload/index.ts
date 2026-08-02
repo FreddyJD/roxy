@@ -102,8 +102,8 @@ const roxy: RoxyApi = {
   },
   cliproxy: {
     status: () => ipcRenderer.invoke(CHANNELS.cliproxyStatus),
-    login: () => ipcRenderer.invoke(CHANNELS.cliproxyLogin),
-    signOut: (file) => ipcRenderer.invoke(CHANNELS.cliproxySignOut, file),
+    login: (providerId) => ipcRenderer.invoke(CHANNELS.cliproxyLogin, providerId),
+    signOut: (providerId, file) => ipcRenderer.invoke(CHANNELS.cliproxySignOut, providerId, file),
     stop: () => ipcRenderer.invoke(CHANNELS.cliproxyStop),
     installFromFile: () => ipcRenderer.invoke(CHANNELS.cliproxyInstallFile),
     onState: (callback) => {
