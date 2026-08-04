@@ -182,9 +182,9 @@
  *
  *   .sq        masks the element to the shape. Every `bg-*` / `hover:bg-*` /
  *              gradient keeps working untouched, which is why it's the default
- *              for rows, buttons, chips and thumbnails. A mask also clips
- *              descendants and erases outer `box-shadow`, so it is NOT for
- *              anything with a shadow or its own `overflow-hidden`.
+ *              for rows, buttons, chips and thumbnails. A mask clips descendants
+ *              and erases outer `box-shadow`, so it is NOT for anything with a
+ *              shadow, or that contains a popover escaping its bounds.
  *   .sq-ring   add-on for an element with a 1px border: hides the real border
  *              (whose square corners would poke out of the shape) and repaints
  *              it as a hairline just inside the curve. Works with either .sq or
@@ -199,8 +199,10 @@
  *     element with a Tailwind gradient (`bg-gradient-*` is a background image
  *     too). Use `.sq` + `inset-ring-*` there instead.
  *   - `.sq` masks, so an absolutely-positioned child that escapes the box (a
- *     popover, a badge hanging off the corner) gets cut off. Put `.sq` on an
- *     inner wrapper, or use `.sq-frame`.
+ *     popover opening upward, a badge hanging off a corner) is cut off. Use
+ *     `.sq-frame` on any element that contains one -- it paints instead of
+ *     clipping. This is easy to miss because it only shows once the popover is
+ *     opened.
  * --------------------------------------------------------------------------- */
 
 /* Each size is 1.5x its Tailwind partner, so `sq-lg` pairs with `rounded-lg`,
@@ -225,10 +227,21 @@
   --sq-r: 24px;
 }
 
+/* The element keeps a real `border-radius`, just a different number.
+
+   Zeroing it would be wrong in three ways: `box-shadow` follows `border-radius`,
+   so every shadowed panel would cast a *square* shadow behind a curved shape;
+   `overflow-hidden` would clip children to square corners; and so would
+   `inset-ring`/`outline`. All three are properties we can't repaint from a
+   worklet.
+
+   0.543 is the largest multiple of the squircle radius whose circular corner
+   still fully CONTAINS the superellipse -- so it never eats into the shape we're
+   painting -- while hugging it to within 0.0154r, i.e. under 0.4px even at our
+   biggest radius. Shadows, clipping and rings therefore follow the squircle to
+   sub-pixel accuracy for free. */
 [data-squircle] :is(.sq-sm, .sq-base, .sq-md, .sq-lg, .sq-xl, .sq-2xl) {
-  /* The circular radius is smaller than the squircle at the corners, so leaving
-     it in place would clip the very curve we're drawing. */
-  border-radius: 0;
+  border-radius: calc(var(--sq-r) * 0.543);
 }
 
 [data-squircle] .sq {

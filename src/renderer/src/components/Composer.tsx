@@ -97,10 +97,15 @@ export function Composer({
           if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false)
         }}
         onDrop={onDrop}
+        // `sq-frame`, not `sq`: the controls row below renders five popovers
+        // (model, mode, effort, context, usage) that open UPWARD, well outside
+        // this box. `.sq` masks, and a mask clips descendants, so it would erase
+        // all five. `sq-frame` paints the fill instead of clipping.
+        //
         // `sq-ring` repaints the border inside the squircle, so the color has to
-        // travel as `--sq-ring` alongside each `border-*`. The drag ring becomes
-        // an inset one: an outer ring is a box-shadow, which the mask erases.
-        className={`mx-auto max-w-3xl sq sq-2xl sq-ring rounded-2xl border bg-surface-2 transition ${
+        // travel as `--sq-ring` alongside each `border-*`. The drag ring is an
+        // inset one so it follows the curve rather than boxing the corners.
+        className={`mx-auto max-w-3xl sq-frame sq-2xl sq-ring sq-fill-surface-2 rounded-2xl border bg-surface-2 transition ${
           dragging
             ? 'border-accent [--sq-ring:var(--color-accent)] inset-ring-1 inset-ring-accent/40'
             : 'border-border focus-within:border-border-strong focus-within:[--sq-ring:var(--color-border-strong)]'
