@@ -1139,10 +1139,16 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   },
 
   ensureModels: async (providerId) => {
-    if (get().modelCatalog[providerId]) return
-    const list = modelCatalogCache.get(providerId) ?? (await api.models.list(providerId))
-    modelCatalogCache.set(providerId, list)
-    set((s) => ({ modelCatalog: { ...s.modelCatalog, [providerId]: list } }))
+    const existing = get().modelCatalog[providerId]
+    if (existing && existing.length > 0) return
+    const cached = modelCatalogCache.get(providerId)
+    const list = cached && cached.length > 0 ? cached : await api.models.list(providerId)
+    // Only cache non-empty lists. If the proxy or connection is starting up,
+    // we want to try again on the next mount/action rather than caching an empty list forever.
+    if (list.length > 0) {
+      modelCatalogCache.set(providerId, list)
+      set((s) => ({ modelCatalog: { ...s.modelCatalog, [providerId]: list } }))
+    }
   },
 
   ensureRecentModels: async (providerId) => {
