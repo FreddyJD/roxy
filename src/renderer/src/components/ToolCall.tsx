@@ -61,6 +61,39 @@ const TOOL_ICON: Record<string, LucideIcon> = {
 }
 
 /**
+ * How long a call must have been running before its cancel button appears.
+ *
+ * Every running tool card can offer a cancel now, and most tools finish fast — a
+ * `grep` in 200ms, a screenshot in 400. Showing the button immediately would make
+ * it strobe on and off through a normal turn, which reads as jitter and trains
+ * you to ignore it. Nothing you could physically click in under a second needed
+ * cancelling anyway.
+ *
+ * So the affordance waits until the call is visibly *taking a while*, and then
+ * fades in. Arriving late is the point: it turns up exactly when you start
+ * wondering how long this is going to take.
+ */
+const CANCEL_REVEAL_MS = 1200
+
+/**
+ * True once `active` has stayed true for `delayMs` without interruption. Resets
+ * the instant it goes false, so a fast call never reaches the threshold and the
+ * next call starts its own clock.
+ */
+function useSettledDelay(active: boolean, delayMs: number): boolean {
+  const [reached, setReached] = useState(false)
+  useEffect(() => {
+    if (!active) {
+      setReached(false)
+      return
+    }
+    const t = setTimeout(() => setReached(true), delayMs)
+    return () => clearTimeout(t)
+  }, [active, delayMs])
+  return reached
+}
+
+/**
  * How many steps a subagent has taken — tool calls only. Its reasoning and prose
  * are how it narrates the work, not work itself, and counting them would inflate
  * "12 steps" for a delegate that only thought out loud.
@@ -151,9 +184,10 @@ export const ToolCall = memo(function ToolCall({
   image?: string
   diff?: ToolDiff
   /**
-   * Cancel just this call — supplied only for a running `task` card whose
-   * delegate we can address. Absent means there is nothing honest to offer, and
-   * no button is drawn (a Stop that does nothing is worse than no Stop).
+   * Cancel just this call, leaving the turn running — a `task` card stops its
+   * delegate, any other card aborts its own tool. Supplied only when there is
+   * something real to cancel; absent means no button is drawn, because a Stop
+   * that does nothing is worse than no Stop.
    */
   onCancel?: () => void
   /** A subagent's live transcript, for a `task` card. */
@@ -168,6 +202,14 @@ export const ToolCall = memo(function ToolCall({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const Icon = TOOL_ICON[tool] ?? Wrench
+  // Gate the cancel button on BOTH "there is something to cancel" and "this has
+  // been running long enough to be worth offering" -- except for `task`, which is
+  // long-running by definition (a delegate works for tens of seconds, so its
+  // button can never strobe) and offered its cancel immediately before this
+  // delay existed. See CANCEL_REVEAL_MS.
+  const canCancel = state === 'running' && Boolean(onCancel)
+  const revealed = useSettledDelay(canCancel && tool !== 'task', CANCEL_REVEAL_MS)
+  const showCancel = canCancel && (tool === 'task' || revealed)
   const body = output?.trimEnd() ?? ''
   const nested = nestedParts && nestedParts.length > 0 ? nestedParts : undefined
   const live = state === 'running'
@@ -234,17 +276,22 @@ export const ToolCall = memo(function ToolCall({
               {stepCount} {stepCount === 1 ? 'step' : 'steps'}
             </span>
           )}
-          {/* Skip this delegate without stopping the turn — the answer to "a hook
-              spun up a README subagent and I just want it gone". Rendered as a
-              nested <span role="button">, not a <button>: the header is itself a
-              button (expand/collapse) and nesting one is invalid HTML that React
-              warns about and browsers un-nest. Stops propagation so cancelling
-              doesn't also toggle the card open. */}
-          {live && onCancel && (
+          {/* Kill this one step without stopping the turn — the answer to "that
+              bash is sleeping for five minutes" and to "a hook spun up a README
+              subagent and I just want it gone". The turn keeps its reasoning and
+              every other tool result; the model reads a cancelled result for
+              this call and moves on.
+
+              Rendered as a nested <span role="button">, not a <button>: the
+              header is itself a button (expand/collapse) and nesting one is
+              invalid HTML that React warns about and browsers un-nest. Stops
+              propagation so cancelling doesn't also toggle the card open. */}
+          {showCancel && onCancel && (
             <span
               role="button"
               tabIndex={0}
-              title="Cancel this subagent"
+              title={tool === 'task' ? 'Cancel this subagent' : `Cancel this ${tool} call`}
+              aria-label={tool === 'task' ? 'Cancel this subagent' : `Cancel this ${tool} call`}
               onClick={(e) => {
                 e.stopPropagation()
                 onCancel()
@@ -255,7 +302,7 @@ export const ToolCall = memo(function ToolCall({
                 e.stopPropagation()
                 onCancel()
               }}
-              className="press-scale flex h-5 w-5 items-center justify-center rounded text-text-subtle transition-colors hover:bg-white/10 hover:text-text"
+              className="press-scale animate-fade-in flex h-5 w-5 items-center justify-center rounded text-text-subtle transition-colors hover:bg-white/10 hover:text-text"
             >
               <Square className="h-2.5 w-2.5 fill-current" />
             </span>

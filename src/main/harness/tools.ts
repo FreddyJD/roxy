@@ -195,12 +195,16 @@ export async function runTool(
       case 'list':
         return await runList(str(input.path) || '.', ctx.cwd)
       case 'glob':
-        return await runGlob(str(input.pattern), ctx.cwd)
+        // tinyglobby takes no signal, so the walk itself runs to completion — but
+        // a glob over a monorepo or a network drive is slow enough to be worth
+        // cancelling, and the turn need not wait for it.
+        return await untilAborted(ctx.signal, () => runGlob(str(input.pattern), ctx.cwd))
       case 'grep':
         return await runGrep(
           str(input.pattern),
           str(input.include ?? input.glob) || '**/*',
-          ctx.cwd
+          ctx.cwd,
+          ctx.signal
         )
       case 'webfetch':
         return await runWebFetch(
@@ -895,7 +899,12 @@ async function runGlob(pattern: string, cwd: string): Promise<ToolResult> {
   return { ok: true, output: shown.join('\n') + more }
 }
 
-async function runGrep(pattern: string, include: string, cwd: string): Promise<ToolResult> {
+async function runGrep(
+  pattern: string,
+  include: string,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<ToolResult> {
   if (!pattern) return { ok: false, output: 'grep: missing "pattern"' }
   let re: RegExp
   try {
@@ -903,9 +912,16 @@ async function runGrep(pattern: string, include: string, cwd: string): Promise<T
   } catch {
     return { ok: false, output: `grep: invalid regex: ${pattern}` }
   }
-  const files = await glob(include, { cwd, onlyFiles: true, ignore: IGNORE })
+  // The glob can't be interrupted; the scan below can, and on a big tree that's
+  // where nearly all the time goes.
+  const files = await untilAborted(signal, () =>
+    glob(include, { cwd, onlyFiles: true, ignore: IGNORE })
+  )
   const results: string[] = []
   for (const rel of files.slice(0, 2000)) {
+    // Checked per file rather than per line: 2000 file reads is the slow part,
+    // and a per-line check would cost more than the responsiveness it buys.
+    if (signal?.aborted) throw new AbortError()
     let content: string
     try {
       content = await fs.readFile(path.join(cwd, rel), 'utf8')

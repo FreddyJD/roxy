@@ -91,6 +91,20 @@ export const CHANNELS = {
   loopsTick: 'loops:tick',
 
   toolsRun: 'tools:run',
+  /**
+   * renderer -> main: cancel ONE running tool call, by the model's call id.
+   *
+   * The gap this closes: Stop is all-or-nothing. A turn that fires `bash npm
+   * test` on a wedged suite, or a `webfetch` at a host that will never answer,
+   * could only be rescued by killing the whole turn — losing the reasoning and
+   * every other tool result with it. This aborts just that call; the tool reports
+   * back as cancelled and the model carries on with the rest of its work.
+   *
+   * Keyed by callId (not requestId) because that is what a tool card already
+   * carries and what uniquely names one call inside a turn. Broadcast-free: it's
+   * an invoke, and the answer (did anything get cancelled?) comes straight back.
+   */
+  toolsCancel: 'tools:cancel',
 
   queueList: 'queue:list',
   queueAdd: 'queue:add',

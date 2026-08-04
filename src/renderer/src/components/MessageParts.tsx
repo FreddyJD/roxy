@@ -80,22 +80,37 @@ export function MessageParts({
     [streaming]
   )
 
-  // Selected (not called through `getState()`) so the identity is stable and the
-  // per-card callbacks below stay memo-friendly.
+  // Selected (not called through `getState()`) so the identities are stable and
+  // the per-card callbacks below stay memo-friendly.
   const cancelSubagent = useRoxyStore((s) => s.cancelSubagent)
+  const cancelToolCall = useRoxyStore((s) => s.cancelToolCall)
 
   return (
     <div className="flex flex-col gap-1 text-sm leading-relaxed text-text">
       {parts.map((part, i) => {
         const isLast = i === parts.length - 1
         if (part.type === 'tool') {
-          // Only a live `task` card that knows its delegate's session can offer a
-          // cancel. Everything else gets undefined, and ToolCall draws nothing.
+          // Two cancels, one button. A live `task` card cancels its DELEGATE (by
+          // session id — that path tears the subagent down and reports back to
+          // the parent model). Any other live call cancels ITSELF (by call id),
+          // but only when the harness said it's interruptible: a `read` that
+          // returns in 2ms has no window to click, and a button that can't do
+          // anything is worse than none.
+          //
+          // Both leave the turn running — that is the whole point, and the
+          // difference from the composer's Stop.
           const subChatId = part.subChatId
+          const callId = part.callId
           const cancel =
-            part.tool === 'task' && part.state === 'running' && subChatId
-              ? () => void cancelSubagent(subChatId)
-              : undefined
+            part.state !== 'running'
+              ? undefined
+              : part.tool === 'task'
+                ? subChatId
+                  ? () => void cancelSubagent(subChatId)
+                  : undefined
+                : part.cancellable && callId
+                  ? () => void cancelToolCall(callId)
+                  : undefined
           return (
             <ToolCall
               key={i}

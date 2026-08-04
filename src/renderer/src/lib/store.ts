@@ -200,6 +200,13 @@ interface RoxyStore {
   stop: (targetChatId?: string) => void
   /** Cancel ONE running subagent by its session id, leaving its parent turn alive. */
   cancelSubagent: (subChatId: string) => Promise<void>
+  /**
+   * Cancel ONE running tool call by its call id, leaving the turn alive.
+   *
+   * The narrow-gauge Stop: kill the wedged `bash` or the fetch that will never
+   * answer, and let the model keep the rest of the step and carry on.
+   */
+  cancelToolCall: (callId: string) => Promise<void>
   /** Cancel one detached background task launched by a session. */
   cancelBackgroundTask: (sessionId: string, jobId: string) => Promise<void>
   /** Start sharing the active session to a phone via the roxy.gg relay. */
@@ -1785,6 +1792,14 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
       return { runningSubagents: next }
     })
     await api.subagents.cancel(subChatId)
+  },
+
+  cancelToolCall: async (callId) => {
+    // No optimistic update, unlike cancelSubagent: the card's `running` state is
+    // owned by the live fold, and a local flip would be overwritten by the very
+    // next delta anyway. The real end state arrives as the `tool-end` the
+    // cancelled call emits on its way out, which is a single frame later.
+    await api.tools.cancel(callId)
   },
 
   cancelBackgroundTask: async (sessionId, jobId) => {
