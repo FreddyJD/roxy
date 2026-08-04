@@ -3,6 +3,6 @@
 # uses the generated app-update.yml instead. Excluded from the build (see the
 # `files` globs in electron-builder.yml).
 provider: github
-owner: FreddyJD
+owner: roxy-gg
 repo: roxy
 updaterCacheDirName: roxy-updater
