@@ -243,22 +243,29 @@
    `inset-ring`/`outline`. None of those can be repainted from a worklet.
 
    0.543r is the largest circular corner that still fully CONTAINS the
-   superellipse, hugging it to within 0.0154r. But sitting that close is a
-   problem: the mask's antialiased edge and the radius' antialiased edge overlap
-   and MULTIPLY, eroding the corner. Measured, that cost 15% of the corner area
-   at `sq-lg` and 33% at `sq-base` -- small radii suffered most, which is exactly
-   where the app is dense.
-
-   Backing off a flat 2px clears both antialiasing bands (they are ~1px each) and
-   restores the corner to within 0.6% of the mask alone, at every size. It's
-   absolute rather than proportional because antialiasing is a fixed pixel width,
-   not a fraction of the radius. The shadow now sits at most 2px tighter than the
-   shape, which is invisible under a blur. */
+   superellipse, so it never cuts into the painted shape, and it hugs it to
+   within 0.0154r (max 0.45px overshoot at our biggest size). That is as close as
+   a circle can get, so it is the right default. */
 [data-squircle] :is(.sq-sm, .sq-base, .sq-md, .sq-lg, .sq-xl, .sq-2xl) {
-  border-radius: max(0px, calc(var(--sq-r) * 0.543 - 2px));
+  border-radius: calc(var(--sq-r) * 0.543);
 }
 
+/* ...except under a MASK, where two curves that close is actively harmful: the
+   mask's antialiased edge and the radius' antialiased edge overlap, and their
+   coverage multiplies, eroding the corner. Measured, that cost 15% of the corner
+   area at `sq-lg` and 33% at `sq-base` -- worst at small radii, which is most of
+   this UI.
+
+   Backing off a flat 2px clears both ~1px bands and restores the corner to within
+   0.6% of the mask alone. Absolute rather than proportional, because
+   antialiasing is a fixed pixel width, not a fraction of the radius.
+
+   `.sq-frame` deliberately does NOT get this: it has no mask to interfere with,
+   and its `border-radius` is what `overflow-hidden` and `box-shadow` follow, so
+   shrinking it would let children and the shadow escape the painted corner.
+   Same specificity as the rule above, so source order is what makes it win. */
 [data-squircle] .sq {
+  border-radius: max(0px, calc(var(--sq-r) * 0.543 - 2px));
   -webkit-mask-image: paint(squircle-mask);
   mask-image: paint(squircle-mask);
 }
