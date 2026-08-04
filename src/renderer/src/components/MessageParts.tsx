@@ -143,7 +143,7 @@ export function MessageParts({
               key={i}
               src={part.dataUrl}
               alt={part.name ?? 'image'}
-              className="max-h-72 max-w-full rounded-lg border border-border object-contain"
+              className="max-h-72 max-w-full sq sq-lg sq-ring rounded-lg border border-border object-contain"
             />
           )
         }
@@ -198,7 +198,7 @@ const ReasoningBlock = memo(function ReasoningBlock({
   const [open, setOpen] = useState(false)
   const expanded = open || streaming
   return (
-    <div className="my-0.5 rounded-lg border border-border/60 bg-surface-2/40">
+    <div className="my-0.5 sq sq-lg sq-ring [--sq-ring:color-mix(in_srgb,var(--color-border)_60%,transparent)] rounded-lg border border-border/60 bg-surface-2/40">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

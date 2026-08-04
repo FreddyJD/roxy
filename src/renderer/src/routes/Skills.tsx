@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Download, FileText, FolderGit2, Home, Pencil, Plus, RefreshCw, Trash2, Wrench } from 'lucide-react'
+import {
+  Download,
+  FileText,
+  FolderGit2,
+  Home,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Wrench
+} from 'lucide-react'
 import { TOOLS, TOOL_CATEGORIES, type ToolDef } from '@shared/tools'
 import type { SkillView } from '@shared/api'
 import { api } from '../lib/api'
@@ -132,7 +142,13 @@ function DiscoveredSkills(): JSX.Element {
             <Plus className="h-3.5 w-3.5" />
             New skill
           </Button>
-          <Button size="sm" variant="ghost" onClick={refresh} disabled={refreshing} className="gap-1.5">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={refresh}
+            disabled={refreshing}
+            className="gap-1.5"
+          >
             <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
             Rescan
           </Button>
@@ -141,8 +157,8 @@ function DiscoveredSkills(): JSX.Element {
       </div>
 
       <p className="mb-3 text-xs text-text-muted">
-        Skills are reusable <code className="text-text-subtle">SKILL.md</code> playbooks the model can
-        load on demand. Skills created or installed here are global (saved under{' '}
+        Skills are reusable <code className="text-text-subtle">SKILL.md</code> playbooks the model
+        can load on demand. Skills created or installed here are global (saved under{' '}
         <code className="text-text-subtle">~/.roxy/skills</code>) and available in every workspace.
       </p>
 
@@ -230,12 +246,12 @@ function InstallFromUrl({
   }
 
   return (
-    <div className="mb-4 rounded-xl border border-border bg-surface p-4">
+    <div className="mb-4 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
       <h3 className="mb-1 text-sm font-medium text-text">Add a skill from a URL</h3>
       <p className="mb-3 text-xs text-text-muted">
-        A GitHub <code className="text-text-subtle">owner/repo</code>, a github.com repo/tree/blob URL,
-        or a direct <code className="text-text-subtle">https://…/SKILL.md</code>. Installs every skill
-        it finds (repo root and <code className="text-text-subtle">skills/</code>).
+        A GitHub <code className="text-text-subtle">owner/repo</code>, a github.com repo/tree/blob
+        URL, or a direct <code className="text-text-subtle">https://…/SKILL.md</code>. Installs
+        every skill it finds (repo root and <code className="text-text-subtle">skills/</code>).
       </p>
       <div className="space-y-3">
         <Input
@@ -302,10 +318,7 @@ function SkillEditor({
       setError('Name may only contain letters, numbers, dots, dashes and underscores.')
       return
     }
-    if (
-      !isEdit &&
-      existing.some((s) => s.name.toLowerCase() === trimmedName.toLowerCase())
-    ) {
+    if (!isEdit && existing.some((s) => s.name.toLowerCase() === trimmedName.toLowerCase())) {
       setError('A skill with that name already exists.')
       return
     }
@@ -327,7 +340,7 @@ function SkillEditor({
   }
 
   return (
-    <div className="mb-4 rounded-xl border border-border bg-surface p-4">
+    <div className="mb-4 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
       <h3 className="mb-3 text-sm font-medium text-text">
         {isEdit ? `Edit “${draft.name}”` : 'New skill'}
       </h3>
@@ -384,8 +397,8 @@ function DiscoveredSkillCard({
 }): JSX.Element {
   const [confirming, setConfirming] = useState(false)
   return (
-    <div className="group flex items-start gap-3 rounded-xl border border-border bg-surface p-4">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/5 text-text-muted">
+    <div className="group flex items-start gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center sq sq-lg rounded-lg bg-white/5 text-text-muted">
         <FileText className="h-4 w-4" />
       </span>
       <div className="min-w-0 flex-1">
@@ -425,14 +438,14 @@ function DiscoveredSkillCard({
           <button
             onClick={onEdit}
             title="Edit"
-            className="press-scale flex h-7 w-7 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-7 w-7 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={() => setConfirming(true)}
             title="Delete"
-            className="press-scale flex h-7 w-7 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-danger"
+            className="press-scale flex h-7 w-7 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-danger"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -444,16 +457,17 @@ function DiscoveredSkillCard({
 
 function EmptySkills(): JSX.Element {
   return (
-    <div className="rounded-xl border border-dashed border-border bg-surface/50 p-5 text-xs text-text-muted">
+    <div className="sq sq-xl sq-ring sq-dashed rounded-xl border border-dashed border-border bg-surface/50 p-5 text-xs text-text-muted">
       <p className="text-text">No skills discovered yet.</p>
       <p className="mt-2">
         A skill is a <code className="text-text">SKILL.md</code> file whose frontmatter{' '}
-        <code className="text-text">name</code> + <code className="text-text">description</code> tell
-        Roxy when to load it. Roxy discovers them from:
+        <code className="text-text">name</code> + <code className="text-text">description</code>{' '}
+        tell Roxy when to load it. Roxy discovers them from:
       </p>
       <ul className="mt-2 list-disc space-y-1 pl-5">
         <li>
-          <code className="text-text">~/.roxy/skills/&lt;name&gt;/SKILL.md</code> — your global skills
+          <code className="text-text">~/.roxy/skills/&lt;name&gt;/SKILL.md</code> — your global
+          skills
         </li>
         <li>
           <code className="text-text">.roxy/skills/&lt;name&gt;/SKILL.md</code> — inside a project
@@ -462,8 +476,8 @@ function EmptySkills(): JSX.Element {
         </li>
       </ul>
       <p className="mt-2">
-        When a task matches, Roxy calls the <code className="text-text">skill</code> tool to pull that
-        skill&apos;s full instructions into context.
+        When a task matches, Roxy calls the <code className="text-text">skill</code> tool to pull
+        that skill&apos;s full instructions into context.
       </p>
     </div>
   )
@@ -471,8 +485,8 @@ function EmptySkills(): JSX.Element {
 
 function ToolCard({ tool }: { tool: ToolDef }): JSX.Element {
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-border bg-surface p-4">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/5 text-text-muted">
+    <div className="flex items-start gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center sq sq-lg rounded-lg bg-white/5 text-text-muted">
         <Wrench className="h-4 w-4" />
       </span>
       <div className="min-w-0 flex-1">

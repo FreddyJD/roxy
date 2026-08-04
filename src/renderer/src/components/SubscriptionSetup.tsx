@@ -147,7 +147,7 @@ export function SubscriptionSetup({
       </div>
 
       {connected && (
-        <div className="flex flex-col gap-1.5 rounded-xl border border-success/30 bg-success/10 p-3">
+        <div className="flex flex-col gap-1.5 sq sq-xl sq-ring [--sq-ring:color-mix(in_srgb,var(--color-success)_30%,transparent)] rounded-xl border border-success/30 bg-success/10 p-3">
           {accounts.map((a) => (
             <div key={a.file} className="flex items-center gap-2 text-sm text-success">
               <Check className="h-4 w-4 shrink-0" />
@@ -221,7 +221,7 @@ function Progress({
   }
   const label = state.status === 'starting' ? 'Starting the local proxy…' : browserLabel
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-border bg-surface-2 p-3 text-sm text-text-muted">
+    <div className="flex items-center gap-2 sq sq-xl sq-ring rounded-xl border border-border bg-surface-2 p-3 text-sm text-text-muted">
       <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
       <span>{label}</span>
     </div>
@@ -235,7 +235,7 @@ function Progress({
  */
 function HowItWorks({ version }: { version: string }): JSX.Element {
   return (
-    <div className="flex gap-2.5 rounded-xl border border-border bg-surface p-3">
+    <div className="flex gap-2.5 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-3">
       <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-text-subtle" />
       <div className="text-xs leading-relaxed text-text-subtle">
         Roxy downloads{' '}

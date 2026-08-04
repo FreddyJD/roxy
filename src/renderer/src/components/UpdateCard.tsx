@@ -47,7 +47,7 @@ export function UpdateCard(): JSX.Element | null {
 
   if (state.status === 'downloading') {
     return (
-      <div className="mx-3 mb-3 shrink-0 rounded-xl border border-border bg-surface-2 p-3">
+      <div className="mx-3 mb-3 shrink-0 sq sq-xl sq-ring rounded-xl border border-border bg-surface-2 p-3">
         <div className="flex items-center gap-2">
           <Download className="h-4 w-4 shrink-0 animate-pulse text-accent" />
           <span className="flex-1 truncate text-xs font-medium text-text">Downloading update…</span>
@@ -64,7 +64,7 @@ export function UpdateCard(): JSX.Element | null {
   }
 
   return (
-    <div className="mx-3 mb-3 shrink-0 overflow-hidden rounded-xl border border-accent/30 bg-accent/10 p-3">
+    <div className="mx-3 mb-3 shrink-0 overflow-hidden sq sq-xl sq-ring sq-ring-accent rounded-xl border border-accent/30 bg-accent/10 p-3">
       <div className="flex items-center gap-2">
         <BellRing className="h-4 w-4 shrink-0 text-accent" />
         <span className="text-sm font-semibold text-text">Update ready</span>

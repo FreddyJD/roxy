@@ -39,7 +39,10 @@ export function ActivitySection(): JSX.Element | null {
       <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
         Activity
       </h2>
-      <div className="rounded-xl border border-border bg-surface p-4">
+      {/* `sq-frame` rather than `sq`: the graph's hover tooltip is positioned
+          above/left of the hovered cell, so on the top row and first column it
+          escapes this card — and a mask would clip it away. */}
+      <div className="sq-frame sq-xl sq-ring sq-fill-surface rounded-xl border border-border bg-surface p-4">
         <ContributionGraph data={stats} />
       </div>
     </section>

@@ -44,7 +44,7 @@ export default function Onboarding(): JSX.Element {
           <img
             src={roxy}
             alt="Roxy"
-            className="h-7 w-7 rounded-lg object-cover ring-1 ring-border"
+            className="h-7 w-7 sq sq-lg rounded-lg object-cover inset-ring-1 inset-ring-border"
           />
           <span className="text-sm font-semibold">Roxy</span>
         </div>

@@ -244,7 +244,7 @@ export const ToolCall = memo(function ToolCall({
   }, [diff, tool, image])
 
   return (
-    <div className="my-1.5 overflow-hidden rounded-lg border border-border bg-surface-2">
+    <div className="my-1.5 overflow-hidden sq sq-lg sq-ring rounded-lg border border-border bg-surface-2">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -302,7 +302,7 @@ export const ToolCall = memo(function ToolCall({
                 e.stopPropagation()
                 onCancel()
               }}
-              className="press-scale animate-fade-in flex h-5 w-5 items-center justify-center rounded text-text-subtle transition-colors hover:bg-white/10 hover:text-text"
+              className="press-scale animate-fade-in flex h-5 w-5 items-center justify-center sq sq-base rounded text-text-subtle transition-colors hover:bg-white/10 hover:text-text"
             >
               <Square className="h-2.5 w-2.5 fill-current" />
             </span>
@@ -367,7 +367,7 @@ export const ToolCall = memo(function ToolCall({
           <img
             src={image}
             alt="Browser screenshot"
-            className="max-h-96 w-full rounded-md object-contain ring-1 ring-border"
+            className="max-h-96 w-full sq sq-md rounded-md object-contain inset-ring-1 inset-ring-border"
           />
         </div>
       )}

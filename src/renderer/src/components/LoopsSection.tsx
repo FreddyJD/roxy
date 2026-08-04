@@ -50,7 +50,7 @@ export function NewLoopDialog({
       onClick={onClose}
     >
       <div
-        className="animate-modal-in w-full max-w-md rounded-2xl border border-border bg-surface p-5"
+        className="animate-modal-in w-full max-w-md sq sq-2xl sq-ring rounded-2xl border border-border bg-surface p-5"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-lg font-semibold">New loop</h2>
@@ -71,7 +71,9 @@ export function NewLoopDialog({
             />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-text-muted">Prompt (runs every heartbeat)</span>
+            <span className="text-xs font-medium text-text-muted">
+              Prompt (runs every heartbeat)
+            </span>
             <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -84,7 +86,7 @@ export function NewLoopDialog({
             <select
               value={intervalMinutes}
               onChange={(e) => setIntervalMinutes(Number(e.target.value))}
-              className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-text outline-none transition-colors focus:border-accent/70"
+              className="h-9 w-full sq sq-lg sq-ring rounded-lg border border-border bg-surface-2 px-3 text-sm text-text outline-none transition-colors focus:border-accent/70"
             >
               {INTERVALS.map((m) => (
                 <option key={m} value={m}>

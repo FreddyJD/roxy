@@ -97,10 +97,18 @@ export function Composer({
           if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false)
         }}
         onDrop={onDrop}
-        className={`mx-auto max-w-3xl rounded-2xl border bg-surface-2 transition ${
+        // `sq-frame`, not `sq`: the controls row below renders five popovers
+        // (model, mode, effort, context, usage) that open UPWARD, well outside
+        // this box. `.sq` masks, and a mask clips descendants, so it would erase
+        // all five. `sq-frame` paints the fill instead of clipping.
+        //
+        // `sq-ring` repaints the border inside the squircle, so the color has to
+        // travel as `--sq-ring` alongside each `border-*`. The drag ring is an
+        // inset one so it follows the curve rather than boxing the corners.
+        className={`mx-auto max-w-3xl sq-frame sq-2xl sq-ring sq-fill-surface-2 rounded-2xl border bg-surface-2 transition ${
           dragging
-            ? 'border-accent ring-1 ring-accent/40'
-            : 'border-border focus-within:border-border-strong'
+            ? 'border-accent [--sq-ring:var(--color-accent)] inset-ring-1 inset-ring-accent/40'
+            : 'border-border focus-within:border-border-strong focus-within:[--sq-ring:var(--color-border-strong)]'
         }`}
       >
         {images.length > 0 && (
@@ -110,7 +118,7 @@ export function Composer({
                 key={img.id}
                 src={img.dataUrl}
                 name={img.name}
-                className="group relative h-16 w-16 overflow-hidden rounded-lg border border-border bg-surface"
+                className="group relative h-16 w-16 overflow-hidden sq sq-lg sq-ring rounded-lg border border-border bg-surface"
               >
                 <img
                   src={img.dataUrl}
@@ -160,7 +168,7 @@ export function Composer({
               type="button"
               onClick={() => fileRef.current?.click()}
               title="Attach images"
-              className="press-scale flex h-6 shrink-0 items-center justify-center rounded-md px-1.5 text-text-muted hover:bg-white/5 hover:text-text"
+              className="press-scale flex h-6 shrink-0 items-center justify-center sq sq-md rounded-md px-1.5 text-text-muted hover:bg-white/5 hover:text-text"
             >
               <Plus className="h-3.5 w-3.5" />
             </button>
@@ -174,7 +182,7 @@ export function Composer({
             <button
               onClick={onStop}
               title="Stop (Esc)"
-              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-black hover:bg-white/90"
+              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center sq sq-lg rounded-lg bg-white text-black hover:bg-white/90"
             >
               <Square className="h-3 w-3 fill-current" />
             </button>
@@ -183,7 +191,7 @@ export function Composer({
               onClick={submit}
               disabled={!canSend}
               title={sending ? 'Add to queue' : 'Send'}
-              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-black hover:bg-white/90 disabled:opacity-30"
+              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center sq sq-lg rounded-lg bg-white text-black hover:bg-white/90 disabled:opacity-30"
             >
               <ArrowUp className="h-4 w-4" />
             </button>

@@ -235,7 +235,7 @@ function LifecycleChip({
         onClick={() => setOpen((o) => !o)}
         title={lifecycle.title}
         className={cn(
-          'flex items-center gap-1.5 rounded-md px-1.5 py-1 transition hover:bg-white/5',
+          'flex items-center gap-1.5 sq sq-md rounded-md px-1.5 py-1 transition hover:bg-white/5',
           TONE_TEXT[lifecycle.tone]
         )}
       >
@@ -268,7 +268,7 @@ function UnknownHostChip({ host }: { host: string }): JSX.Element {
     <div className="relative" ref={ref}>
       {open && (
         <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={anchor}>
-          <div className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+          <div className="flex min-h-0 flex-col overflow-y-auto sq-frame sq-xl sq-fill-elevated sq-ring rounded-xl border border-border bg-elevated py-1 shadow-2xl">
             <div className="px-3 py-1.5 text-[11px] text-text-subtle">
               What does <span className="text-text-muted">{host}</span> run?
             </div>
@@ -289,7 +289,7 @@ function UnknownHostChip({ host }: { host: string }): JSX.Element {
         type="button"
         onClick={() => setOpen((o) => !o)}
         title={`Roxy doesn't recognise ${host} - click to choose`}
-        className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-text-subtle transition hover:bg-white/5 hover:text-text-muted"
+        className="flex items-center gap-1.5 sq sq-md rounded-md px-1.5 py-1 text-text-subtle transition hover:bg-white/5 hover:text-text-muted"
       >
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
         set up
@@ -430,7 +430,7 @@ function ForgePanel({
 
   return (
     <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={style}>
-      <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl">
+      <div className="flex min-h-0 flex-col overflow-hidden sq-frame sq-xl sq-fill-elevated sq-ring rounded-xl border border-border bg-elevated shadow-2xl">
         <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
           <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
             {view?.remote ? view.remote.slug : 'No remote'}
@@ -492,7 +492,7 @@ function ForgePanel({
               type="button"
               onClick={() => void runPrimary()}
               disabled={!!busy}
-              className="press-scale flex w-full items-center justify-center gap-1.5 rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-white/5 disabled:opacity-50"
+              className="press-scale flex w-full items-center justify-center gap-1.5 sq sq-lg rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-white/5 disabled:opacity-50"
             >
               {busy === 'action' ? 'Working...' : ACTION_LABEL[action]}
             </button>
@@ -508,7 +508,7 @@ function ForgePanel({
               // refuse. Disabled with a reason beats a button that fails.
               disabled={!!busy || !sync.canFastForward}
               title={fastForwardHint(sync)}
-              className="press-scale flex w-full items-center justify-center gap-1.5 rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-white/5 disabled:opacity-40"
+              className="press-scale flex w-full items-center justify-center gap-1.5 sq sq-lg rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-white/5 disabled:opacity-40"
             >
               <ArrowDownToLine className="h-3.5 w-3.5 opacity-70" />
               {/* Two labels, because they are two different promises. With
@@ -536,7 +536,7 @@ function ForgePanel({
               disabled={!!busy}
               title={`Discard local state and make this branch identical to ${sync.upstream}`}
               className={cn(
-                'press-scale flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs disabled:opacity-40',
+                'press-scale flex w-full items-center justify-center gap-1.5 sq sq-lg rounded-lg px-3 py-1.5 text-xs disabled:opacity-40',
                 confirmReset
                   ? 'bg-danger/15 text-danger'
                   : 'text-text-subtle hover:bg-white/5 hover:text-text-muted'
@@ -689,15 +689,17 @@ function BranchSegment({
           onBlur={() => void save()}
           spellCheck={false}
           className={cn(
-            'min-w-0 flex-1 rounded border bg-surface px-1 py-0.5 text-xs outline-none',
-            error ? 'border-danger' : 'border-border-strong'
+            'min-w-0 flex-1 sq sq-base sq-ring rounded border bg-surface px-1 py-0.5 text-xs outline-none',
+            error
+              ? 'border-danger [--sq-ring:var(--color-danger)]'
+              : 'border-border-strong [--sq-ring:var(--color-border-strong)]'
           )}
           style={{ width: `${Math.max(draft.length + 2, 12)}ch` }}
         />
         {error && (
           <span
             role="alert"
-            className="absolute bottom-full left-0 mb-1 whitespace-nowrap rounded-md border border-danger/40 bg-elevated px-2 py-1 text-[11px] text-danger shadow-lg"
+            className="absolute bottom-full left-0 mb-1 whitespace-nowrap sq-frame sq-md sq-fill-elevated sq-ring sq-ring-danger rounded-md border border-danger/40 bg-elevated px-2 py-1 text-[11px] text-danger shadow-lg"
           >
             {error}
           </span>
@@ -723,7 +725,7 @@ function BranchSegment({
               : undefined
       }
       className={cn(
-        'flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 transition',
+        'flex min-w-0 items-center gap-1.5 sq sq-md rounded-md px-1.5 py-1 transition',
         pending ? 'text-text-subtle' : 'text-text-muted',
         canRename && 'hover:bg-white/5 hover:text-text'
       )}
@@ -827,7 +829,7 @@ function WorkstreamSegment({
         onClick={() => setOpen((o) => !o)}
         title={workstreamTitle(chat, pending)}
         className={cn(
-          'flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 transition hover:bg-white/5',
+          'flex min-w-0 items-center gap-1.5 sq sq-md rounded-md px-1.5 py-1 transition hover:bg-white/5',
           open ? 'text-text' : 'text-text-muted hover:text-text'
         )}
       >
@@ -908,7 +910,7 @@ function WorkstreamMenu({
       {/* The whole menu scrolls, not just the branch list: a project with a
           dozen sessions makes the workstream list itself taller than the window,
           and `maxHeight` without `overflow` would only clip it differently. */}
-      <div className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+      <div className="flex min-h-0 flex-col overflow-y-auto sq-frame sq-xl sq-fill-elevated sq-ring rounded-xl border border-border bg-elevated py-1 shadow-2xl">
         <MenuLabel>Workstreams</MenuLabel>
 
         {/* The default workstream is the project folder itself — always present,

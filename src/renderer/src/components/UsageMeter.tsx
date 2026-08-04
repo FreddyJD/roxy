@@ -260,10 +260,10 @@ export function UsageMeter(): JSX.Element | null {
         onClick={() => setOpen(!open)}
         title={pillTitle}
         className={cn(
-          'press-scale flex h-7 items-center gap-1.5 rounded-lg border px-2 text-xs tabular-nums transition-colors',
+          'press-scale flex h-7 items-center gap-1.5 sq sq-lg sq-ring rounded-lg border px-2 text-xs tabular-nums transition-colors',
           open
-            ? 'border-border-strong bg-elevated text-text'
-            : 'border-border bg-surface text-text-muted hover:border-border-strong hover:text-text'
+            ? 'border-border-strong [--sq-ring:var(--color-border-strong)] bg-elevated text-text'
+            : 'border-border bg-surface text-text-muted hover:border-border-strong hover:[--sq-ring:var(--color-border-strong)] hover:text-text'
         )}
       >
         <BarChart3 className="h-3.5 w-3.5" />
@@ -271,7 +271,7 @@ export function UsageMeter(): JSX.Element | null {
       </button>
 
       {open && (
-        <div className="animate-pop-in absolute right-0 top-full z-50 mt-2 w-80 origin-top-right overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl">
+        <div className="animate-pop-in absolute right-0 top-full z-50 mt-2 w-80 origin-top-right overflow-hidden sq-frame sq-xl sq-fill-elevated sq-ring rounded-xl border border-border bg-elevated shadow-2xl">
           {/* Tabs */}
           <div className="flex items-center gap-1 overflow-x-auto border-b border-border p-1.5">
             {tabs.map((t) => (
@@ -280,7 +280,7 @@ export function UsageMeter(): JSX.Element | null {
                 type="button"
                 onClick={() => setTab(t.id)}
                 className={cn(
-                  'flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors',
+                  'flex shrink-0 items-center gap-1.5 sq sq-lg rounded-lg px-2.5 py-1 text-xs font-medium transition-colors',
                   tab === t.id
                     ? 'bg-accent text-white'
                     : 'text-text-muted hover:bg-white/5 hover:text-text'

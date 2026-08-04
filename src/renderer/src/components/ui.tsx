@@ -11,11 +11,17 @@ import { cn } from '../lib/cn'
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 type ButtonSize = 'sm' | 'md'
 
+// Bordered variants carry `sq-ring`: the squircle mask would shave the square
+// corners off a real border, so its hairline is repainted inside the shape.
+// `--sq-ring` has to state the color because a paint worklet can't read the
+// element's own `border-color`.
+
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary: 'bg-white text-black hover:bg-white/90',
-  secondary: 'bg-surface-2 text-text border border-border hover:bg-elevated',
+  secondary: 'bg-surface-2 text-text border border-border hover:bg-elevated sq-ring',
   ghost: 'text-text-muted hover:text-text hover:bg-white/5',
-  danger: 'bg-danger/10 text-danger border border-danger/30 hover:bg-danger/20'
+  danger:
+    'bg-danger/10 text-danger border border-danger/30 hover:bg-danger/20 sq-ring [--sq-ring:color-mix(in_srgb,var(--color-danger)_30%,transparent)]'
 }
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {
@@ -37,7 +43,7 @@ export function Button({
   return (
     <button
       className={cn(
-        'press-scale inline-flex items-center justify-center rounded-lg font-medium focus:outline-none disabled:cursor-not-allowed disabled:opacity-40',
+        'press-scale sq sq-lg inline-flex items-center justify-center rounded-lg font-medium focus:outline-none disabled:cursor-not-allowed disabled:opacity-40',
         BUTTON_VARIANTS[variant],
         BUTTON_SIZES[size],
         className
@@ -53,7 +59,12 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
       <input
         ref={ref}
         className={cn(
-          'h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-text outline-none transition-[border-color,box-shadow] placeholder:text-text-subtle focus:border-accent/70 focus:ring-2 focus:ring-accent/20',
+          // `inset-ring` rather than `ring`: an outer ring is a box-shadow, and
+          // the squircle mask paints only what's inside the shape, so an outer
+          // glow would be erased. An inset ring sits in the border box and the
+          // mask simply rounds it. `--sq-ring` is a registered property, so it
+          // animates like the `border-color` it stands in for.
+          'sq sq-lg sq-ring h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-text outline-none transition-[border-color,box-shadow,--sq-ring] placeholder:text-text-subtle focus:border-accent/70 focus:inset-ring-2 focus:inset-ring-accent/20 focus:[--sq-ring:color-mix(in_srgb,var(--color-accent)_70%,transparent)]',
           className
         )}
         {...props}
@@ -62,23 +73,35 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
   }
 )
 
-export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
-  function Textarea({ className, ...props }, ref) {
-    return (
-      <textarea
-        ref={ref}
-        className={cn(
-          'w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm text-text outline-none transition-[border-color,box-shadow] placeholder:text-text-subtle focus:border-accent/70 focus:ring-2 focus:ring-accent/20',
-          className
-        )}
-        {...props}
-      />
-    )
-  }
-)
+export const Textarea = forwardRef<
+  HTMLTextAreaElement,
+  TextareaHTMLAttributes<HTMLTextAreaElement>
+>(function Textarea({ className, ...props }, ref) {
+  return (
+    <textarea
+      ref={ref}
+      className={cn(
+        'sq sq-lg sq-ring w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm text-text outline-none transition-[border-color,box-shadow,--sq-ring] placeholder:text-text-subtle focus:border-accent/70 focus:inset-ring-2 focus:inset-ring-accent/20 focus:[--sq-ring:color-mix(in_srgb,var(--color-accent)_70%,transparent)]',
+        className
+      )}
+      {...props}
+    />
+  )
+})
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>): JSX.Element {
-  return <div className={cn('rounded-xl border border-border bg-surface', className)} {...props} />
+  // `sq-frame`, not `sq`: a card is a container, and the mask `sq` applies clips
+  // descendants the way `overflow-hidden` does. Painting the fill as this
+  // element's own background instead leaves children (and any shadow) alone.
+  return (
+    <div
+      className={cn(
+        'sq-frame sq-ring sq-xl sq-fill-surface rounded-xl border border-border bg-surface',
+        className
+      )}
+      {...props}
+    />
+  )
 }
 
 export function Badge({
@@ -91,6 +114,8 @@ export function Badge({
   return (
     <span
       className={cn(
+        // Pills stay circular: at `rounded-full` the corner is a semicircle with
+        // no straight edge to blend into, so there is no curvature break to fix.
         'inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-text-muted',
         className
       )}

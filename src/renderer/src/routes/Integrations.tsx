@@ -32,10 +32,10 @@ export default function Integrations(): JSX.Element {
         {INTEGRATIONS.map((it) => (
           <div
             key={it.id}
-            className="flex items-start gap-3 rounded-xl border border-border bg-surface p-4"
+            className="flex items-start gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4"
           >
             <span
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+              className="flex h-9 w-9 shrink-0 items-center justify-center sq sq-lg rounded-lg"
               style={{ backgroundColor: `${it.accent}1a`, color: it.accent }}
             >
               <CatalogIcon name={it.icon} className="h-4 w-4" />

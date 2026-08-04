@@ -138,7 +138,7 @@ export function ServicesSegment({
         onClick={() => setOpen((o) => !o)}
         title="Processes this session is running"
         className={cn(
-          'flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 transition hover:bg-white/5',
+          'flex min-w-0 items-center gap-1.5 sq sq-md rounded-md px-1.5 py-1 transition hover:bg-white/5',
           open ? 'text-text' : 'text-text-muted hover:text-text'
         )}
       >
@@ -187,7 +187,7 @@ function ServicesMenu({
     // fixed `left-0` on a trigger this far right sends the menu off the window,
     // and there is no scroll container to rescue it.
     <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={style}>
-      <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-elevated py-1 shadow-2xl">
+      <div className="flex min-h-0 flex-col overflow-hidden sq-frame sq-xl sq-fill-elevated sq-ring rounded-xl border border-border bg-elevated py-1 shadow-2xl">
         <div className="shrink-0 px-3 py-1 text-[11px] font-medium text-text-muted">Processes</div>
         {/* Scrolls instead of growing past the top of the window: a worktree
             setup can leave several processes behind, and the header has to stay
@@ -370,7 +370,7 @@ function RowAction({
       title={label}
       aria-label={label}
       className={cn(
-        'flex h-5 w-5 items-center justify-center rounded transition',
+        'flex h-5 w-5 items-center justify-center sq sq-base rounded transition',
         active ? 'bg-white/10 text-text' : 'text-text-subtle hover:bg-white/5 hover:text-text',
         disabled && 'pointer-events-none opacity-40'
       )}
