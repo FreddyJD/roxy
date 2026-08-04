@@ -219,6 +219,14 @@ export type MessagePart =
        * on every other tool, and on task cards from before this existed.
        */
       subChatId?: string
+      /**
+       * Whether this call could be cancelled while it was running — set from the
+       * `tool-start` event (see LlmEvent), which resolves it from the tool
+       * catalog. Only meaningful while `state === 'running'`; it is persisted
+       * with the rest of the card simply because the whole part is, and a
+       * settled card never reads it.
+       */
+      cancellable?: boolean
       /** Result body, shown when the card is expanded. */
       output?: string
       /** Optional inline image (data URL), e.g. a browser screenshot. */

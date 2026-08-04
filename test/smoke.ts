@@ -57,6 +57,13 @@ import {
   cancelSessionBackgroundJobs,
   _resetBackgroundJobs
 } from '../src/main/services/background-tasks'
+import {
+  startToolRun,
+  cancelToolCall,
+  cancelToolCallsFor,
+  wasToolCallCancelled,
+  _resetToolRuns
+} from '../src/main/services/tool-runs'
 import * as lsp from '../src/main/services/lsp'
 import {
   ensureMcpConnected,
@@ -2501,6 +2508,135 @@ async function main(): Promise<void> {
       '_resetBackgroundJobs clears the registry',
       listRunningBackgroundJobs(s1).length === 0 && !hasActiveBackgroundJobs(s1)
     )
+  }
+
+  // ---- per-call tool cancellation: the registry that makes Stop granular ----
+  // Stop used to be all-or-nothing: a wedged `bash` could only be escaped by
+  // killing the whole turn, losing its reasoning and every other tool result.
+  {
+    _resetToolRuns()
+    let aborted = false
+    const run = startToolRun({
+      callId: 'call_1',
+      tool: 'bash',
+      sessionId: 'sess_1',
+      cancel: () => {
+        aborted = true
+      }
+    })
+    check('a fresh tool run is not cancelled', run.wasCancelled() === false)
+    check('cancelToolCall finds a running call', cancelToolCall('call_1') === true)
+    check('cancelToolCall aborts the call', aborted === true)
+    // The flag is how the harness tells "the user did this" from "the tool
+    // failed" — both abort the same signal, so only the registry knows which.
+    check(
+      'a cancelled call is marked as such',
+      run.wasCancelled() && wasToolCallCancelled('call_1')
+    )
+
+    // Cancelling something that already finished must report false, so the UI
+    // never pretends it did something.
+    run.end()
+    check('a finished call is gone from the registry', cancelToolCall('call_1') === false)
+    check('an unknown call id cancels nothing', cancelToolCall('nope') === false)
+
+    // `end` is idempotent, and a duplicate call id (providers do reuse them
+    // across steps) must leave the NEWER call cancellable rather than have the
+    // older one's teardown deregister it.
+    _resetToolRuns()
+    let secondAborted = false
+    const first = startToolRun({ callId: 'dup', tool: 'bash', sessionId: 's', cancel: () => {} })
+    const second = startToolRun({
+      callId: 'dup',
+      tool: 'bash',
+      sessionId: 's',
+      cancel: () => {
+        secondAborted = true
+      }
+    })
+    first.end()
+    check('a replaced call id stays cancellable', cancelToolCall('dup') === true && secondAborted)
+    second.end()
+
+    // A session-wide sweep hits only that session's calls.
+    _resetToolRuns()
+    let mine = false
+    let theirs = false
+    const a2 = startToolRun({
+      callId: 'c_a',
+      tool: 'bash',
+      sessionId: 'sess_a',
+      cancel: () => {
+        mine = true
+      }
+    })
+    const b2 = startToolRun({
+      callId: 'c_b',
+      tool: 'bash',
+      sessionId: 'sess_b',
+      cancel: () => {
+        theirs = true
+      }
+    })
+    cancelToolCallsFor('sess_a')
+    check('cancelToolCallsFor is scoped to one session', mine === true && theirs === false)
+    // A session-wide Stop aborts the same signal but must NOT mark the call as
+    // individually cancelled: that flag makes the harness tell the model "you
+    // cancelled this, carry on with the rest of your work" — a lie in a
+    // transcript whose entire turn just stopped.
+    check(
+      'a session-wide stop is not recorded as a per-call cancel',
+      a2.wasCancelled() === false && wasToolCallCancelled('c_a') === false
+    )
+    // A throwing cancel must not break the sweep for the calls after it.
+    const boom = startToolRun({
+      callId: 'c_boom',
+      tool: 'bash',
+      sessionId: 'sess_b',
+      cancel: () => {
+        throw new Error('nope')
+      }
+    })
+    cancelToolCallsFor('sess_b')
+    check('a throwing cancel does not break the sweep', theirs === true)
+    a2.end()
+    b2.end()
+    boom.end()
+    _resetToolRuns()
+  }
+
+  // ---- end to end: cancelling one call kills the real process ----
+  // The registry above is bookkeeping; this proves the signal reaches the work.
+  // A 30s sleep would hold the turn open for its full duration — the exact case
+  // the feature exists for — so this must return in well under that.
+  {
+    _resetToolRuns()
+    const controller = new AbortController()
+    const started = Date.now()
+    const run = startToolRun({
+      callId: 'sleepy',
+      tool: 'bash',
+      sessionId: ws,
+      cancel: () => controller.abort()
+    })
+    const sleeping = runTool(
+      'bash',
+      { command: process.platform === 'win32' ? 'timeout /t 30 /nobreak' : 'sleep 30' },
+      { cwd: ws, signal: controller.signal }
+    )
+    // Give the shell a moment to actually spawn before pulling the rug.
+    await new Promise((r) => setTimeout(r, 400))
+    check('the sleeping call is cancellable', cancelToolCall('sleepy') === true)
+    const result = await sleeping
+    const elapsed = Date.now() - started
+    run.end()
+    check(
+      'cancelling one call returns long before its command would end',
+      elapsed < 10_000,
+      `${elapsed}ms`
+    )
+    check('a cancelled bash is not reported as ok', result.ok === false)
+    _resetToolRuns()
   }
 
   // ---- LSP diagnostics after edit (Phase 12) via a real mock language server ----

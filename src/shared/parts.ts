@@ -78,7 +78,8 @@ function foldInto(
         title: event.title,
         callId: event.callId,
         input: event.input,
-        subChatId: event.subChatId
+        subChatId: event.subChatId,
+        cancellable: event.cancellable
       }
     ]
   }

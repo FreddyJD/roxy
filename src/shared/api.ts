@@ -280,6 +280,18 @@ export type LlmEvent =
        * button name the one delegate to stop.
        */
       subChatId?: string
+      /**
+       * Whether this call can be cancelled on its own while it runs — resolved in
+       * the harness from the tool catalog (`isInterruptibleTool`), which is the
+       * only place that knows an MCP tool's runtime name.
+       *
+       * Sent rather than re-derived in the renderer so the button and the thing
+       * it triggers can never disagree: one source, decided where the signal is
+       * actually threaded. Beside `input` for the same reason `subChatId` is —
+       * `input` is replayed verbatim as the model's tool_calls arguments, and
+       * this is UI addressing the model never sent.
+       */
+      cancellable?: boolean
     }
   | { type: 'tool-delta'; callId: string; chunk: string }
   | {
@@ -711,6 +723,13 @@ export interface RoxyApi {
   }
   tools: {
     run(sessionId: string, name: string, input: Record<string, unknown>): Promise<ToolResult>
+    /**
+     * Cancel ONE tool call that is running right now, without stopping the turn
+     * around it. Resolves false when nothing was running for that call id — it
+     * finished between the click and the call — which the UI uses to avoid
+     * pretending it did something.
+     */
+    cancel(callId: string): Promise<boolean>
   }
   queue: {
     list(chatId: string): Promise<QueueItem[]>

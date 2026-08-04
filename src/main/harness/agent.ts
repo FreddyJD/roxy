@@ -11,7 +11,8 @@
  * Wires without tool support yet (azure/bedrock) fall back to a plain answer.
  */
 import type { ChatMessage, LlmEvent } from '../../shared/api'
-import type { ReasoningEffort, TokenUsage } from '../../shared/types'
+import type { ReasoningEffort, TokenUsage, ToolResult } from '../../shared/types'
+import { isInterruptibleTool } from '../../shared/tools'
 import { PartsFold, partsToContent } from '../../shared/parts'
 import {
   getAgent,
@@ -63,6 +64,7 @@ import {
   cancelBackgroundJob
 } from '../services/background-tasks'
 import { startSubagentRun } from '../services/subagent-stream'
+import { startToolRun } from '../services/tool-runs'
 import {
   messagesHaveImages,
   openAiContent,
@@ -1261,19 +1263,51 @@ async function runLoop(o: LoopOptions): Promise<string> {
         callId: tc.id,
         tool: tc.name,
         title: toolTitle(tc.name, input),
-        input
+        input,
+        // Whether this card gets a cancel button. Resolved here, in the one place
+        // that knows the tool's real name (MCP names are only known at runtime),
+        // rather than re-derived in the renderer from a list that would drift.
+        cancellable: isInterruptibleTool(tc.name)
       })
-      const result = await runTool(tc.name, input, {
-        cwd,
-        sessionId,
-        browserKey,
-        // Stop must reach INSIDE the tool, not just between calls. Without this
-        // the loop's `if (signal.aborted) break` above only fires once the
-        // current tool returns on its own, which is why Stop looked stuck
-        // during a long bash or a hanging fetch.
-        signal,
-        onChunk: (chunk) => emitTool({ type: 'tool-delta', callId: tc.id, chunk })
+      // Its OWN controller, chained to the turn's signal rather than being it —
+      // the same shape a subagent gets, and for the same reason. Stop still
+      // cascades (the listener below), but cancelling this ONE call aborts only
+      // this controller, so the turn survives, the model reads a cancelled result
+      // for this call, and every other tool result in the step is preserved.
+      const callController = new AbortController()
+      const cascade = (): void => callController.abort()
+      if (signal.aborted) callController.abort()
+      else signal.addEventListener('abort', cascade, { once: true })
+      const run = startToolRun({
+        callId: tc.id,
+        tool: tc.name,
+        sessionId: sessionId ?? '',
+        cancel: cascade
       })
+      let result: ToolResult
+      try {
+        result = await runTool(tc.name, input, {
+          cwd,
+          sessionId,
+          browserKey,
+          // Stop must reach INSIDE the tool, not just between calls. Without this
+          // the loop's `if (signal.aborted) break` above only fires once the
+          // current tool returns on its own, which is why Stop looked stuck
+          // during a long bash or a hanging fetch.
+          signal: callController.signal,
+          onChunk: (chunk) => emitTool({ type: 'tool-delta', callId: tc.id, chunk })
+        })
+        // Distinguish "the user cancelled this one call" from "Stop killed the
+        // turn". Both abort the same signal, so the tool can't tell them apart —
+        // only the registry knows which lever was pulled. The wording matters:
+        // the turn CONTINUES after a per-call cancel, and the model is about to
+        // read this, so it has to understand not to immediately retry.
+        if (run.wasCancelled())
+          result = { ...result, ok: false, output: cancelledToolReport(result.output) }
+      } finally {
+        run.end()
+        signal.removeEventListener('abort', cascade)
+      }
       emitTool({
         type: 'tool-end',
         callId: tc.id,
@@ -1646,6 +1680,22 @@ async function runSubagent(o: SubagentOptions): Promise<string> {
   } finally {
     signal.removeEventListener('abort', cascade)
   }
+}
+
+/**
+ * What a cancelled TOOL CALL reports back to the model that made it.
+ *
+ * Deliberately explicit that the user did this and that the turn is still
+ * running — the model reads this result and keeps going, and without the framing
+ * it reliably re-runs the exact command that was just killed. Any partial output
+ * is kept: half a test run is often the whole reason you stopped it.
+ */
+function cancelledToolReport(partial: string): string {
+  const got = partial.trim()
+  const note =
+    'The user cancelled this tool call. Do not run it again unless they ask — ' +
+    'continue with the rest of your work, or ask them how to proceed.'
+  return got ? `${note}\n\nPartial output before it was cancelled:\n${got.slice(0, 4000)}` : note
 }
 
 /**

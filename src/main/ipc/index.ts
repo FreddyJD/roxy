@@ -62,6 +62,7 @@ import {
   cancelSubagentRun,
   cancelSubagentRunsFor
 } from '../services/subagent-stream'
+import { cancelToolCall, cancelToolCallsFor } from '../services/tool-runs'
 import { mcpServerSummaries, reconnectMcpServer, disposeConnection } from '../services/mcp'
 import {
   listSkills,
@@ -587,6 +588,11 @@ export function registerIpc(): void {
       return runTool(name, input ?? {}, { cwd: cwd ?? '', sessionId })
     }
   )
+  // Cancel one in-flight tool call without touching the turn around it. The call
+  // unwinds through its own exit path (see cancelToolCall), which is what keeps
+  // the model's tool_calls -> role:'tool' pairing intact, so there is nothing to
+  // clean up here.
+  ipcMain.handle(CHANNELS.toolsCancel, (_e, callId: string) => cancelToolCall(callId))
 
   // ---- queue ----
   // Each mutation re-mirrors the shared queue to any paired phone (remote is a
@@ -669,6 +675,11 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.llmAbortSession, (_e, sessionId: string) => {
     abortSession(sessionId)
     cancelSubagentRunsFor(sessionId)
+    // Belt and braces: the turn's own signal already cascades into every call's
+    // controller, so this is normally a no-op. It matters for a call registered
+    // by work that ISN'T the tracked turn (compaction, a loop tick), which would
+    // otherwise keep running with nobody left to read its result.
+    cancelToolCallsFor(sessionId)
   })
 
   // ---- background subagent tasks (Phase 11) ----

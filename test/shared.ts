@@ -2,7 +2,13 @@
  * Pure-Node validation of the shared catalogs (no Electron, no DB).
  * Run: npm run smoke:shared
  */
-import { TOOLS, getTool, resolveToolIds, TOOL_CATEGORIES } from '../src/shared/tools'
+import {
+  TOOLS,
+  getTool,
+  resolveToolIds,
+  TOOL_CATEGORIES,
+  isInterruptibleTool
+} from '../src/shared/tools'
 import {
   AGENTS,
   getAgent,
@@ -259,6 +265,36 @@ check(
   ['bash_list', 'bash_output', 'bash_kill'].every((id) => Boolean(getTool(id)))
 )
 check('resolveToolIds("all") expands to every tool', resolveToolIds('all').length === TOOLS.length)
+// ---- per-call cancel: the catalog flag must match what the harness can honor ----
+// The contract is honesty: `interruptible` is what draws the cancel button, so a
+// tool marked true whose dispatch ignores ctx.signal ships a button that lies.
+check(
+  'every tool declares whether it is interruptible',
+  TOOLS.every((t) => typeof t.interruptible === 'boolean')
+)
+check(
+  'the long-blocking tools are cancellable',
+  ['bash', 'webfetch', 'websearch', 'grep', 'glob', 'lsp', 'browser_open'].every((id) =>
+    isInterruptibleTool(id)
+  )
+)
+check(
+  'instant local tools offer no cancel button',
+  ['read', 'write', 'edit', 'list', 'loop_list', 'bash_list', 'change_session_metadata'].every(
+    (id) => !isInterruptibleTool(id)
+  )
+)
+// `task` has its OWN cancel (by sub chat id), which reports back to the parent
+// model properly. It must not also be routed through the generic per-call path,
+// or the card would offer the weaker of the two.
+check('task is excluded from the generic per-call cancel', !isInterruptibleTool('task'))
+// MCP tools are contributed at runtime, so they can never be in this static
+// catalog — but they ARE a network round trip and runTool wraps them in
+// untilAborted. The unknown-name default has to be permissive for that to work.
+check(
+  'an unknown (MCP) tool name defaults to cancellable',
+  isInterruptibleTool('mcp__github__create_issue') && isInterruptibleTool('skill_manage')
+)
 check('resolveToolIds passthrough', resolveToolIds(['read', 'bash']).join() === 'read,bash')
 // ---- catalog reflects reality (guards against drift back to the old aspirational list) ----
 check(
@@ -1316,11 +1352,22 @@ check('renderBackgroundStarted warns against polling', /DO NOT poll/i.test(start
     card.type === 'tool' && !('subChatId' in (card.input ?? {}))
   )
 
-  fold.apply({ type: 'tool-start', callId: 'b1', tool: 'bash', title: 'ls' })
+  fold.apply({ type: 'tool-start', callId: 'b1', tool: 'bash', title: 'ls', cancellable: true })
   const plain = fold.parts[1]
   check(
     'fold: a non-task card has no subChatId',
     plain.type === 'tool' && plain.subChatId === undefined
+  )
+  // The other half of the cancel addressing: whether THIS call can be aborted on
+  // its own. Decided in the harness (only it knows an MCP tool's runtime name)
+  // and carried on the event, so the button and the signal cannot disagree.
+  check(
+    'fold: a card keeps its cancellable flag',
+    plain.type === 'tool' && plain.cancellable === true
+  )
+  check(
+    'fold: cancellable stays out of the model-facing input',
+    plain.type === 'tool' && !('cancellable' in (plain.input ?? {}))
   )
 
   // Resuming a run (opening a subagent session mid-flight) must not lose it.
@@ -1331,6 +1378,15 @@ check('renderBackgroundStarted warns against polling', /DO NOT poll/i.test(start
   check(
     'fold: subChatId survives a seed + later tool-end',
     after.type === 'tool' && after.subChatId === 'sub-42' && after.state === 'done'
+  )
+  // A cancelled call still emits a normal tool-end (that is what keeps the
+  // model's tool_calls -> role:'tool' pairing valid), so the card must settle
+  // into `error` rather than spinning forever.
+  resumed.apply({ type: 'tool-end', callId: 'b1', output: 'stopped', ok: false })
+  const cancelled = resumed.parts[1]
+  check(
+    'fold: a cancelled call settles as an error card, not a stuck spinner',
+    cancelled.type === 'tool' && cancelled.state === 'error' && cancelled.output === 'stopped'
   )
 }
 

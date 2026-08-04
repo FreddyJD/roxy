@@ -136,7 +136,8 @@ const roxy: RoxyApi = {
     }
   },
   tools: {
-    run: (sessionId, name, input) => ipcRenderer.invoke(CHANNELS.toolsRun, sessionId, name, input)
+    run: (sessionId, name, input) => ipcRenderer.invoke(CHANNELS.toolsRun, sessionId, name, input),
+    cancel: (callId) => ipcRenderer.invoke(CHANNELS.toolsCancel, callId)
   },
   queue: {
     list: (chatId) => ipcRenderer.invoke(CHANNELS.queueList, chatId),
