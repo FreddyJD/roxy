@@ -100,7 +100,7 @@ function useActiveModelInfo(): ModelInfo | undefined {
  * Exported so the model picker (own file, same row) cannot drift from it.
  */
 export const triggerClass =
-  'press-scale flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-text-muted hover:bg-white/5 hover:text-text'
+  'press-scale flex items-center gap-1.5 sq sq-md rounded-md px-1.5 py-1 text-xs text-text-muted hover:bg-white/5 hover:text-text'
 /**
  * Width and horizontal offset are supplied by `usePopover`'s anchor, not by
  * classes — a fixed `left-0` is exactly what pushes these off the window edge.
@@ -108,7 +108,7 @@ export const triggerClass =
  * tall list into a scrolling one instead of one that runs off the top.
  */
 const popoverClass =
-  'animate-pop-in absolute bottom-full z-50 mb-2 flex flex-col overflow-y-auto rounded-xl border border-border bg-elevated shadow-2xl origin-bottom-left'
+  'animate-pop-in absolute bottom-full z-50 mb-2 flex flex-col overflow-y-auto sq-frame sq-xl sq-fill-elevated sq-ring rounded-xl border border-border bg-elevated shadow-2xl origin-bottom-left'
 /** Menu widths in px, matching what each picker renders. */
 const POPOVER_W = 288
 /** Just wide enough for "Build"/"Plan" + the check, now that blurbs are gone. */
@@ -225,7 +225,7 @@ export function AgentPicker(): JSX.Element {
                     setOpen(false)
                   }}
                   className={cn(
-                    'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition',
+                    'flex w-full items-center gap-2.5 sq sq-lg rounded-lg px-2.5 py-1.5 text-left transition',
                     selected ? 'bg-accent/15' : 'hover:bg-white/5'
                   )}
                   title={a.description}
@@ -433,7 +433,7 @@ export function ContextMeter(): JSX.Element {
     >
       {open && (
         <div className="absolute bottom-full z-50 flex flex-col pb-1.5" style={anchor}>
-          <div className="animate-pop-in min-h-0 origin-bottom-left overflow-y-auto rounded-xl border border-border bg-elevated p-3 shadow-2xl">
+          <div className="animate-pop-in min-h-0 origin-bottom-left overflow-y-auto sq-frame sq-xl sq-fill-elevated sq-ring rounded-xl border border-border bg-elevated p-3 shadow-2xl">
             <div className="mb-1.5 text-xs font-medium text-text">Context Window</div>
             <div className="mb-1 flex items-baseline justify-between text-[11px] text-text-subtle">
               <span className="tabular-nums">
@@ -454,7 +454,7 @@ export function ContextMeter(): JSX.Element {
             {reserve > 0 && (
               <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-text-subtle">
                 <span
-                  className="h-2.5 w-2.5 rounded-sm bg-accent/30"
+                  className="h-2.5 w-2.5 sq sq-sm rounded-sm bg-accent/30"
                   style={{ backgroundImage: hatch }}
                 />
                 Reserved for response
@@ -486,7 +486,7 @@ export function ContextMeter(): JSX.Element {
               type="button"
               onClick={() => void compactConversation()}
               disabled={compacting || counted.length === 0}
-              className="press-scale mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-xs text-text hover:border-border-strong hover:bg-elevated disabled:opacity-40"
+              className="press-scale mt-2.5 flex w-full items-center justify-center gap-1.5 sq sq-lg sq-ring rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-xs text-text hover:border-border-strong hover:bg-elevated disabled:opacity-40"
             >
               {compacting ? (
                 <>
@@ -500,7 +500,7 @@ export function ContextMeter(): JSX.Element {
         </div>
       )}
 
-      <div className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-text-muted transition-colors hover:bg-white/5 hover:text-text">
+      <div className="flex items-center gap-1.5 sq sq-md rounded-md px-1.5 py-1 text-xs text-text-muted transition-colors hover:bg-white/5 hover:text-text">
         {total ? (
           <>
             <span className="h-1 w-8 overflow-hidden rounded-full bg-white/10">

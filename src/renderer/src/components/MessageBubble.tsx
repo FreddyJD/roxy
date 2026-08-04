@@ -29,14 +29,14 @@ function MessageBubbleImpl({
     <div className="flex gap-3 px-1 py-3">
       <div className="mt-0.5 shrink-0">
         {isUser ? (
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-surface-2 text-text-muted">
+          <div className="flex h-7 w-7 items-center justify-center sq sq-lg sq-ring rounded-lg border border-border bg-surface-2 text-text-muted">
             <User className="h-4 w-4" />
           </div>
         ) : (
           <img
             src={roxy}
             alt="Roxy"
-            className="h-7 w-7 rounded-lg object-cover ring-1 ring-border"
+            className="h-7 w-7 sq sq-lg rounded-lg object-cover inset-ring-1 inset-ring-border"
           />
         )}
       </div>
@@ -53,7 +53,7 @@ function MessageBubbleImpl({
                     <img
                       src={img.dataUrl}
                       alt={img.name ?? 'pasted image'}
-                      className={cn(HOVERABLE_THUMB, 'max-h-48 max-w-[12rem] rounded-lg')}
+                      className={cn(HOVERABLE_THUMB, 'max-h-48 max-w-[12rem] sq sq-lg rounded-lg')}
                     />
                   </ImagePreview>
                 ))}

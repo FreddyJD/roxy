@@ -38,7 +38,10 @@ function useQueueSection(): SectionState {
 export function Queue({ className, ...props }: HTMLAttributes<HTMLDivElement>): JSX.Element {
   return (
     <div
-      className={cn('rounded-xl border border-border bg-surface/60 p-1.5', className)}
+      className={cn(
+        'sq sq-xl sq-ring rounded-xl border border-border bg-surface/60 p-1.5',
+        className
+      )}
       {...props}
     />
   )
@@ -77,7 +80,7 @@ export function QueueSectionTrigger({
         onClick?.(e)
       }}
       className={cn(
-        'flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/5',
+        'flex w-full items-center gap-1.5 sq sq-lg rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/5',
         className
       )}
       {...props}
@@ -144,7 +147,7 @@ export function QueueItem({ className, ...props }: LiHTMLAttributes<HTMLLIElemen
   return (
     <li
       className={cn(
-        'group flex items-start gap-2 rounded-lg border border-border bg-surface-2 px-2.5 py-2 transition-colors hover:border-border-strong',
+        'group flex items-start gap-2 sq sq-lg sq-ring rounded-lg border border-border bg-surface-2 px-2.5 py-2 transition-colors hover:border-border-strong',
         className
       )}
       {...props}
@@ -222,7 +225,7 @@ export function QueueItemAction({
     <button
       type="button"
       className={cn(
-        'press-scale flex h-6 w-6 items-center justify-center rounded-md text-text-subtle hover:bg-white/5 hover:text-text',
+        'press-scale flex h-6 w-6 items-center justify-center sq sq-md rounded-md text-text-subtle hover:bg-white/5 hover:text-text',
         className
       )}
       {...props}
@@ -248,7 +251,11 @@ export function QueueItemImage({
   // image so you can confirm what's actually attached before the turn runs.
   return (
     <ImagePreview src={String(props.src ?? '')} name={alt || undefined}>
-      <img alt={alt} className={cn(HOVERABLE_THUMB, 'h-9 w-9 rounded-md', className)} {...props} />
+      <img
+        alt={alt}
+        className={cn(HOVERABLE_THUMB, 'h-9 w-9 sq sq-md rounded-md', className)}
+        {...props}
+      />
     </ImagePreview>
   )
 }
@@ -260,7 +267,7 @@ export function QueueItemFile({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-md border border-border bg-surface px-1.5 py-0.5 text-[11px] text-text-muted',
+        'inline-flex items-center gap-1 sq sq-md sq-ring rounded-md border border-border bg-surface px-1.5 py-0.5 text-[11px] text-text-muted',
         className
       )}
       {...props}

@@ -68,7 +68,7 @@ export function LoopDetailsPane({
         <button
           onClick={onClose}
           title="Close"
-          className="press-scale flex h-6 w-6 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+          className="press-scale flex h-6 w-6 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
         >
           <X className="h-4 w-4" />
         </button>
@@ -87,7 +87,7 @@ export function LoopDetailsPane({
         </Row>
 
         <Row label="Prompt">
-          <div className="whitespace-pre-wrap rounded-lg border border-border bg-surface-2 p-2.5 text-xs leading-relaxed text-text-muted">
+          <div className="whitespace-pre-wrap sq sq-lg sq-ring rounded-lg border border-border bg-surface-2 p-2.5 text-xs leading-relaxed text-text-muted">
             {loop.prompt}
           </div>
         </Row>

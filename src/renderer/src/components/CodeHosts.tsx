@@ -53,7 +53,7 @@ export function CodeHosts(): JSX.Element {
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+    <div className="flex flex-col gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
       <div className="min-w-0">
         <div className="text-sm font-medium text-text">Pull requests</div>
         <p className="mt-0.5 text-xs text-text-muted">
@@ -87,7 +87,7 @@ function HostRow({
   onChoose: (host: string, kind: ForgeKind | null) => Promise<void>
 }): JSX.Element {
   return (
-    <div className="flex items-center gap-3 rounded-lg px-2 py-2 transition hover:bg-white/5">
+    <div className="flex items-center gap-3 sq sq-lg rounded-lg px-2 py-2 transition hover:bg-white/5">
       <StatusDot host={host} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm text-text">{host.host}</div>
@@ -107,7 +107,7 @@ function HostRow({
         <select
           value=""
           onChange={(e) => void onChoose(host.host, (e.target.value || null) as ForgeKind | null)}
-          className="shrink-0 rounded-lg border border-border bg-surface-2 px-2 py-1 text-xs text-text"
+          className="shrink-0 sq sq-lg sq-ring rounded-lg border border-border bg-surface-2 px-2 py-1 text-xs text-text"
         >
           <option value="">Which host?</option>
           {KINDS.map((k) => (

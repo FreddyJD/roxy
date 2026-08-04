@@ -191,7 +191,7 @@ export default function Settings(): JSX.Element {
           <button
             type="button"
             onClick={() => navigate('/onboarding')}
-            className="press-scale flex items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface/40 p-3.5 text-sm text-text-muted hover:border-border-strong hover:bg-surface hover:text-text"
+            className="press-scale flex items-center justify-center gap-2 sq sq-xl sq-ring sq-dashed rounded-xl border border-dashed border-border bg-surface/40 p-3.5 text-sm text-text-muted hover:border-border-strong hover:[--sq-ring:var(--color-border-strong)] hover:bg-surface hover:text-text"
           >
             <Plus className="h-4 w-4" /> Add provider
           </button>
@@ -202,7 +202,7 @@ export default function Settings(): JSX.Element {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
           Workstreams
         </h2>
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="text-sm font-medium text-text">
               New sessions get their own workstream
@@ -220,7 +220,7 @@ export default function Settings(): JSX.Element {
           />
         </div>
 
-        <div className="mt-3 rounded-xl border border-border bg-surface p-4">
+        <div className="mt-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
           <div className="text-sm font-medium text-text">Branch prefix</div>
           <p className="mt-0.5 text-xs text-text-muted">
             New workstreams get a branch named after the session. This is what goes in front of it —
@@ -238,8 +238,10 @@ export default function Settings(): JSX.Element {
               placeholder="no prefix"
               aria-label="Branch prefix"
               className={cn(
-                'w-48 rounded-lg border bg-surface-2 px-3 py-1.5 text-sm text-text outline-none placeholder:text-text-subtle',
-                prefixError ? 'border-danger' : 'border-border focus:border-border-strong'
+                'w-48 sq sq-lg sq-ring rounded-lg border bg-surface-2 px-3 py-1.5 text-sm text-text outline-none placeholder:text-text-subtle',
+                prefixError
+                  ? 'border-danger [--sq-ring:var(--color-danger)]'
+                  : 'border-border focus:border-border-strong focus:[--sq-ring:var(--color-border-strong)]'
               )}
             />
             {/* The example is the point: "roxy" in a box means nothing until
@@ -270,7 +272,7 @@ export default function Settings(): JSX.Element {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
           Browser
         </h2>
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="text-sm font-medium text-text">Roxy browser</div>
             <p className="mt-0.5 text-xs text-text-muted">
@@ -288,7 +290,7 @@ export default function Settings(): JSX.Element {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
           Web search
         </h2>
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+        <div className="flex flex-col gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
           <div className="min-w-0">
             <div className="text-sm font-medium text-text">Exa API key (optional)</div>
             <p className="mt-0.5 text-xs text-text-muted">
@@ -310,7 +312,7 @@ export default function Settings(): JSX.Element {
               value={searchKey}
               onChange={(e) => setSearchKey(e.target.value)}
               placeholder="exa_…"
-              className="min-w-0 flex-1 rounded-lg border border-border bg-surface-strong px-3 py-2 text-sm text-text outline-none placeholder:text-text-subtle focus:border-border-strong"
+              className="min-w-0 flex-1 sq sq-lg sq-ring rounded-lg border border-border bg-surface-strong px-3 py-2 text-sm text-text outline-none placeholder:text-text-subtle focus:border-border-strong"
               spellCheck={false}
               autoComplete="off"
             />
@@ -346,7 +348,7 @@ export default function Settings(): JSX.Element {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
           Backup &amp; restore
         </h2>
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+        <div className="flex flex-col gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
           <div className="min-w-0">
             <div className="text-sm font-medium text-text">Skills &amp; MCP servers</div>
             <p className="mt-0.5 text-xs text-text-muted">
@@ -367,7 +369,7 @@ export default function Settings(): JSX.Element {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
           About
         </h2>
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+        <div className="flex flex-col gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-sm font-medium text-text">Roxy v{versions?.app ?? '—'}</div>
@@ -401,7 +403,7 @@ export default function Settings(): JSX.Element {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-danger">
           Danger zone
         </h2>
-        <div className="flex flex-col gap-3 rounded-xl border border-danger/30 bg-danger/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 sq sq-xl sq-ring sq-ring-danger rounded-xl border border-danger/30 bg-danger/5 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="text-sm font-medium text-text">Reset everything</div>
             <p className="mt-0.5 text-xs text-text-muted">
@@ -449,7 +451,7 @@ function ProviderRow({
   return (
     <div
       className={cn(
-        'flex items-center gap-3 rounded-xl border border-border bg-surface p-3.5 transition',
+        'flex items-center gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-3.5 transition',
         dragging && 'cursor-grabbing',
         draggable && !dragging && 'cursor-grab'
       )}
@@ -461,7 +463,7 @@ function ProviderRow({
         )}
         aria-hidden="true"
       />
-      <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-2">
+      <div className="flex h-8 w-8 items-center justify-center sq sq-lg sq-ring rounded-lg border border-border bg-surface-2">
         <ProviderLogo id={provider.id} name={provider.name} size={18} />
       </div>
       <div className="min-w-0 flex-1">

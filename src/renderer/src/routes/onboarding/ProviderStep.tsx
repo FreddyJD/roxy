@@ -74,7 +74,7 @@ export function ProviderStep(): JSX.Element {
         />
       </div>
 
-      <div className="mt-3 max-h-[320px] overflow-y-auto rounded-xl border border-border bg-surface">
+      <div className="mt-3 max-h-[320px] overflow-y-auto sq sq-xl sq-ring rounded-xl border border-border bg-surface">
         {filtered.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-text-subtle">
             No providers match “{query}”.
@@ -108,9 +108,14 @@ function RoxyHero({
   return (
     <button
       onClick={onClick}
-      className="group mt-6 flex w-full items-center gap-4 overflow-hidden rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 via-accent/5 to-transparent p-5 text-left transition-colors hover:border-accent/70 hover:from-accent/25"
+      // The gradient occupies `background-image`, which is also how `sq-ring`
+      // paints its hairline -- the two can't share one element. The border here
+      // is the accent tint rather than a structural hairline, so an inset ring
+      // (a box-shadow, and clipped to the shape by the mask) reads identically
+      // and leaves the gradient alone.
+      className="group mt-6 flex w-full items-center gap-4 overflow-hidden sq sq-2xl inset-ring-1 inset-ring-accent/40 rounded-2xl bg-gradient-to-br from-accent/15 via-accent/5 to-transparent p-5 text-left transition-[--tw-gradient-from,box-shadow] hover:inset-ring-accent/70 hover:from-accent/25"
     >
-      <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-accent/30 bg-surface-2 shadow-sm">
+      <span className="flex h-14 w-14 shrink-0 items-center justify-center sq-frame sq-2xl sq-fill-surface-2 sq-ring sq-ring-accent rounded-2xl border border-accent/30 bg-surface-2 shadow-sm">
         <ProviderLogo id="roxy" name="Roxy" size={44} />
       </span>
       <span className="min-w-0 flex-1">
@@ -125,11 +130,11 @@ function RoxyHero({
         </span>
       </span>
       {connected ? (
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-sm font-medium text-success">
+        <span className="inline-flex shrink-0 items-center gap-1.5 sq sq-lg sq-ring [--sq-ring:color-mix(in_srgb,var(--color-success)_30%,transparent)] rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-sm font-medium text-success">
           <Check className="h-4 w-4" /> Connected
         </span>
       ) : (
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-white transition-[filter] group-hover:brightness-110">
+        <span className="inline-flex shrink-0 items-center gap-1.5 sq sq-lg rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-white transition-[filter] group-hover:brightness-110">
           Use Roxy <ArrowRight className="h-4 w-4" />
         </span>
       )}
@@ -151,7 +156,7 @@ function ProviderRow({
       onClick={onClick}
       className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/5"
     >
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-2">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center sq sq-lg sq-ring rounded-lg border border-border bg-surface-2">
         <ProviderLogo id={seed.id} name={seed.name} size={20} />
       </span>
       <span className="min-w-0 flex-1">
@@ -238,11 +243,11 @@ function ProviderSetup({
         <button
           onClick={onClose}
           title="Back"
-          className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+          className="press-scale flex h-8 w-8 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-2">
+        <span className="flex h-8 w-8 items-center justify-center sq sq-lg sq-ring rounded-lg border border-border bg-surface-2">
           <ProviderLogo id={seed.id} name={seed.name} size={20} />
         </span>
         <div className="leading-tight">
@@ -396,7 +401,7 @@ function CopilotSetup({ onConnected }: { onConnected: () => void }): JSX.Element
       </div>
       <button
         onClick={copyCode}
-        className="group flex items-center gap-3 rounded-xl border border-border bg-surface-2 px-5 py-3 transition-colors hover:border-border-strong"
+        className="group flex items-center gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface-2 px-5 py-3 transition-colors hover:border-border-strong"
       >
         <span className="font-mono text-2xl font-semibold tracking-[0.3em] text-text">
           {flow?.userCode ?? '••••-••••'}

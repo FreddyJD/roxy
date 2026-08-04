@@ -410,14 +410,14 @@ export function Sidebar(): JSX.Element {
           <button
             onClick={() => setRailed(false)}
             title="Expand sidebar"
-            className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-8 w-8 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <PanelLeftOpen className="h-4 w-4" />
           </button>
           <button
             onClick={newSession}
             title="New project"
-            className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-8 w-8 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <FolderOpen className="h-4 w-4" />
           </button>
@@ -426,7 +426,7 @@ export function Sidebar(): JSX.Element {
           <button
             onClick={() => setRemoteOpen(true)}
             title="Remote Workspace"
-            className="relative press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+            className="relative press-scale flex h-8 w-8 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <MonitorSmartphone className="h-4 w-4" />
             {remoteDot && (
@@ -441,21 +441,21 @@ export function Sidebar(): JSX.Element {
           <button
             onClick={() => navigate('/skills')}
             title="Skills"
-            className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-8 w-8 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <Lightbulb className="h-4 w-4" />
           </button>
           <button
             onClick={() => navigate('/mcp')}
             title="MCP Servers"
-            className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-8 w-8 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <Plug className="h-4 w-4" />
           </button>
           <button
             onClick={() => navigate('/settings')}
             title="Settings"
-            className="press-scale flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-8 w-8 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <SettingsIcon className="h-4 w-4" />
           </button>
@@ -475,7 +475,7 @@ export function Sidebar(): JSX.Element {
           <img
             src={roxy}
             alt="Roxy"
-            className="h-7 w-7 rounded-lg object-cover ring-1 ring-border"
+            className="h-7 w-7 sq sq-lg rounded-lg object-cover inset-ring-1 inset-ring-border"
           />
           <span className="text-sm font-semibold tracking-tight">Roxy</span>
         </div>
@@ -483,14 +483,14 @@ export function Sidebar(): JSX.Element {
           <button
             onClick={() => navigate('/settings')}
             title="Settings"
-            className="press-scale flex h-7 w-7 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-7 w-7 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <SettingsIcon className="h-4 w-4" />
           </button>
           <button
             onClick={() => setRailed(true)}
             title="Collapse sidebar"
-            className="press-scale flex h-7 w-7 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-7 w-7 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <PanelLeftClose className="h-4 w-4" />
           </button>
@@ -501,7 +501,7 @@ export function Sidebar(): JSX.Element {
         <button
           onClick={newSession}
           title="Open a folder as a new project"
-          className="press-scale flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-white text-sm font-medium text-black hover:bg-white/90"
+          className="press-scale flex h-9 w-full items-center justify-center gap-2 sq sq-lg rounded-lg bg-white text-sm font-medium text-black hover:bg-white/90"
         >
           <FolderOpen className="h-4 w-4" /> New project
         </button>
@@ -591,7 +591,7 @@ export function Sidebar(): JSX.Element {
                             setLoopDialogFor({ path: project.path, name: project.name })
                           }
                           title="New loop in this project"
-                          className="press-scale flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-text focus-visible:opacity-100 group-hover/project:opacity-100"
+                          className="press-scale flex h-5 w-5 shrink-0 items-center justify-center sq sq-base rounded text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-text focus-visible:opacity-100 group-hover/project:opacity-100"
                         >
                           <Repeat className="h-3.5 w-3.5" />
                         </button>
@@ -599,7 +599,7 @@ export function Sidebar(): JSX.Element {
                       <button
                         onClick={() => void newSessionInProject(project.path)}
                         title="New session in this project"
-                        className="press-scale flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle hover:bg-white/5 hover:text-text"
+                        className="press-scale flex h-5 w-5 shrink-0 items-center justify-center sq sq-base rounded text-text-subtle hover:bg-white/5 hover:text-text"
                       >
                         <Plus className="h-3.5 w-3.5" />
                       </button>
@@ -612,7 +612,7 @@ export function Sidebar(): JSX.Element {
                               <li key={loop.id}>
                                 <div
                                   className={cn(
-                                    'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors',
+                                    'group flex items-center gap-2 sq sq-lg rounded-lg px-2.5 py-1.5 text-sm transition-colors',
                                     loop.chatId === activeChatId
                                       ? 'bg-elevated text-text'
                                       : 'text-text-muted hover:bg-white/5 hover:text-text'
@@ -633,7 +633,7 @@ export function Sidebar(): JSX.Element {
                                   <button
                                     onClick={() => removeLoop(loop.id)}
                                     title="Delete loop"
-                                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-danger group-hover:opacity-100"
+                                    className="flex h-6 w-6 shrink-0 items-center justify-center sq sq-md rounded-md text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-danger group-hover:opacity-100"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </button>
@@ -701,7 +701,7 @@ export function Sidebar(): JSX.Element {
                                 <div
                                   onContextMenu={(e) => openContextMenu(e, chat)}
                                   className={cn(
-                                    'group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors',
+                                    'group flex items-center gap-2 sq sq-lg rounded-lg px-2.5 py-1.5 text-sm transition-colors',
                                     dragId && 'cursor-grabbing',
                                     // Keep the right-clicked row visibly selected
                                     // for as long as its menu is open, so a menu
@@ -724,7 +724,7 @@ export function Sidebar(): JSX.Element {
                                     <button
                                       onClick={() => stop(chat.id)}
                                       title="Stop this session"
-                                      className="group/stop flex h-4 w-4 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-white/10"
+                                      className="group/stop flex h-4 w-4 shrink-0 items-center justify-center sq sq-base rounded text-accent transition-colors hover:bg-white/10"
                                     >
                                       <BrailleSpinner className="text-sm group-hover/stop:hidden" />
                                       <Square className="hidden h-2 w-2 fill-current group-hover/stop:block" />
@@ -750,7 +750,7 @@ export function Sidebar(): JSX.Element {
                                       onBlur={commitRename}
                                       onFocus={(e) => e.currentTarget.select()}
                                       onClick={(e) => e.stopPropagation()}
-                                      className="min-w-0 flex-1 rounded border border-accent/60 bg-bg px-1.5 py-0.5 text-sm text-text outline-none"
+                                      className="min-w-0 flex-1 sq sq-base sq-ring sq-ring-accent rounded border border-accent/60 bg-bg px-1.5 py-0.5 text-sm text-text outline-none"
                                     />
                                   ) : (
                                     <button
@@ -839,7 +839,7 @@ export function Sidebar(): JSX.Element {
                                   <button
                                     onClick={() => deleteChat(chat.id)}
                                     title="Delete session"
-                                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-danger group-hover:opacity-100"
+                                    className="flex h-6 w-6 shrink-0 items-center justify-center sq sq-md rounded-md text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-danger group-hover:opacity-100"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </button>
@@ -851,7 +851,7 @@ export function Sidebar(): JSX.Element {
                                         <div
                                           onContextMenu={(e) => openContextMenu(e, sub)}
                                           className={cn(
-                                            'group/sub flex items-center gap-2 rounded-lg px-2 py-1 text-xs transition-colors',
+                                            'group/sub flex items-center gap-2 sq sq-lg rounded-lg px-2 py-1 text-xs transition-colors',
                                             sub.id === activeChatId ||
                                               contextMenu?.chat.id === sub.id
                                               ? 'bg-elevated text-text'
@@ -867,7 +867,7 @@ export function Sidebar(): JSX.Element {
                                             <button
                                               onClick={() => void cancelSubagent(sub.id)}
                                               title="Cancel this subagent"
-                                              className="group/cancel flex h-4 w-4 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-white/10"
+                                              className="group/cancel flex h-4 w-4 shrink-0 items-center justify-center sq sq-base rounded text-accent transition-colors hover:bg-white/10"
                                             >
                                               <BrailleSpinner className="text-xs group-hover/cancel:hidden" />
                                               <Square className="hidden h-2 w-2 fill-current group-hover/cancel:block" />
@@ -884,7 +884,7 @@ export function Sidebar(): JSX.Element {
                                               onBlur={commitRename}
                                               onFocus={(e) => e.currentTarget.select()}
                                               onClick={(e) => e.stopPropagation()}
-                                              className="min-w-0 flex-1 rounded border border-accent/60 bg-bg px-1.5 py-0.5 text-xs text-text outline-none"
+                                              className="min-w-0 flex-1 sq sq-base sq-ring sq-ring-accent rounded border border-accent/60 bg-bg px-1.5 py-0.5 text-xs text-text outline-none"
                                             />
                                           ) : (
                                             <button
@@ -899,7 +899,7 @@ export function Sidebar(): JSX.Element {
                                           <button
                                             onClick={() => deleteChat(sub.id)}
                                             title="Delete subagent session"
-                                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-danger group-hover/sub:opacity-100"
+                                            className="flex h-5 w-5 shrink-0 items-center justify-center sq sq-base rounded text-text-subtle opacity-0 transition-[opacity,color,background-color] hover:bg-white/5 hover:text-danger group-hover/sub:opacity-100"
                                           >
                                             <Trash2 className="h-3 w-3" />
                                           </button>
@@ -1063,7 +1063,7 @@ function CustomizeNav({
           <button
             key={it.label}
             onClick={it.onClick}
-            className="press-scale flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm text-text-muted hover:bg-white/5 hover:text-text"
+            className="press-scale flex items-center gap-2.5 sq sq-lg rounded-lg px-2 py-1.5 text-sm text-text-muted hover:bg-white/5 hover:text-text"
           >
             <it.icon className="h-4 w-4 shrink-0 opacity-80" />
             <span className="flex-1 text-left">{it.label}</span>

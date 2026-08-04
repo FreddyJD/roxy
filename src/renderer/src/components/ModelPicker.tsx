@@ -133,7 +133,7 @@ export function ModelPicker(): JSX.Element {
 
       {open && (
         <div
-          className="animate-pop-in absolute bottom-full z-50 mb-2 flex flex-col overflow-hidden rounded-xl border border-border bg-elevated shadow-2xl origin-bottom-left"
+          className="animate-pop-in absolute bottom-full z-50 mb-2 flex flex-col overflow-hidden sq-frame sq-xl sq-fill-elevated sq-ring rounded-xl border border-border bg-elevated shadow-2xl origin-bottom-left"
           style={anchor}
         >
           <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">

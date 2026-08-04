@@ -98,7 +98,7 @@ export function WelcomeStep({ onContinue }: { onContinue: () => void }): JSX.Ele
 
         <button
           onClick={onContinue}
-          className="press-scale flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-6 text-sm font-medium text-black hover:bg-white/90"
+          className="press-scale flex h-10 items-center justify-center gap-2 sq sq-lg rounded-lg bg-white px-6 text-sm font-medium text-black hover:bg-white/90"
         >
           Continue
           <ArrowRight className="h-4 w-4" />

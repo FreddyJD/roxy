@@ -158,6 +158,148 @@
   --font-mono: ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
 }
 
+/* ---------------------------------------------------------------------------
+ * Squircles (continuous / superellipse corners)
+ *
+ * `border-radius` draws a quarter circle, so curvature jumps from zero to its
+ * full value the instant the corner starts. The eye reads that discontinuity as
+ * a shape stuck onto a box — at the small radii a dense app UI uses, it's most
+ * of what makes an interface feel generic. A superellipse ramps curvature in
+ * smoothly (the iOS/macOS corner). Chromium only shipped native
+ * `corner-shape: superellipse()` in 139; we're on 130, so `lib/squircle.ts`
+ * installs a Paint Worklet and sets `data-squircle` on <html> when it loads.
+ *
+ * Everything below is scoped to that flag, and every element keeps its ordinary
+ * `rounded-*` class as the fallback — if the worklet never loads, the UI looks
+ * exactly like it did before. These rules sit outside Tailwind's cascade layers
+ * on purpose, so `border-radius: 0` beats the `rounded-*` utility.
+ *
+ * Radii are ~1.5x their circular counterpart. A superellipse cuts far less area
+ * out of the corner than a circle of the same radius, so matching numbers would
+ * read as *less* rounded than before; 1.5x lands on the same visual weight.
+ *
+ * Three utilities:
+ *
+ *   .sq        masks the element to the shape. Every `bg-*` / `hover:bg-*` /
+ *              gradient keeps working untouched, which is why it's the default
+ *              for rows, buttons, chips and thumbnails. A mask also clips
+ *              descendants and erases outer `box-shadow`, so it is NOT for
+ *              anything with a shadow or its own `overflow-hidden`.
+ *   .sq-ring   add-on for an element with a 1px border: hides the real border
+ *              (whose square corners would poke out of the shape) and repaints
+ *              it as a hairline just inside the curve. Works with either .sq or
+ *              .sq-frame.
+ *   .sq-frame  paints the fill as the element's own background instead of
+ *              masking. Clips nothing, so shadows and `overflow-hidden`
+ *              children survive -- the one for popovers, menus and modals.
+ *              Needs an `.sq-fill-*` naming the color it should paint.
+ *
+ * Two constraints worth knowing before reaching for these:
+ *   - `.sq-ring`/`.sq-frame` own `background-image`, so they can't share an
+ *     element with a Tailwind gradient (`bg-gradient-*` is a background image
+ *     too). Use `.sq` + `inset-ring-*` there instead.
+ *   - `.sq` masks, so an absolutely-positioned child that escapes the box (a
+ *     popover, a badge hanging off the corner) gets cut off. Put `.sq` on an
+ *     inner wrapper, or use `.sq-frame`.
+ * --------------------------------------------------------------------------- */
+
+/* Each size is 1.5x its Tailwind partner, so `sq-lg` pairs with `rounded-lg`,
+   `sq-xl` with `rounded-xl`, and so on. Always write both: the `rounded-*` is
+   the fallback that renders when the worklet is unavailable. */
+.sq-sm {
+  --sq-r: 3px;
+}
+.sq-base {
+  --sq-r: 6px;
+}
+.sq-md {
+  --sq-r: 9px;
+}
+.sq-lg {
+  --sq-r: 12px;
+}
+.sq-xl {
+  --sq-r: 18px;
+}
+.sq-2xl {
+  --sq-r: 24px;
+}
+
+[data-squircle] :is(.sq-sm, .sq-base, .sq-md, .sq-lg, .sq-xl, .sq-2xl) {
+  /* The circular radius is smaller than the squircle at the corners, so leaving
+     it in place would clip the very curve we're drawing. */
+  border-radius: 0;
+}
+
+[data-squircle] .sq {
+  -webkit-mask-image: paint(squircle-mask);
+  mask-image: paint(squircle-mask);
+}
+
+/* `.sq-frame` and `.sq-ring` both paint through the same `squircle-box` painter;
+   which parts it draws depends on whether `--sq-fill` was given a color.
+
+   `background-origin: border-box` matters: a background image is positioned
+   against the padding box by default, which would inset the shape by the border
+   width on every side and leave the real border's square corners sticking out.
+   (`mask-origin` already defaults to border-box, so `.sq` needs no equivalent.) */
+[data-squircle] :is(.sq-frame, .sq-ring) {
+  background-image: paint(squircle-box);
+  background-origin: border-box;
+  background-clip: border-box;
+}
+
+/* The border still occupies layout -- only its painting moves to the worklet. */
+[data-squircle] .sq-ring {
+  border-color: transparent;
+  --sq-ring: var(--color-border);
+}
+
+/* The fill moves into the painted background, so the real one has to go or it
+   would square off the corners behind the shape. */
+[data-squircle] .sq-frame {
+  background-color: transparent;
+}
+
+/* Fills for `.sq-frame`, which must name its color explicitly: a paint callback
+   can't read the element's own `background-color`, and we've just cleared it
+   anyway. Leaving `--sq-fill` unset (its initial value is `transparent`) makes
+   the painter skip the fill and draw only the hairline. */
+.sq-fill-surface {
+  --sq-fill: var(--color-surface);
+}
+.sq-fill-surface-2 {
+  --sq-fill: var(--color-surface-2);
+}
+.sq-fill-elevated {
+  --sq-fill: var(--color-elevated);
+}
+.sq-fill-white {
+  --sq-fill: #fff;
+}
+
+/* Dashed variant. The UA paints `border-style: dashed` along the rectangle, so
+   the mask slices its dashes off at each corner; this hands the dash length to
+   the worklet, which walks it around the actual curve instead. */
+.sq-dashed {
+  --sq-dash: 4px;
+}
+[data-squircle] .sq-dashed {
+  border-style: solid;
+}
+
+/* Ring colors for the minority of elements whose border isn't `--color-border`.
+   (Anything more exotic can set `[--sq-ring:...]` inline.) */
+.sq-ring-strong {
+  --sq-ring: var(--color-border-strong);
+}
+.sq-ring-accent {
+  --sq-ring: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+.sq-ring-danger {
+  --sq-ring: color-mix(in srgb, var(--color-danger) 40%, transparent);
+}
+
 /* Tailwind v4 borders default to currentColor — pin a sane default. */
 *,
 ::before,

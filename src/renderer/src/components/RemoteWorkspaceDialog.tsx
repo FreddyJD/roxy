@@ -79,12 +79,12 @@ export function RemoteWorkspaceDialog({ onClose }: { onClose: () => void }): JSX
       onClick={onClose}
     >
       <div
-        className="animate-modal-in w-full max-w-md overflow-hidden rounded-2xl border border-border bg-surface"
+        className="animate-modal-in w-full max-w-md overflow-hidden sq sq-2xl sq-ring rounded-2xl border border-border bg-surface"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-start gap-3 border-b border-border px-5 py-4">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center sq sq-xl rounded-xl bg-accent/15 text-accent">
             <MonitorSmartphone className="h-5 w-5" />
           </div>
           <div className="min-w-0 flex-1">
@@ -102,7 +102,7 @@ export function RemoteWorkspaceDialog({ onClose }: { onClose: () => void }): JSX
           <button
             onClick={onClose}
             title="Close (keeps sharing)"
-            className="press-scale flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
+            className="press-scale flex h-7 w-7 shrink-0 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-white/5 hover:text-text"
           >
             <X className="h-4 w-4" />
           </button>
@@ -187,7 +187,7 @@ function ShareView({
   return (
     <div className="flex flex-col items-center gap-4">
       {/* QR — rendered locally, nothing leaves the machine. */}
-      <div className="rounded-2xl bg-white p-3 shadow-sm">
+      <div className="sq-frame sq-2xl sq-fill-white rounded-2xl bg-white p-3 shadow-sm">
         {url ? (
           <QRCodeSVG value={url} size={188} level="M" marginSize={1} fgColor="#0b0b0f" />
         ) : (
@@ -202,12 +202,12 @@ function ShareView({
       </p>
 
       {/* Safe URL + copy */}
-      <div className="flex w-full items-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2">
+      <div className="flex w-full items-center gap-2 sq sq-lg sq-ring rounded-lg border border-border bg-surface-2 px-3 py-2">
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-muted">{url}</span>
         <button
           onClick={onCopy}
           title="Copy link"
-          className="press-scale flex h-6 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-text-muted hover:bg-white/5 hover:text-text"
+          className="press-scale flex h-6 shrink-0 items-center gap-1 sq sq-md rounded-md px-2 text-[11px] font-medium text-text-muted hover:bg-white/5 hover:text-text"
         >
           {copied ? (
             <>
@@ -222,7 +222,7 @@ function ShareView({
       </div>
 
       {/* PIN — the second factor, shown big. */}
-      <div className="flex w-full flex-col items-center gap-2 rounded-xl border border-border bg-surface-2 py-4">
+      <div className="flex w-full flex-col items-center gap-2 sq sq-xl sq-ring rounded-xl border border-border bg-surface-2 py-4">
         <span className="text-[11px] font-medium uppercase tracking-wide text-text-subtle">
           Enter this PIN on your phone
         </span>
@@ -252,7 +252,8 @@ function ShareView({
       {/* Privacy reassurance — the core of the security model, at a glance. */}
       <p className="inline-flex items-center gap-1.5 text-center text-[11px] leading-snug text-text-subtle">
         <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-success/80" />
-        Your code and files stay on this computer — only the chat is relayed, over an encrypted link.
+        Your code and files stay on this computer — only the chat is relayed, over an encrypted
+        link.
       </p>
     </div>
   )
@@ -266,7 +267,7 @@ function Pin({ pin }: { pin?: string }): JSX.Element {
       {pin.split('').map((d, i) => (
         <span
           key={i}
-          className="flex h-10 w-8 items-center justify-center rounded-lg border border-border bg-surface font-mono text-xl font-semibold tabular-nums text-text"
+          className="flex h-10 w-8 items-center justify-center sq sq-lg sq-ring rounded-lg border border-border bg-surface font-mono text-xl font-semibold tabular-nums text-text"
         >
           {d}
         </span>
@@ -288,7 +289,7 @@ function StartingState(): JSX.Element {
 function IdleState({ onStart }: { onStart: () => void }): JSX.Element {
   return (
     <div className="flex flex-col items-center gap-4 py-8 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/15 text-accent">
+      <div className="flex h-12 w-12 items-center justify-center sq sq-2xl rounded-2xl bg-accent/15 text-accent">
         <MonitorSmartphone className="h-6 w-6" />
       </div>
       <p className="max-w-xs text-sm text-text-muted">
@@ -305,7 +306,7 @@ function IdleState({ onStart }: { onStart: () => void }): JSX.Element {
 function EmptyState(): JSX.Element {
   return (
     <div className="flex flex-col items-center gap-3 py-10 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/5 text-text-muted">
+      <div className="flex h-12 w-12 items-center justify-center sq sq-2xl rounded-2xl bg-white/5 text-text-muted">
         <MonitorSmartphone className="h-6 w-6" />
       </div>
       <p className="text-sm font-medium">No session open</p>
@@ -316,16 +317,10 @@ function EmptyState(): JSX.Element {
   )
 }
 
-function ErrorState({
-  message,
-  onRetry
-}: {
-  message?: string
-  onRetry: () => void
-}): JSX.Element {
+function ErrorState({ message, onRetry }: { message?: string; onRetry: () => void }): JSX.Element {
   return (
     <div className="flex flex-col items-center gap-3 py-8 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-danger/10 text-danger">
+      <div className="flex h-12 w-12 items-center justify-center sq sq-2xl rounded-2xl bg-danger/10 text-danger">
         <X className="h-6 w-6" />
       </div>
       <p className="text-sm font-medium">Couldn’t start sharing</p>

@@ -15,7 +15,7 @@ function Splash(): JSX.Element {
       <img
         src={roxy}
         alt="Roxy"
-        className="h-14 w-14 animate-pulse rounded-2xl object-cover ring-1 ring-border"
+        className="h-14 w-14 animate-pulse sq sq-2xl rounded-2xl object-cover inset-ring-1 inset-ring-border"
       />
     </div>
   )

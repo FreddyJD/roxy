@@ -3,7 +3,7 @@
  * agent turns, day by day, drawn on a <canvas> with the same ordered (Bayer)
  * dither the rest of Roxy's charts use, in the Roxy accent blue.
  *
- * Each cell is a rounded square filled with the dither scatter; a day's 0–4
+ * Each cell is a sq sq-base rounded square filled with the dither scatter; a day's 0–4
  * activity level drives the fill's coverage + opacity (per the engine's
  * "vary opacity, not shade" rule), so a quiet week and a busy one both read
  * cleanly. Cells sweep in left→right on mount (respecting reduced-motion), a
@@ -30,7 +30,7 @@ import { useChartDimensions } from './dither-kit/use-chart-dimensions'
 const ROWS = 7 // days of the week (Sun → Sat)
 // Each column's step (its width, incl. gap) is derived from the container so the
 // grid fills it; the step is split into a cell + gap and the cell into its
-// rounded corner by these ratios. The step is clamped to [MIN_STEP, MAX_STEP]:
+// sq sq-base rounded corner by these ratios. The step is clamped to [MIN_STEP, MAX_STEP]:
 // MIN keeps cells readable (and caps how many weeks we cram in), MAX keeps a
 // sparse graph (a brand-new user with a few days) from ballooning into big tiles.
 const GAP_RATIO = 0.2 // gap as a fraction of the column step
@@ -361,7 +361,7 @@ export function ContributionGraph({ data }: { data: ActivityStats }): JSX.Elemen
         />
         {hover && (
           <div
-            className="animate-fade-in pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-lg border border-border bg-elevated px-2 py-1 text-[11px] text-text shadow-xl"
+            className="animate-fade-in pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full whitespace-nowrap sq-frame sq-lg sq-fill-elevated sq-ring rounded-lg border border-border bg-elevated px-2 py-1 text-[11px] text-text shadow-xl"
             style={{ left: hover.x, top: hover.y - 6 }}
           >
             <span className="font-semibold tabular-nums">{hover.day.count}</span>{' '}

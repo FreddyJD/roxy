@@ -110,17 +110,17 @@ export function McpServers({ showBackup = false }: { showBackup?: boolean } = {}
         <p className="text-xs text-text-subtle">Loading…</p>
       ) : servers.length === 0 && !showAdd ? (
         <p className="text-xs text-text-muted">
-          No MCP servers configured. Connect external tool servers (filesystem, GitHub, databases, …)
-          to expand what the agent can do. Servers are also read from a workspace{' '}
+          No MCP servers configured. Connect external tool servers (filesystem, GitHub, databases,
+          …) to expand what the agent can do. Servers are also read from a workspace{' '}
           <code>.roxy/mcp.json</code>.
         </p>
       ) : (
         servers.map((s) => (
           <div
             key={s.id}
-            className="flex items-center gap-3 rounded-xl border border-border bg-surface p-3.5"
+            className="flex items-center gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-3.5"
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-2">
+            <div className="flex h-8 w-8 items-center justify-center sq sq-lg sq-ring rounded-lg border border-border bg-surface-2">
               <Plug className="h-4 w-4 text-text-muted" />
             </div>
             <div className="min-w-0 flex-1">
@@ -132,7 +132,10 @@ export function McpServers({ showBackup = false }: { showBackup?: boolean } = {}
                     : s.status}
                 </Badge>
               </div>
-              <p className="mt-0.5 truncate text-xs text-text-subtle" title={configSummary(s.config)}>
+              <p
+                className="mt-0.5 truncate text-xs text-text-subtle"
+                title={configSummary(s.config)}
+              >
                 {configSummary(s.config)}
               </p>
               {s.status === 'error' && s.error && (
@@ -169,7 +172,7 @@ export function McpServers({ showBackup = false }: { showBackup?: boolean } = {}
       )}
 
       {showAdd ? (
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+        <div className="flex flex-col gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
           <div className="flex flex-col gap-2 sm:flex-row">
             <Input
               value={name}
@@ -182,7 +185,7 @@ export function McpServers({ showBackup = false }: { showBackup?: boolean } = {}
             <select
               value={kind}
               onChange={(e) => setKind(e.target.value as 'local' | 'remote')}
-              className="h-9 rounded-lg border border-border bg-surface-2 px-2 text-sm text-text outline-none"
+              className="h-9 sq sq-lg sq-ring rounded-lg border border-border bg-surface-2 px-2 text-sm text-text outline-none"
             >
               <option value="local">local (stdio)</option>
               <option value="remote">remote (http)</option>
@@ -221,7 +224,7 @@ export function McpServers({ showBackup = false }: { showBackup?: boolean } = {}
       ) : (
         <button
           onClick={() => setShowAdd(true)}
-          className="press-scale flex items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface/40 p-3.5 text-sm text-text-muted hover:border-border-strong hover:bg-surface hover:text-text"
+          className="press-scale flex items-center justify-center gap-2 sq sq-xl sq-ring sq-dashed rounded-xl border border-dashed border-border bg-surface/40 p-3.5 text-sm text-text-muted hover:border-border-strong hover:[--sq-ring:var(--color-border-strong)] hover:bg-surface hover:text-text"
         >
           <Plus className="h-4 w-4" /> Add MCP server
         </button>

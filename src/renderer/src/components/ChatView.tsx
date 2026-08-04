@@ -346,7 +346,7 @@ export function ChatView(): JSX.Element {
               <button
                 onClick={() => void cancelSubagent(activeChatId)}
                 title="Cancel this subagent"
-                className="press-scale group flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/20"
+                className="press-scale group flex shrink-0 items-center gap-1 sq sq-md rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/20"
               >
                 <Loader2 className="h-3 w-3 animate-spin group-hover:hidden" />
                 <Square className="hidden h-2.5 w-2.5 fill-current group-hover:block" />
@@ -359,7 +359,7 @@ export function ChatView(): JSX.Element {
                 onClick={() => setInfoOpen((o) => !o)}
                 title="Description & tasks"
                 className={cn(
-                  'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition-colors',
+                  'flex shrink-0 items-center gap-1 sq sq-md rounded-md px-1.5 py-0.5 text-[11px] transition-colors',
                   infoOpen
                     ? 'bg-elevated text-text'
                     : 'text-text-muted hover:bg-white/5 hover:text-text'
@@ -394,7 +394,7 @@ export function ChatView(): JSX.Element {
                 title={`Cancel ${backgroundTaskCount} background subagent${
                   backgroundTaskCount === 1 ? '' : 's'
                 }`}
-                className="press-scale group flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/20"
+                className="press-scale group flex shrink-0 items-center gap-1 sq sq-md rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/20"
               >
                 <Loader2 className="h-3 w-3 animate-spin group-hover:hidden" />
                 <Square className="hidden h-2.5 w-2.5 fill-current group-hover:block" />
@@ -409,7 +409,7 @@ export function ChatView(): JSX.Element {
               onClick={() => setLoopPaneOpen((o) => !o)}
               title="Loop settings"
               className={cn(
-                'press-scale flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs',
+                'press-scale flex h-7 shrink-0 items-center gap-1.5 sq sq-lg rounded-lg px-2 text-xs',
                 loopPaneOpen
                   ? 'bg-elevated text-text'
                   : 'text-text-muted hover:bg-white/5 hover:text-text'
@@ -615,7 +615,7 @@ function WorkspacePath({ chat }: { chat: Chat }): JSX.Element | null {
       onClick={() => void copy()}
       // The label is truncated, so the tooltip carries the full path.
       title={`${path}\nClick to copy`}
-      className="press-scale relative flex min-w-0 items-center rounded-md px-1 py-0.5 text-xs text-text-subtle hover:bg-white/5 hover:text-text-muted"
+      className="press-scale relative flex min-w-0 items-center sq sq-md rounded-md px-1 py-0.5 text-xs text-text-subtle hover:bg-white/5 hover:text-text-muted"
     >
       {/* The path fades rather than unmounting, so the button keeps its width
           and nothing in the header shifts while the confirmation shows. */}

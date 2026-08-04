@@ -44,7 +44,7 @@ export function ProviderLogo({
   }
   return (
     <span
-      className="flex items-center justify-center rounded-md bg-white/10 font-semibold text-text"
+      className="flex items-center justify-center sq sq-md rounded-md bg-white/10 font-semibold text-text"
       style={{ width: size, height: size, fontSize: size * 0.5 }}
     >
       {name.charAt(0)}

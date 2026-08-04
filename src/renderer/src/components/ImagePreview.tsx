@@ -156,7 +156,7 @@ export function ImagePreview({
           <div
             // pointer-events-none: the preview sits in the cursor's path, and a
             // hover layer that can itself be hovered creates flicker loops.
-            className="animate-pop-in pointer-events-none fixed z-50 overflow-hidden rounded-xl border border-border-strong bg-elevated p-1 shadow-2xl"
+            className="animate-pop-in pointer-events-none fixed z-50 overflow-hidden sq-frame sq-xl sq-fill-elevated sq-ring sq-ring-strong rounded-xl border border-border-strong bg-elevated p-1 shadow-2xl"
             style={{
               left: placement.left,
               top: placement.top,
@@ -168,7 +168,7 @@ export function ImagePreview({
               src={src}
               alt={name ?? 'attachment'}
               style={{ height: placement.height }}
-              className="block w-full rounded-lg object-contain"
+              className="block w-full sq sq-lg rounded-lg object-contain"
             />
             {/* Fixed height — lib/anchor.ts reserves exactly CHROME_H for this
                 strip plus the frame's padding when it positions the box. */}

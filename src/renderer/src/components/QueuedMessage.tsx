@@ -147,7 +147,7 @@ export function QueuedMessage({
             if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false)
           }}
           onDrop={onDrop}
-          className={`rounded-lg transition ${dragging ? 'ring-1 ring-accent/40' : ''}`}
+          className={`sq sq-lg rounded-lg transition ${dragging ? 'inset-ring-1 inset-ring-accent/40' : ''}`}
         >
           {draftImages.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-2.5 pt-2.5">
@@ -156,7 +156,7 @@ export function QueuedMessage({
                   key={img.id}
                   src={img.dataUrl}
                   name={img.name}
-                  className="group/img relative h-12 w-12 overflow-hidden rounded-md border border-border bg-surface-2"
+                  className="group/img relative h-12 w-12 overflow-hidden sq sq-md sq-ring rounded-md border border-border bg-surface-2"
                 >
                   <img
                     src={img.dataUrl}
@@ -193,7 +193,7 @@ export function QueuedMessage({
               type="button"
               onClick={() => fileRef.current?.click()}
               title="Attach images"
-              className="press-scale flex h-6 items-center gap-1 rounded-md border border-border bg-surface-2 px-1.5 text-[11px] text-text-muted hover:border-border-strong hover:text-text"
+              className="press-scale flex h-6 items-center gap-1 sq sq-md sq-ring rounded-md border border-border bg-surface-2 px-1.5 text-[11px] text-text-muted hover:border-border-strong hover:text-text"
             >
               <ImagePlus className="h-3.5 w-3.5" /> Image
             </button>
@@ -201,7 +201,7 @@ export function QueuedMessage({
               <button
                 type="button"
                 onClick={cancelEditing}
-                className="press-scale flex h-6 items-center rounded-md px-2 text-[11px] text-text-muted hover:bg-white/5 hover:text-text"
+                className="press-scale flex h-6 items-center sq sq-md rounded-md px-2 text-[11px] text-text-muted hover:bg-white/5 hover:text-text"
               >
                 Cancel
               </button>
@@ -209,7 +209,7 @@ export function QueuedMessage({
                 type="button"
                 onClick={() => void save()}
                 disabled={saving}
-                className="press-scale flex h-6 items-center gap-1 rounded-md bg-white px-2 text-[11px] font-medium text-black hover:bg-white/90 disabled:opacity-40"
+                className="press-scale flex h-6 items-center gap-1 sq sq-md rounded-md bg-white px-2 text-[11px] font-medium text-black hover:bg-white/90 disabled:opacity-40"
               >
                 <Check className="h-3.5 w-3.5" /> Save
               </button>

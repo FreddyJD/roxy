@@ -39,7 +39,7 @@ export function ActivitySection(): JSX.Element | null {
       <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
         Activity
       </h2>
-      <div className="rounded-xl border border-border bg-surface p-4">
+      <div className="sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4">
         <ContributionGraph data={stats} />
       </div>
     </section>

@@ -99,7 +99,7 @@ export function ContextMenuSurface({
       // Swallow the right-click so chording onto the menu doesn't reopen it at
       // a new point over itself.
       onContextMenu={(e) => e.preventDefault()}
-      className="animate-pop-in fixed z-50 overflow-hidden rounded-lg border border-border bg-elevated py-1 shadow-2xl"
+      className="animate-pop-in fixed z-50 overflow-hidden sq-frame sq-lg sq-fill-elevated sq-ring rounded-lg border border-border bg-elevated py-1 shadow-2xl"
     >
       {children}
     </div>,

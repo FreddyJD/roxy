@@ -99,7 +99,7 @@ export function BrowserChrome(): JSX.Element {
               }}
               title="Close tab"
               className={cn(
-                'flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-text-subtle transition-colors hover:bg-border-strong hover:text-text',
+                'flex h-5 w-5 shrink-0 items-center justify-center sq sq-md rounded-md text-text-subtle transition-colors hover:bg-border-strong hover:text-text',
                 t.active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
               )}
             >
@@ -111,7 +111,7 @@ export function BrowserChrome(): JSX.Element {
           type="button"
           onClick={() => void api.browser.newTab()}
           title="New tab"
-          className="press-scale mb-0.5 ml-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-surface-2 hover:text-text"
+          className="press-scale mb-0.5 ml-0.5 flex h-7 w-7 shrink-0 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-surface-2 hover:text-text"
         >
           <Plus className="h-4 w-4" />
         </button>
@@ -176,7 +176,7 @@ function NavButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="press-scale flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-surface-2 hover:text-text disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-text-muted"
+      className="press-scale flex h-7 w-7 shrink-0 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-surface-2 hover:text-text disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-text-muted"
     >
       {children}
     </button>
