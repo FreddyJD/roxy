@@ -108,12 +108,11 @@ function RoxyHero({
   return (
     <button
       onClick={onClick}
-      // The gradient occupies `background-image`, which is also how `sq-ring`
-      // paints its hairline -- the two can't share one element. The border here
-      // is the accent tint rather than a structural hairline, so an inset ring
-      // (a box-shadow, and clipped to the shape by the mask) reads identically
-      // and leaves the gradient alone.
-      className="group mt-6 flex w-full items-center gap-4 overflow-hidden sq sq-2xl inset-ring-1 inset-ring-accent/40 rounded-2xl bg-gradient-to-br from-accent/15 via-accent/5 to-transparent p-5 text-left transition-[--tw-gradient-from,box-shadow] hover:inset-ring-accent/70 hover:from-accent/25"
+      // Borderless on purpose: the accent gradient alone defines the card, so
+      // it reads as a soft tint rather than a framed box. (It also sidesteps
+      // `sq-ring`, which paints its hairline via `background-image` and so
+      // cannot coexist with the gradient on one element.)
+      className="group mt-6 flex w-full items-center gap-4 overflow-hidden sq sq-2xl rounded-2xl bg-gradient-to-br from-accent/15 via-accent/5 to-transparent p-5 text-left transition-[--tw-gradient-from] hover:from-accent/25"
     >
       <span className="flex h-14 w-14 shrink-0 items-center justify-center sq-frame sq-2xl sq-fill-surface-2 sq-ring sq-ring-accent rounded-2xl border border-accent/30 bg-surface-2 shadow-sm">
         <ProviderLogo id="roxy" name="Roxy" size={44} />
