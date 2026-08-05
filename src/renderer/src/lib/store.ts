@@ -30,6 +30,7 @@ import { PartsFold, partsToContent } from '@shared/parts'
 import { isOverflow, pruneToolMessages, KEEP_RECENT_TOKENS } from '@shared/context'
 import { pickDefaultModel } from '@shared/models'
 import {
+  clampReasoningEffort,
   contextBudgetFor,
   resolveSessionConfig,
   type SessionConfig,
@@ -1684,7 +1685,10 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
           messages: chatMessages,
           agentId,
           reasoning: info?.reasoning ?? false,
-          reasoningEffort: config.reasoningEffort,
+          // Clamp to what THIS model accepts. A session's effort is sticky
+          // across model switches, so "Max" set on one model would otherwise
+          // ride along to a model that only knows `high` and 400 the turn.
+          reasoningEffort: clampReasoningEffort(config.reasoningEffort, info?.reasoningEfforts),
           contextLimit: contextBudget
         })
       } catch (e) {

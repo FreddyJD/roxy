@@ -32,7 +32,11 @@ import type { Message } from '../../shared/types'
 import { reconstructTurn } from '../../shared/tool-history'
 import { PartsFold, partsToContent } from '../../shared/parts'
 import { pruneToolMessages, KEEP_RECENT_TOKENS } from '../../shared/context'
-import { contextBudgetFor, resolveSessionConfig } from '../../shared/session-config'
+import {
+  clampReasoningEffort,
+  contextBudgetFor,
+  resolveSessionConfig
+} from '../../shared/session-config'
 import * as repo from '../db/repo'
 import { listModels } from './models'
 import { pickDefaultModel } from '../../shared/models'
@@ -494,7 +498,9 @@ async function runTurn(
         // when it is driven from the phone.
         agentId: config.agentId,
         reasoning: info?.reasoning ?? false,
-        reasoningEffort: config.reasoningEffort,
+        // Same clamp as the desktop send path: the session's effort is sticky,
+        // the model's ladder is not, and an unsupported level 400s the turn.
+        reasoningEffort: clampReasoningEffort(config.reasoningEffort, info?.reasoningEfforts),
         contextLimit: contextBudget
       },
       (event) => {

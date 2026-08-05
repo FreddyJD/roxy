@@ -395,6 +395,13 @@ export interface ModelInfo {
   name: string
   reasoning: boolean
   toolCall: boolean
+  /**
+   * The effort levels this model actually accepts, when the provider says so.
+   * Undefined = unknown, so the full Low..Max ladder is offered and clamping
+   * falls back to per-provider rules. An explicit list lets the picker hide
+   * levels the model would reject, and lets the wire send one it accepts.
+   */
+  reasoningEfforts?: ReasoningEffort[]
   /** Max input context window in tokens, when known. */
   contextLimit?: number
   /** Max output tokens, when known. */
