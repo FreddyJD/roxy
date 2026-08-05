@@ -564,6 +564,13 @@ export interface RoxyApi {
     setBranchPrefix(prefix: string): Promise<AppSettings>
     completeOnboarding(): Promise<AppSettings>
     reset(): Promise<void>
+    /**
+     * Whether anonymous usage tracking is on. Deliberately NOT part of
+     * `AppSettings`: the flag is stored outside the database so a factory reset
+     * can't silently opt someone back in. Both calls return the resulting state.
+     */
+    getTelemetry(): Promise<boolean>
+    setTelemetry(enabled: boolean): Promise<boolean>
   }
   providers: {
     listConnected(): Promise<ConnectedProvider[]>

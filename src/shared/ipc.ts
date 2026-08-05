@@ -10,6 +10,11 @@ export const CHANNELS = {
   settingsSetBranchPrefix: 'settings:setBranchPrefix',
   settingsCompleteOnboarding: 'settings:completeOnboarding',
   settingsReset: 'settings:reset',
+  // Anonymous usage tracking. Its own pair of channels rather than a field on
+  // AppSettings: the flag lives in a file outside the database, so opting out
+  // survives a factory reset (which wipes the settings table).
+  settingsGetTelemetry: 'settings:getTelemetry',
+  settingsSetTelemetry: 'settings:setTelemetry',
 
   providersList: 'providers:listConnected',
   providersConnect: 'providers:connect',

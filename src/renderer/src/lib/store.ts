@@ -46,6 +46,11 @@ import type { ForgeStatusView } from '@shared/forge'
 interface RoxyStore {
   ready: boolean
   settings: AppSettings | null
+  /**
+   * Anonymous usage tracking. Not part of settings because the main process
+   * stores it outside the database, so a factory reset can't opt someone back in.
+   */
+  telemetryEnabled: boolean
   providers: ConnectedProvider[]
   /** models.dev model lists per provider id (lazy-loaded + cached). */
   modelCatalog: Record<string, ModelInfo[]>
@@ -155,6 +160,7 @@ interface RoxyStore {
   setContextLimit: (limit: number | null) => Promise<void>
   setWebSearchApiKey: (key: string | null) => Promise<void>
   setAutoWorkstream: (enabled: boolean) => Promise<void>
+  setTelemetryEnabled: (enabled: boolean) => Promise<void>
   setBranchPrefix: (prefix: string) => Promise<void>
   selectChat: (id: string) => Promise<void>
   clearActive: () => void
@@ -700,6 +706,9 @@ async function syncBranch(
 export const useRoxyStore = create<RoxyStore>((set, get) => ({
   ready: false,
   settings: null,
+  // Assumed on until the main process answers, matching the shipped default;
+  // the toggle would otherwise flicker off on every Settings open.
+  telemetryEnabled: true,
   providers: [],
   modelCatalog: {},
   recentModels: {},
@@ -729,14 +738,15 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   usageStats: null,
 
   bootstrap: async () => {
-    const [settings, providers, chats, loops, projectOrder] = await Promise.all([
+    const [settings, providers, chats, loops, projectOrder, telemetryEnabled] = await Promise.all([
       api.settings.getAll(),
       api.providers.listConnected(),
       api.chats.list(),
       api.loops.list(),
-      api.projects.listOrder()
+      api.projects.listOrder(),
+      api.settings.getTelemetry()
     ])
-    set({ settings, providers, chats, loops, projectOrder, ready: true })
+    set({ settings, providers, chats, loops, projectOrder, telemetryEnabled, ready: true })
     // Warm the usage/cost dashboard for the titlebar pill (best-effort, async).
     void get().refreshUsage()
 
@@ -1169,6 +1179,14 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   setAutoWorkstream: async (enabled) => {
     const settings = await api.settings.setAutoWorkstream(enabled)
     set({ settings })
+  },
+
+  setTelemetryEnabled: async (enabled) => {
+    // Optimistic: the toggle should move the instant it's pressed, and the main
+    // process returns the state it actually settled on, which then wins.
+    set({ telemetryEnabled: enabled })
+    const next = await api.settings.setTelemetry(enabled)
+    set({ telemetryEnabled: next })
   },
 
   setBranchPrefix: async (prefix) => {

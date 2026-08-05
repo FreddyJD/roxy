@@ -31,6 +31,8 @@ export default function Settings(): JSX.Element {
   const reorderProviders = useRoxyStore((s) => s.reorderProviders)
   const setWebSearchApiKey = useRoxyStore((s) => s.setWebSearchApiKey)
   const setAutoWorkstream = useRoxyStore((s) => s.setAutoWorkstream)
+  const telemetryEnabled = useRoxyStore((s) => s.telemetryEnabled)
+  const setTelemetryEnabled = useRoxyStore((s) => s.setTelemetryEnabled)
   const setBranchPrefix = useRoxyStore((s) => s.setBranchPrefix)
   const [prefix, setPrefix] = useState('')
   const prefixError = branchPrefixError(prefix)
@@ -365,6 +367,22 @@ export default function Settings(): JSX.Element {
         </div>
       </section>
 
+      <section className="mb-8">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          Privacy
+        </h2>
+        <div className="flex flex-col gap-3 sq sq-xl sq-ring rounded-xl border border-border bg-surface p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-text">Send anonymous usage data</div>
+            <p className="mt-0.5 text-xs text-text-muted">
+              Counts of things like app launches and finished turns, tied to a random id generated
+              on this machine. Never your prompts, code, file paths, repo names, model, or provider.
+              It is the only way we can tell whether a release helped or broke things.
+            </p>
+          </div>
+          <Switch checked={telemetryEnabled} onChange={(v) => void setTelemetryEnabled(v)} />
+        </div>
+      </section>
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-subtle">
           About

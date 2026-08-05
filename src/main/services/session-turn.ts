@@ -17,6 +17,7 @@ import { protectedSubChatIds } from './subagent-stream'
 import { setLabel as setBrowserLabel } from './browser'
 import { sessionCwd } from './workspace'
 import { materializePendingWorktree } from './worktree'
+import { track } from './track'
 import path from 'node:path'
 
 /**
@@ -55,6 +56,30 @@ function keepSubchats(): Set<string> {
  * `{ ok: false, error }` on failure (a caller-triggered abort reports "Stopped.").
  */
 export async function runSessionTurn(
+  input: LlmStartInput,
+  emit: (event: LlmEvent) => void,
+  signal: AbortSignal
+): Promise<LlmResult> {
+  // Usage tracking wraps the whole turn HERE, not at either caller: this is the
+  // one function both the local (renderer) and remote (phone) paths go through,
+  // so counting here is the only way the two can't drift. It records that a turn
+  // happened and how it ended - never what was said, which model ran, or where.
+  track('prompt')
+  const startedAt = Date.now()
+  try {
+    const result = await runTurn(input, emit, signal)
+    track('turn_end', { ok: result.ok, durationMs: Date.now() - startedAt })
+    return result
+  } catch (e) {
+    // runTurn maps its own failures, so reaching here means an unexpected one.
+    // Count it as a failed turn and rethrow untouched - tracking never changes
+    // behaviour.
+    track('turn_end', { ok: false, durationMs: Date.now() - startedAt })
+    throw e
+  }
+}
+
+async function runTurn(
   input: LlmStartInput,
   emit: (event: LlmEvent) => void,
   signal: AbortSignal

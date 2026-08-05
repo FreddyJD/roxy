@@ -31,7 +31,9 @@ const roxy: RoxyApi = {
     setAutoWorkstream: (enabled) => ipcRenderer.invoke(CHANNELS.settingsSetAutoWorkstream, enabled),
     setBranchPrefix: (prefix) => ipcRenderer.invoke(CHANNELS.settingsSetBranchPrefix, prefix),
     completeOnboarding: () => ipcRenderer.invoke(CHANNELS.settingsCompleteOnboarding),
-    reset: () => ipcRenderer.invoke(CHANNELS.settingsReset)
+    reset: () => ipcRenderer.invoke(CHANNELS.settingsReset),
+    getTelemetry: () => ipcRenderer.invoke(CHANNELS.settingsGetTelemetry),
+    setTelemetry: (enabled) => ipcRenderer.invoke(CHANNELS.settingsSetTelemetry, enabled)
   },
   providers: {
     listConnected: () => ipcRenderer.invoke(CHANNELS.providersList),
