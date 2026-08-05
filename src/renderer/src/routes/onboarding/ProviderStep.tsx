@@ -285,7 +285,7 @@ function ProviderSetup({
               {seed.id === 'roxy' && (
                 <button
                   type="button"
-                  onClick={() => void api.system.openExternal('https://roxy.gg/dashboard')}
+                  onClick={() => void api.system.openExternal('https://roxy.gg/signup')}
                   className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-accent transition-colors hover:underline"
                 >
                   Get an API key from your roxy.gg dashboard
