@@ -17,6 +17,7 @@ import { shutdownAllMcp } from './services/mcp'
 import { shutdownRemote } from './services/remote'
 import { shutdownCliProxy } from './services/cliproxy'
 import { initAutoUpdater } from './services/updater'
+import { initTracking, shutdownTracking } from './services/track'
 import { killAllBackground, setPromptText, setAgentPromptText } from './harness'
 import { PROMPT_TEXT, AGENT_PROMPT_TEXT } from '../shared/prompt-text'
 
@@ -105,6 +106,10 @@ app.whenReady().then(() => {
   // Open the database (runs migrations) and wire up IPC before the first window.
   getDb()
   registerIpc()
+  // Anonymous usage tracking (opt-out in Settings). Deliberately after the DB
+  // and IPC are up so nothing here can delay the first window, and it owns its
+  // own storage - a failure in it can't touch either.
+  initTracking()
   startLoopScheduler()
   // Sweep tool-output spill files older than the retention window (best-effort).
   void cleanupToolOutputs()
@@ -130,6 +135,13 @@ app.on('window-all-closed', () => {
 // Kill any agent-started background processes (dev servers/watchers) on quit,
 // cancel any in-flight background subagent tasks (Phase 11), and shut down any
 // warm language servers (Phase 12).
+// Last chance to send the queued events: 'before-quit' fires before windows
+// start tearing down, which gives the final flush a real (if not guaranteed)
+// window to reach the network. Losing it costs one app_close, nothing more.
+app.on('before-quit', () => {
+  shutdownTracking()
+})
+
 app.on('will-quit', () => {
   killAllBackground()
   cancelAllBackgroundJobs()

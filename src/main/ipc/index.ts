@@ -73,6 +73,7 @@ import {
   installSkillFromSource
 } from '../services/skills'
 import { runSessionTurn } from '../services/session-turn'
+import { isTrackingEnabled, setTrackingEnabled } from '../services/track'
 import * as remote from '../services/remote'
 import { buildExport, applyImport } from '../services/portable'
 import { promises as fsp } from 'node:fs'
@@ -194,6 +195,13 @@ export function registerIpc(): void {
     }
     return repo.resetAll()
   })
+
+  // Telemetry lives outside the settings table (see services/track), so it gets
+  // its own handlers instead of riding along on AppSettings.
+  ipcMain.handle(CHANNELS.settingsGetTelemetry, () => isTrackingEnabled())
+  ipcMain.handle(CHANNELS.settingsSetTelemetry, (_e, enabled: boolean) =>
+    setTrackingEnabled(enabled)
+  )
 
   // ---- providers ----
   ipcMain.handle(CHANNELS.providersList, () => repo.listConnectedProviders())

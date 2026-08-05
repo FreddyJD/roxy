@@ -106,6 +106,17 @@ import { getUsageStats } from '../src/main/services/usage'
 import { consumeAiSdkStream } from '../src/main/services/aisdk'
 import { APICallError } from 'ai'
 import type { MessagePart } from '../src/shared/types'
+import {
+  initTracking,
+  track,
+  flush,
+  setTrackingEnabled,
+  isTrackingEnabled,
+  shutdownTracking,
+  _resetTracking,
+  _queueDepth
+} from '../src/main/services/track'
+import { createServer } from 'node:http'
 
 let pass = 0
 const fails: string[] = []
@@ -3968,6 +3979,244 @@ async function main(): Promise<void> {
     }
   } catch (e) {
     check('overnight resilience (streamTurn)', false, e instanceof Error ? e.message : String(e))
+  }
+
+  // ---- usage tracking (real HTTP against a local stub) ----
+  // Worth booting a server for: the whole point of this module is what lands on
+  // the wire, and every failure inside it is swallowed by design. A unit test
+  // that only asserts on queue depth would pass even if the payload were empty.
+  try {
+    interface Batch {
+      deviceId?: string
+      platform?: string
+      appVersion?: string
+      channel?: string
+      events?: { name: string; clientId: string; ts: number; props?: Record<string, unknown> }[]
+    }
+    let batches: Batch[] = []
+    let status = 200
+    let hits = 0
+
+    const server = createServer((req, res) => {
+      hits++
+      let body = ''
+      req.on('data', (c) => (body += c))
+      req.on('end', () => {
+        try {
+          batches.push(JSON.parse(body) as Batch)
+        } catch {
+          batches.push({})
+        }
+        res.writeHead(status, { 'Content-Type': 'application/json' })
+        res.end('{}')
+      })
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const addr = server.address()
+    const port = typeof addr === 'object' && addr ? addr.port : 0
+    process.env.ROXY_TRACK_ENDPOINT = `http://127.0.0.1:${port}/track`
+    const idFile = path.join(tmp, 'install-id.json')
+    // initTracking() fires its own flush without awaiting it (deliberately - it
+    // must never delay startup), so tests have to wait for the request to land
+    // rather than assume flush() covered it.
+    const settled = async (n: number): Promise<void> => {
+      for (let i = 0; i < 100 && hits < n; i++) await new Promise((r) => setTimeout(r, 10))
+    }
+    const reset = async (): Promise<void> => {
+      _resetTracking()
+      batches = []
+      hits = 0
+      status = 200
+      await fs.rm(idFile, { force: true }).catch(() => undefined)
+    }
+
+    // 1. A cold start reports app_open and nothing else.
+    await reset()
+    initTracking()
+    await settled(1)
+    check('track: first launch posts one batch', batches.length === 1, `got ${batches.length}`)
+    const first = batches[0]
+    check('track: app_open is sent on launch', first?.events?.[0]?.name === 'app_open')
+    check(
+      'track: batch carries build facts, not user data',
+      first?.platform === process.platform &&
+        first?.appVersion === app.getVersion() &&
+        first?.channel === 'dev'
+    )
+    check(
+      'track: a fresh install does not report an update',
+      !first?.events?.some((e) => e.name === 'update')
+    )
+    const idA = first?.deviceId
+    check('track: deviceId is a uuid', typeof idA === 'string' && /^[0-9a-f-]{36}$/.test(idA))
+
+    // 2. The payload contains ONLY the fields we promised. This is the check
+    //    that would catch someone helpfully adding `cwd` or `model` later.
+    check(
+      'track: batch has no fields beyond the documented set',
+      Object.keys(first ?? {})
+        .sort()
+        .join(',') === 'appVersion,arch,channel,deviceId,events,platform',
+      Object.keys(first ?? {}).join(',')
+    )
+    check(
+      'track: an event has no fields beyond name/clientId/ts/props',
+      Object.keys(first?.events?.[0] ?? {})
+        .sort()
+        .join(',') === 'clientId,name,ts'
+    )
+
+    // 3. The id survives a restart — that is what makes retention measurable.
+    _resetTracking()
+    batches = []
+    hits = 0
+    initTracking()
+    await settled(1)
+    check('track: deviceId persists across a restart', batches[0]?.deviceId === idA)
+
+    // 4. turn_end props survive the round trip with real values.
+    batches = []
+    hits = 0
+    track('turn_end', { ok: true, durationMs: 1234 })
+    await flush()
+    await settled(1)
+    const props = batches[0]?.events?.[0]?.props
+    check('track: props round-trip', props?.ok === true && props?.durationMs === 1234)
+
+    // 5. Opting out is immediate: queued events are dropped and nothing sends.
+    batches = []
+    hits = 0
+    track('prompt')
+    check('track: event queued while enabled', _queueDepth() === 1)
+    setTrackingEnabled(false)
+    check('track: opting out drops the queue', _queueDepth() === 0)
+    track('prompt')
+    check('track: opting out stops collection', _queueDepth() === 0)
+    await flush()
+    check('track: opting out stops sending', hits === 0, `${hits} requests`)
+    check('track: opt-out is readable', isTrackingEnabled() === false)
+
+    // 6. ...and survives a restart, including a factory reset of the database.
+    repo.resetAll()
+    _resetTracking()
+    initTracking()
+    check('track: opt-out survives restart + factory reset', isTrackingEnabled() === false)
+    hits = 0
+    track('app_open')
+    await flush()
+    check('track: opted-out restart sends nothing', hits === 0, `${hits} requests`)
+
+    // 7. Opting back in reuses the original id rather than looking like a new
+    //    install (which would silently inflate installs on every toggle).
+    batches = []
+    setTrackingEnabled(true)
+    track('prompt')
+    await flush()
+    check('track: opting back in resumes sending', batches.length === 1)
+    check('track: opting back in reuses the original id', batches[0]?.deviceId === idA)
+
+    // 8. A 5xx requeues (idempotent retry), a 4xx drops (retrying can't help).
+    await reset()
+    initTracking()
+    await settled(1)
+    batches = []
+    hits = 0
+    status = 500
+    track('prompt')
+    await flush()
+    check('track: a 5xx requeues the batch', _queueDepth() === 1)
+    const retried = batches[0]?.events?.[0]?.clientId
+    status = 200
+    await flush()
+    check(
+      'track: the retry reuses clientId so the server can dedupe',
+      batches[1]?.events?.[0]?.clientId === retried && typeof retried === 'string'
+    )
+    check('track: a successful retry clears the queue', _queueDepth() === 0)
+
+    status = 400
+    track('prompt')
+    await flush()
+    check('track: a 4xx drops the batch instead of looping', _queueDepth() === 0)
+    status = 200
+
+    // 9. An unreachable server must not throw, and must not grow the queue past
+    //    the cap. This is the "user on a plane" case.
+    _resetTracking()
+    process.env.ROXY_TRACK_ENDPOINT = 'http://127.0.0.1:1/track'
+    initTracking()
+    for (let i = 0; i < 100; i++) track('prompt')
+    await flush()
+    check('track: an unreachable endpoint never throws', true)
+    check('track: the queue stays bounded offline', _queueDepth() <= 40, String(_queueDepth()))
+    process.env.ROXY_TRACK_ENDPOINT = `http://127.0.0.1:${port}/track`
+
+    // 10. A version change reports exactly one update event.
+    await reset()
+    await fs.writeFile(
+      idFile,
+      JSON.stringify({ deviceId: idA, enabled: true, appVersion: '0.0.0-old' }),
+      'utf8'
+    )
+    initTracking()
+    await settled(1)
+    const names = batches[0]?.events?.map((e) => e.name) ?? []
+    check(
+      'track: a version change reports app_open + update',
+      names.join(',') === 'app_open,update',
+      names.join(',')
+    )
+    _resetTracking()
+    batches = []
+    hits = 0
+    initTracking()
+    await settled(1)
+    check(
+      'track: the update is not re-reported on the next launch',
+      (batches[0]?.events ?? []).every((e) => e.name !== 'update')
+    )
+
+    // 11. The kill switch beats everything, including the stored preference.
+    _resetTracking()
+    process.env.ROXY_TRACK_DISABLE = '1'
+    initTracking()
+    hits = 0
+    track('app_open')
+    setTrackingEnabled(true)
+    track('prompt')
+    await flush()
+    check('track: ROXY_TRACK_DISABLE cannot be re-enabled', isTrackingEnabled() === false)
+    check('track: ROXY_TRACK_DISABLE sends nothing', hits === 0, `${hits} requests`)
+    delete process.env.ROXY_TRACK_DISABLE
+
+    // 12. Shutdown drains rather than dropping.
+    await reset()
+    initTracking()
+    await settled(1)
+    batches = []
+    hits = 0
+    shutdownTracking()
+    await settled(1)
+    check(
+      'track: shutdown flushes app_close',
+      batches.some((b) => b.events?.some((e) => e.name === 'app_close'))
+    )
+
+    // 13. A read-only profile degrades instead of crashing.
+    _resetTracking()
+    await fs.writeFile(idFile, 'not json at all{{{', 'utf8')
+    initTracking()
+    check('track: a corrupt id file does not crash the launch', isTrackingEnabled() === true)
+    batches = []
+    hits = 0
+    await settled(1)
+    check('track: a corrupt id file still reports', batches.length === 1)
+
+    _resetTracking()
+    await new Promise<void>((r) => server.close(() => r()))
+    delete process.env.ROXY_TRACK_ENDPOINT
+  } catch (e) {
+    check('usage tracking', false, e instanceof Error ? e.message : String(e))
   }
 
   closeDb()

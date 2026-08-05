@@ -41,6 +41,7 @@ import * as repo from '../db/repo'
 import { listModels } from './models'
 import { pickDefaultModel } from '../../shared/models'
 import { runSessionTurn } from './session-turn'
+import { track } from './track'
 import { sessionCwd } from './workspace'
 import {
   MAX_FRAME_BYTES,
@@ -693,6 +694,9 @@ function onFrame(raw: string): void {
   if (!frame || typeof frame.t !== 'string' || !share) return
   switch (frame.t) {
     case 'guest-joined': {
+      // A pairing actually completed. Counted here rather than at share start:
+      // opening a share nobody scans isn't someone using Remote Workspace.
+      track('remote_pair')
       // A phone entered the PIN and paired — send it the workspace session list
       // plus the current session's transcript + live turn state.
       share.guests = typeof frame.guests === 'number' ? frame.guests : share.guests
