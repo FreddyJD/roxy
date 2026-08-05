@@ -87,6 +87,7 @@ import {
   placeholderBranchName
 } from '../src/shared/branch'
 import {
+  clampReasoningEffort,
   contextBudgetFor,
   effectiveContextMax,
   parseReasoningEffort,
@@ -3960,6 +3961,31 @@ async function main(): Promise<void> {
     parseReasoningEffort('turbo') === null &&
       parseReasoningEffort(null) === null &&
       parseReasoningEffort(7) === null
+  )
+
+  // clampReasoningEffort keeps a sticky session effort from 400ing a model that
+  // publishes a narrower ladder (roxy.gg reports one per model).
+  check(
+    'clamp effort: an unknown ladder is left alone',
+    clampReasoningEffort('max', undefined) === 'max' && clampReasoningEffort('low', []) === 'low'
+  )
+  check(
+    'clamp effort: a supported level passes through',
+    clampReasoningEffort('high', ['low', 'high', 'max']) === 'high'
+  )
+  check(
+    'clamp effort: an unsupported level steps DOWN to the nearest supported one',
+    clampReasoningEffort('max', ['low', 'high']) === 'high' &&
+      clampReasoningEffort('xhigh', ['low', 'medium']) === 'medium'
+  )
+  check(
+    'clamp effort: with nothing weaker it takes the weakest supported level',
+    clampReasoningEffort('low', ['xhigh', 'max']) === 'xhigh'
+  )
+  check(
+    'clamp effort: a single-level ladder always resolves to that level',
+    clampReasoningEffort('max', ['high']) === 'high' &&
+      clampReasoningEffort('low', ['high']) === 'high'
   )
 
   // Claude reports a 200K base but really exposes 1M - the picker's ceiling.

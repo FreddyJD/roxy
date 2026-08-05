@@ -5,7 +5,9 @@ import type { ModelInfo } from '@shared/api'
 import { PRIMARY_AGENTS, getAgent, DEFAULT_AGENT_ID } from '@shared/agents'
 import { buildSystemPrompt, useRoxyStore } from '../lib/store'
 import {
+  clampReasoningEffort,
   contextBudgetFor,
+  DEFAULT_REASONING_EFFORT,
   effectiveContextMax,
   resolveSessionConfig,
   type SessionConfig
@@ -131,8 +133,20 @@ export function ThinkingPicker(): JSX.Element | null {
   const { open, setOpen, ref, anchor } = usePopover(POPOVER_W)
 
   if (!info?.reasoning) return null
-  const current = config.reasoningEffort
-  const currentLabel = EFFORTS.find((e) => e.value === current)?.label ?? 'High'
+  // Offer only the rungs this model accepts, when the provider says which.
+  // A gateway like roxy.gg reports a per-model ladder, and several models
+  // expose just one level - listing Max there would render a choice that 400s.
+  const efforts = info.reasoningEfforts?.length
+    ? EFFORTS.filter((e) => info.reasoningEfforts!.includes(e.value))
+    : EFFORTS
+  // What the session is SET to may not be what this model will run: a session
+  // left on Max that switches to a high-only model sends `high`. Show the level
+  // that will actually be used, so the footer never states a comfortable lie.
+  const current = clampReasoningEffort(config.reasoningEffort, info.reasoningEfforts)
+  const currentLabel = efforts.find((e) => e.value === current)?.label ?? 'High'
+  // "Default" marks the level a session starts on — clamped too, so a model
+  // without `high` still marks one row instead of none.
+  const defaultEffort = clampReasoningEffort(DEFAULT_REASONING_EFFORT, info.reasoningEfforts)
 
   return (
     <div ref={ref} className="relative">
@@ -151,7 +165,7 @@ export function ThinkingPicker(): JSX.Element | null {
             Thinking Effort
           </div>
           <div className="py-1">
-            {EFFORTS.map((e) => {
+            {efforts.map((e) => {
               const selected = e.value === current
               return (
                 <button
@@ -171,7 +185,7 @@ export function ThinkingPicker(): JSX.Element | null {
                   />
                   <span className="text-xs font-medium text-text">{e.label}</span>
                   <span className="ml-auto text-[11px] text-text-subtle">
-                    {e.value === 'high' ? 'Default' : ''}
+                    {e.value === defaultEffort ? 'Default' : ''}
                   </span>
                 </button>
               )

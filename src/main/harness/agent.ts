@@ -68,6 +68,7 @@ import { startToolRun } from '../services/tool-runs'
 import {
   messagesHaveImages,
   openAiContent,
+  openAiReasoning,
   openaiEndpoint,
   streamChat,
   withCopilotRetry,
@@ -1795,7 +1796,9 @@ async function streamOnce(
     messages,
     tools,
     tool_choice: 'auto',
-    ...(reasoning && effort ? { reasoning_effort: effort } : {}),
+    // Via the shared helper, not a raw spread: it is what knows which providers
+    // accept xhigh/max and which 400 on anything past high.
+    ...openAiReasoning(providerId, reasoning, effort),
     stream: true,
     // Ask OpenAI-compatible providers for a final token-usage chunk. Providers
     // that ignore it just don't send one — we fall back to an estimate below.

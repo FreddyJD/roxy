@@ -4,6 +4,8 @@
  * Fetched once and cached (the JSON is large; ~144 providers).
  */
 import type { ModelInfo, ModelCost } from '../../shared/api'
+import type { ReasoningEffort } from '../../shared/types'
+import { REASONING_EFFORTS } from '../../shared/session-config'
 import { getProviderToken, listConnectedProviders } from '../db/repo'
 import { isCliProxyProvider } from '../../shared/cliproxy'
 import { ensureRunning as ensureCliProxy, listProxyModels } from './cliproxy'
@@ -42,10 +44,88 @@ const ROXY_DEFAULT_BASE = 'https://roxy.gg/v1'
 const ROXY_TTL_MS = 5 * 60 * 1000
 let roxyCache: { at: number; data: ModelInfo[] } | null = null
 
+/**
+ * A model as roxy.gg's gateway reports it (an OpenRouter-shaped record).
+ *
+ * Two fields matter beyond the name: `supported_parameters` says whether
+ * the model can take tools and a reasoning effort at all, and `reasoning`
+ * gives the PER-MODEL effort ladder. `pricing` is USD per SINGLE token
+ * here, not per 1M like models.dev.
+ */
 interface RoxyModel {
   id: string
   name?: string
   context_length?: number
+  supported_parameters?: string[]
+  reasoning?: {
+    mandatory?: boolean
+    default_enabled?: boolean
+    supported_efforts?: string[]
+    default_effort?: string
+  }
+  pricing?: {
+    prompt?: string
+    completion?: string
+    input_cache_read?: string
+    input_cache_write?: string
+  }
+  top_provider?: { context_length?: number; max_completion_tokens?: number }
+}
+
+/** Parse a roxy.gg per-token price string into USD per 1M tokens. */
+function perMillion(v: string | undefined): number | undefined {
+  if (typeof v !== 'string' || v === '') return undefined
+  const n = Number(v)
+  return Number.isFinite(n) ? n * 1_000_000 : undefined
+}
+
+/** roxy.gg `pricing` (USD per token) -> our ModelCost (USD per 1M tokens). */
+function roxyCost(p: RoxyModel['pricing']): ModelCost | undefined {
+  if (!p) return undefined
+  const cost: ModelCost = {}
+  const input = perMillion(p.prompt)
+  const output = perMillion(p.completion)
+  const cacheRead = perMillion(p.input_cache_read)
+  const cacheWrite = perMillion(p.input_cache_write)
+  if (input !== undefined) cost.input = input
+  if (output !== undefined) cost.output = output
+  if (cacheRead !== undefined) cost.cacheRead = cacheRead
+  if (cacheWrite !== undefined) cost.cacheWrite = cacheWrite
+  return Object.keys(cost).length ? cost : undefined
+}
+
+/**
+ * The model's effort ladder, narrowed to the levels Roxy's picker has.
+ *
+ * The gateway also reports `minimal` and `none`, which sit below our
+ * weakest rung and have no UI - they are dropped rather than folded into
+ * `low`, since
+ * silently spending more thinking than the model was told to is worse than
+ * offering one fewer level. An empty result means "no usable ladder", which
+ * reads as unknown so the full range stays available.
+ */
+function roxyEfforts(m: RoxyModel): ReasoningEffort[] | undefined {
+  const raw = m.reasoning?.supported_efforts
+  if (!Array.isArray(raw)) return undefined
+  const efforts = REASONING_EFFORTS.filter((e) => raw.includes(e))
+  return efforts.length ? efforts : undefined
+}
+
+/**
+ * Whether the gateway will accept a thinking effort for this model.
+ *
+ * `supported_parameters` is the authority (it is what the request
+ * validator reads); the `reasoning` block alone is enough for models that think
+ * unconditionally, where effort is implicit rather than a parameter.
+ */
+function roxyReasoning(m: RoxyModel): boolean {
+  const params = m.supported_parameters ?? []
+  return (
+    params.includes('reasoning_effort') ||
+    params.includes('reasoning') ||
+    Boolean(m.reasoning?.mandatory) ||
+    Boolean(m.reasoning?.default_enabled)
+  )
 }
 
 /** Where to fetch the Roxy catalog from + how to authenticate, if at all. */
@@ -58,16 +138,31 @@ function roxyCatalogSource(): { url: string; token: string | null } {
   return { url: `${base}/models`, token }
 }
 
+/**
+ * Map the gateway's catalog into ModelInfo, KEEPING the capability flags.
+ *
+ * These used to be hardcoded to false, which quietly disabled three features
+ * for every roxy.gg model at once: the thinking-effort picker hides itself
+ * when `reasoning` is false, `pickDefaultModel` skips models that
+ * are not tool-capable, and unpriced models make the usage meter report zero
+ * spend. The gateway reports all three, so read them rather than assume.
+ */
 function toModelInfo(body: { data?: RoxyModel[] }): ModelInfo[] {
   return (body.data ?? [])
-    .map((m) => ({
-      id: m.id,
-      name: m.name || m.id,
-      reasoning: false,
-      toolCall: false,
-      contextLimit: m.context_length,
-      outputLimit: undefined
-    }))
+    .map((m) => {
+      const reasoning = roxyReasoning(m)
+      const cost = roxyCost(m.pricing)
+      return {
+        id: m.id,
+        name: m.name || m.id,
+        reasoning,
+        toolCall: (m.supported_parameters ?? []).includes('tools'),
+        ...(reasoning ? { reasoningEfforts: roxyEfforts(m) } : {}),
+        contextLimit: m.context_length ?? m.top_provider?.context_length,
+        outputLimit: m.top_provider?.max_completion_tokens,
+        ...(cost ? { cost } : {})
+      }
+    })
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
@@ -201,6 +296,12 @@ export async function listModels(providerId: string): Promise<ModelInfo[]> {
  * catalog before running, so by record-pricing time the cache is warm.
  */
 export function modelCost(providerId: string, modelId: string): ModelCost | undefined {
+  // Roxy's gateway isn't in models.dev and prices its own (marked-up) catalog,
+  // so read the price the user is actually charged from the roxy cache. Without
+  // this every roxy turn records $0 and the usage meter reports no spend at all.
+  if (providerId === 'roxy') {
+    return roxyCache?.data.find((m) => m.id === modelId)?.cost
+  }
   if (!cache) return undefined
   const models = cache.data[providerId]?.models
   if (!models) return undefined

@@ -49,6 +49,36 @@ export type SessionConfigSource = Pick<
 
 export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'high'
 
+/** The full ladder, weakest to strongest — the order the picker renders. */
+export const REASONING_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * Narrow a chosen effort to one the model will actually accept.
+ *
+ * Providers disagree about the ladder: OpenAI-compatible endpoints classically
+ * know low/medium/high, Copilot takes the whole Low->Max range, and a gateway
+ * like roxy.gg reports a PER-MODEL list (
+easoningEfforts) where a model may
+ * expose only ['high']. Sending an unsupported level is a 400, so a session
+ * left on Max must degrade to the nearest supported level rather than fail.
+ *
+ * "Nearest" is deliberately downward-first: too much thinking costs money the
+ * user did not ask for, too little only costs quality. We fall back to the
+ * strongest supported level only when nothing weaker exists.
+ */
+export function clampReasoningEffort(
+  effort: ReasoningEffort,
+  supported: ReasoningEffort[] | undefined
+): ReasoningEffort {
+  if (!supported || supported.length === 0) return effort
+  const allowed = REASONING_EFFORTS.filter((e) => supported.includes(e))
+  if (allowed.length === 0) return effort
+  if (allowed.includes(effort)) return effort
+  const want = REASONING_EFFORTS.indexOf(effort)
+  const weaker = allowed.filter((e) => REASONING_EFFORTS.indexOf(e) < want)
+  return weaker.length ? weaker[weaker.length - 1] : allowed[0]
+}
+
 /** Narrow an untrusted string (DB column, IPC payload) to a ReasoningEffort. */
 export function parseReasoningEffort(v: unknown): ReasoningEffort | null {
   return v === 'low' || v === 'medium' || v === 'high' || v === 'xhigh' || v === 'max' ? v : null

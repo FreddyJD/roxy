@@ -223,18 +223,30 @@ const THINK_BUDGET: Record<ReasoningEffort, number> = {
 }
 
 /**
- * OpenAI-style `reasoning_effort`, only when the model supports reasoning.
- * GitHub Copilot accepts the full Low→Max ladder (it's exactly what VS Code
- * sends for Claude); strict OpenAI-compatible endpoints only know low/medium/
- * high, so clamp the extra levels there to avoid a 400.
+ * Providers that accept the full Low->Max ladder.
+ *
+ * GitHub Copilot does because it is exactly what VS Code sends for Claude.
+ * Roxy's own gateway does because it publishes a PER-MODEL ladder in its
+ * catalog (`ModelInfo.reasoningEfforts`) that callers clamp against before we
+ * get here - capping it again to `high` would silently discard a level the
+ * model genuinely supports and the user explicitly picked.
+ *
+ * Everything else is a strict OpenAI-compatible endpoint that only knows
+ * low/medium/high, where an extra level is a 400 rather than a nuance.
  */
-function openAiReasoning(
+const FULL_EFFORT_LADDER_PROVIDERS = new Set(['github-copilot', 'roxy'])
+
+/**
+ * OpenAI-style `reasoning_effort`, only when the model supports reasoning.
+ * Clamps the ladder to what the provider accepts (see above).
+ */
+export function openAiReasoning(
   providerId: string,
   reasoning?: boolean,
   effort?: ReasoningEffort
 ): { reasoning_effort?: ReasoningEffort } {
   if (!reasoning || !effort) return {}
-  if (providerId !== 'github-copilot' && (effort === 'xhigh' || effort === 'max')) {
+  if (!FULL_EFFORT_LADDER_PROVIDERS.has(providerId) && (effort === 'xhigh' || effort === 'max')) {
     return { reasoning_effort: 'high' }
   }
   return { reasoning_effort: effort }
