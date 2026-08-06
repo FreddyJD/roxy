@@ -28,6 +28,10 @@ import { PALETTE, rgb } from './dither-kit/palette'
 import { useChartDimensions } from './dither-kit/use-chart-dimensions'
 
 const ROWS = 7 // days of the week (Sun → Sat)
+// Weekday gutter labels, GitHub-style: only every other row (Mon/Wed/Fri) so the
+// column doesn't repeat 7 tiny labels — row index matches `Date#getDay()` (0=Sun).
+const DOW_LABELS: Record<number, string> = { 1: 'Mon', 3: 'Wed', 5: 'Fri' }
+const GUTTER = 24 // css px reserved for the weekday label column
 // Each column's step (its width, incl. gap) is derived from the container so the
 // grid fills it; the step is split into a cell + gap and the cell into its
 // sq sq-base rounded corner by these ratios. The step is clamped to [MIN_STEP, MAX_STEP]:
@@ -208,7 +212,7 @@ export function ContributionGraph({ data }: { data: ActivityStats }): JSX.Elemen
   // Every week of data becomes a column; geometry() stretches them to the width
   // (clamped), and tells us how many of the most-recent weeks actually fit.
   const allColumns = useMemo(() => buildColumns(data.days), [data.days])
-  const { cols, step, cellSize, gap, radius } = geometry(size.width, allColumns.length)
+  const { cols, step, cellSize, gap, radius } = geometry(size.width - GUTTER, allColumns.length)
   const columns = useMemo(
     () => (allColumns.length > cols ? allColumns.slice(allColumns.length - cols) : allColumns),
     [allColumns, cols]
@@ -333,49 +337,64 @@ export function ContributionGraph({ data }: { data: ActivityStats }): JSX.Elemen
 
   return (
     <div ref={wrapRef} className="w-full">
-      {/* Month labels */}
-      <div className="relative mb-1.5" style={{ height: 14, width: gridW }}>
+      {/* Month labels (offset past the weekday gutter) */}
+      <div className="relative mb-1.5" style={{ height: 14, width: gridW + GUTTER }}>
         {labels.map((l) => (
           <span
             key={`${l.text}-${l.left}`}
             className="absolute top-0 text-[10px] leading-none text-text-subtle"
-            style={{ left: l.left }}
+            style={{ left: l.left + GUTTER }}
           >
             {l.text}
           </span>
         ))}
       </div>
 
-      {/* Grid (crisp canvas + blurred bloom copy on top, additively blended) */}
-      <div className="relative" style={{ width: gridW, height: gridH }}>
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0"
-          onPointerMove={onPointerMove}
-          onPointerLeave={onPointerLeave}
-        />
-        <canvas
-          ref={bloomRef}
-          className="pointer-events-none absolute inset-0"
-          style={bloom ?? { opacity: 0 }}
-        />
-        {hover && (
-          <div
-            className="animate-fade-in pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full whitespace-nowrap sq-frame sq-lg sq-fill-elevated sq-ring rounded-lg border border-border bg-elevated px-2 py-1 text-[11px] text-text shadow-xl"
-            style={{ left: hover.x, top: hover.y - 6 }}
-          >
-            <span className="font-semibold tabular-nums">{hover.day.count}</span>{' '}
-            {hover.day.count === 1 ? 'turn' : 'turns'}
-            <span className="text-text-subtle">
-              {' · '}
-              {parseLocalDate(hover.day.date).toLocaleDateString(undefined, {
-                weekday: 'short',
-                month: 'short',
-                day: 'numeric'
-              })}
+      <div className="flex">
+        {/* Weekday gutter: Mon/Wed/Fri, GitHub-style, aligned to each row's cell */}
+        <div className="relative shrink-0" style={{ width: GUTTER, height: gridH }}>
+          {Object.entries(DOW_LABELS).map(([row, text]) => (
+            <span
+              key={row}
+              className="absolute right-1.5 text-[10px] leading-none text-text-subtle"
+              style={{ top: Number(row) * step + cellSize / 2 - 5 }}
+            >
+              {text}
             </span>
-          </div>
-        )}
+          ))}
+        </div>
+
+        {/* Grid (crisp canvas + blurred bloom copy on top, additively blended) */}
+        <div className="relative" style={{ width: gridW, height: gridH }}>
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0"
+            onPointerMove={onPointerMove}
+            onPointerLeave={onPointerLeave}
+          />
+          <canvas
+            ref={bloomRef}
+            className="pointer-events-none absolute inset-0"
+            style={bloom ?? { opacity: 0 }}
+          />
+          {hover && (
+            <div
+              className="animate-fade-in pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full whitespace-nowrap sq-frame sq-lg sq-fill-elevated sq-ring rounded-lg border border-border bg-elevated px-2 py-1 text-[11px] text-text shadow-xl"
+              style={{ left: hover.x, top: hover.y - 6 }}
+            >
+              <span className="font-semibold tabular-nums">{hover.day.count}</span>{' '}
+              {hover.day.count === 1 ? 'turn' : 'turns'}
+              <span className="text-text-subtle">
+                {' · '}
+                {parseLocalDate(hover.day.date).toLocaleDateString(undefined, {
+                  weekday: 'short',
+                  month: 'short',
+                  day: 'numeric'
+                })}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

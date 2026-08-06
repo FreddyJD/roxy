@@ -190,7 +190,10 @@ const roxy: RoxyApi = {
   },
   models: {
     list: (providerId) => ipcRenderer.invoke(CHANNELS.modelsList, providerId),
-    recent: (providerId) => ipcRenderer.invoke(CHANNELS.modelsRecent, providerId)
+    recent: (providerId) => ipcRenderer.invoke(CHANNELS.modelsRecent, providerId),
+    pinned: () => ipcRenderer.invoke(CHANNELS.modelsPinned),
+    setPinned: (providerId, model, pinned) =>
+      ipcRenderer.invoke(CHANNELS.modelsSetPinned, providerId, model, pinned)
   },
   context: {
     compact: (chatId, providerId, model) =>
