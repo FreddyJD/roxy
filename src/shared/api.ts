@@ -813,6 +813,10 @@ export interface RoxyApi {
     list(providerId: string): Promise<ModelInfo[]>
     /** Last 5 distinct model picks for a provider, newest first. */
     recent(providerId: string): Promise<{ model: string; usedAt: number }[]>
+    /** Every pinned model across every provider, in pin order (oldest first). */
+    pinned(): Promise<{ providerId: string; model: string }[]>
+    /** Pin/unpin one model - a deliberate shortlist, unlike the MRU `recent` list. */
+    setPinned(providerId: string, model: string, pinned: boolean): Promise<void>
   }
   context: {
     /** Summarize a chat's history into a compaction summary; returns the chat. */

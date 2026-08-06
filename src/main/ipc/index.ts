@@ -717,6 +717,12 @@ export function registerIpc(): void {
   ipcMain.handle(CHANNELS.modelsRecent, (_e, providerId: string) =>
     repo.listRecentModels(providerId)
   )
+  ipcMain.handle(CHANNELS.modelsPinned, () => repo.listPinnedModels())
+  ipcMain.handle(
+    CHANNELS.modelsSetPinned,
+    (_e, providerId: string, model: string, pinned: boolean) =>
+      repo.setModelPinned(providerId, model, pinned)
+  )
 
   // ---- context (compaction) ----
   ipcMain.handle(

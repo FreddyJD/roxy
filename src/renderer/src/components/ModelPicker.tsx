@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Brain, Check, ChevronsUpDown, Clock, Search, Wrench } from 'lucide-react'
+import { Brain, Check, ChevronsUpDown, Clock, Pin, Search, Wrench } from 'lucide-react'
 import { useRoxyStore } from '../lib/store'
 import { resolveSessionConfig } from '@shared/session-config'
 import { ProviderLogo } from '../lib/providerLogos'
@@ -10,8 +10,12 @@ import { cn } from '../lib/cn'
 /**
  * A cute, searchable model picker: the active provider's logo + model on the
  * trigger, and a popover grouped by every connected provider (with its icon)
- * listing the real models models.dev knows about. A LATEST section shows the
- * last five distinct picks for each provider.
+ * listing the real models models.dev knows about. A PINNED section (a
+ * deliberate, user-curated shortlist — for people juggling many providers or
+ * a provider with a huge catalog) sits above everything when non-empty,
+ * followed by a LATEST section per provider showing its last five distinct
+ * picks. Hovering any row reveals a pin toggle; nothing pinned means the
+ * section simply doesn't render, so the feature costs zero space unused.
  */
 const MENU_W = 320
 
@@ -23,8 +27,11 @@ export function ModelPicker(): JSX.Element {
   const selectModel = useRoxyStore((s) => s.selectModel)
   const models = useRoxyStore((s) => s.modelCatalog)
   const recentModels = useRoxyStore((s) => s.recentModels)
+  const pinnedModels = useRoxyStore((s) => s.pinnedModels)
   const ensureModels = useRoxyStore((s) => s.ensureModels)
   const ensureRecentModels = useRoxyStore((s) => s.ensureRecentModels)
+  const ensurePinnedModels = useRoxyStore((s) => s.ensurePinnedModels)
+  const togglePinnedModel = useRoxyStore((s) => s.togglePinnedModel)
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -51,11 +58,12 @@ export function ModelPicker(): JSX.Element {
 
   // Lazy-load every connected provider's models and recents into shared caches.
   useEffect(() => {
+    void ensurePinnedModels()
     providers.forEach((p) => {
       void ensureModels(p.id)
       void ensureRecentModels(p.id)
     })
-  }, [providers, ensureModels, ensureRecentModels])
+  }, [providers, ensureModels, ensureRecentModels, ensurePinnedModels])
 
   // Close on outside click / Escape.
   useEffect(() => {
@@ -94,6 +102,14 @@ export function ModelPicker(): JSX.Element {
   const modelName = (providerId: string, modelId: string): string =>
     models[providerId]?.find((m) => m.id === modelId)?.name ?? modelId
 
+  const isPinned = (providerId: string, modelId: string): boolean =>
+    pinnedModels.some((p) => p.providerId === providerId && p.model === modelId)
+
+  const togglePin = (e: React.MouseEvent, providerId: string, modelId: string): void => {
+    e.stopPropagation()
+    void togglePinnedModel(providerId, modelId, !isPinned(providerId, modelId))
+  }
+
   const renderModelButton = (
     providerId: string,
     providerName: string,
@@ -102,24 +118,43 @@ export function ModelPicker(): JSX.Element {
   ): JSX.Element => {
     const info = models[providerId]?.find((m) => m.id === modelId)
     const selected = providerId === activeProvider?.id && modelId === activeModel
+    const pinned = isPinned(providerId, modelId)
     return (
       <button
-        key={modelId}
+        key={`${providerId}:${modelId}`}
         type="button"
         onClick={() => pick(providerId, modelId)}
         className={cn(
-          'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition',
+          'group flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition',
           selected ? 'bg-accent/15 text-text' : 'text-text-muted hover:bg-white/5 hover:text-text'
         )}
       >
+        <Check className={cn('h-3.5 w-3.5 shrink-0', selected ? 'text-accent' : 'opacity-0')} />
         <ProviderLogo id={providerId} name={providerName} size={14} />
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {info?.reasoning && <Brain className="h-3 w-3 shrink-0 text-accent" />}
         {info?.toolCall && <Wrench className="h-3 w-3 shrink-0 text-success" />}
-        {selected && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
+        <span
+          role="button"
+          title={pinned ? 'Unpin model' : 'Pin model'}
+          onClick={(e) => togglePin(e, providerId, modelId)}
+          className={cn(
+            'shrink-0 rounded p-0.5 transition hover:bg-white/10',
+            pinned ? 'text-accent' : 'text-text-subtle opacity-0 group-hover:opacity-100'
+          )}
+        >
+          <Pin className={cn('h-3 w-3', pinned && 'fill-current')} />
+        </span>
       </button>
     )
   }
+
+  // Pinned models render as one flat list (not grouped per provider) so a
+  // shortlist spanning several providers stays a single glanceable block
+  // instead of being scattered across per-provider sections.
+  const pinnedList = q
+    ? []
+    : pinnedModels.filter((p) => models[p.providerId]?.some((m) => m.id === p.model))
 
   return (
     <div ref={rootRef} className="relative">
@@ -148,12 +183,26 @@ export function ModelPicker(): JSX.Element {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto py-1">
             {loading && <div className="px-3 py-3 text-xs text-text-subtle">Loading models…</div>}
+            {!loading && pinnedList.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-text-subtle">
+                  <Pin className="h-3 w-3 fill-current" /> Pinned
+                </div>
+                {pinnedList.map((p) => {
+                  const provider = providers.find((pr) => pr.id === p.providerId)
+                  if (!provider) return null
+                  return renderModelButton(p.providerId, provider.name, p.model)
+                })}
+              </div>
+            )}
             {!loading &&
               providers.map((p) => {
                 const list = (models[p.id] ?? []).filter(
                   (m) => !q || m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)
                 )
-                const latest = q ? [] : (recentModels[p.id] ?? [])
+                const latest = q
+                  ? []
+                  : (recentModels[p.id] ?? []).filter((r) => !isPinned(p.id, r.model))
                 if (list.length === 0 && latest.length === 0) return null
                 return (
                   <div key={p.id}>
@@ -178,7 +227,7 @@ export function ModelPicker(): JSX.Element {
               })}
             {!loading && Object.values(models).every((l) => l.length === 0) && (
               <div className="px-3 py-3 text-xs text-text-subtle">
-                Couldn&apos;t load models from models.dev — you can still send with the current
+                Couldn't load models from models.dev — you can still send with the current
                 model.
               </div>
             )}

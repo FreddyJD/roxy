@@ -89,6 +89,12 @@ const REPAIR_SCHEMA_SQL = /* sql */ `
         content    TEXT NOT NULL,
         created_at INTEGER NOT NULL
       , parts TEXT);
+  CREATE TABLE IF NOT EXISTS pinned_models (
+        provider_id TEXT NOT NULL,
+        model       TEXT NOT NULL,
+        pinned_at   INTEGER NOT NULL,
+        PRIMARY KEY (provider_id, model)
+      );
   CREATE TABLE IF NOT EXISTS projects (
         path       TEXT PRIMARY KEY,
         sort_order INTEGER NOT NULL,
@@ -421,7 +427,21 @@ export const MIGRATIONS: Migration[] = [
     `)
     addColumnIfMissing(db, 'providers', 'sort_order', 'INTEGER NOT NULL DEFAULT 0')
     db.exec('UPDATE providers SET sort_order = -created_at WHERE sort_order = 0')
-  }
+  },
+
+  // ---- v20: pinned models ----
+  // A user-chosen shortlist, independent of usage - unlike recent_models (which
+  // reorders itself as you pick things), a pin only moves when the user
+  // explicitly toggles it. No cap, no MRU: pinned_at just breaks ties by pin
+  // order (oldest pin first).
+  /* sql */ `
+    CREATE TABLE IF NOT EXISTS pinned_models (
+      provider_id TEXT NOT NULL,
+      model       TEXT NOT NULL,
+      pinned_at   INTEGER NOT NULL,
+      PRIMARY KEY (provider_id, model)
+    );
+  `
 ]
 
 /**
@@ -469,6 +489,8 @@ export function repairSchema(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_recent_models_provider ON recent_models(provider_id, used_at DESC);
   `)
   db.exec('UPDATE providers SET sort_order = -created_at WHERE sort_order = 0')
+  // v20's pinned-models table.
+  db.exec('CREATE TABLE IF NOT EXISTS pinned_models (provider_id TEXT NOT NULL, model TEXT NOT NULL, pinned_at INTEGER NOT NULL, PRIMARY KEY (provider_id, model))')
   // `projects` is derived state — one row per workspace folder its sessions use
   // — so a restored table can be rebuilt from the chats themselves, exactly as
   // v13 did on first upgrade. Only when empty, so a hand-ordered project list is

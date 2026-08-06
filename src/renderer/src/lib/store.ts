@@ -56,6 +56,12 @@ interface RoxyStore {
   modelCatalog: Record<string, ModelInfo[]>
   /** Last 5 distinct model picks per provider, lazy-loaded + refreshed on selection. */
   recentModels: Record<string, { model: string; usedAt: number }[]>
+  /**
+   * A deliberate, user-curated shortlist of models - pinned models show above
+   * everything else in the picker, across all providers. Unlike `recentModels`
+   * this never reshuffles on its own; only `togglePinnedModel` changes it.
+   */
+  pinnedModels: { providerId: string; model: string }[]
   chats: Chat[]
   activeChatId: string | null
   messages: Message[]
@@ -156,6 +162,10 @@ interface RoxyStore {
   selectModel: (providerId: string, model: string) => Promise<void>
   ensureModels: (providerId: string) => Promise<void>
   ensureRecentModels: (providerId: string) => Promise<void>
+  /** Load the pinned-model shortlist once (cached until toggled). */
+  ensurePinnedModels: () => Promise<void>
+  /** Pin or unpin a model in the shortlist; updates the cache optimistically. */
+  togglePinnedModel: (providerId: string, model: string, pinned: boolean) => Promise<void>
   setReasoningEffort: (level: ReasoningEffort) => Promise<void>
   setContextLimit: (limit: number | null) => Promise<void>
   setWebSearchApiKey: (key: string | null) => Promise<void>
@@ -300,6 +310,8 @@ const deltaHandlers = new Map<string, (event: LlmEvent) => void>()
 const chatRequests = new Map<string, string>()
 /** Cross-render cache of models.dev lists so we fetch each provider once. */
 const modelCatalogCache = new Map<string, ModelInfo[]>()
+/** Loaded once per app session — `ensurePinnedModels` is called from every ModelPicker mount. */
+let pinnedModelsLoaded = false
 /** Set when a remote turn lands while a local send streams into the shared chat. */
 const remoteMirror = { deferred: false }
 
@@ -712,6 +724,7 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
   providers: [],
   modelCatalog: {},
   recentModels: {},
+  pinnedModels: [],
   chats: [],
   activeChatId: null,
   messages: [],
@@ -1166,6 +1179,23 @@ export const useRoxyStore = create<RoxyStore>((set, get) => ({
     if (get().recentModels[providerId]) return
     const recent = await api.models.recent(providerId)
     set((s) => ({ recentModels: { ...s.recentModels, [providerId]: recent } }))
+  },
+
+  ensurePinnedModels: async () => {
+    if (pinnedModelsLoaded) return
+    pinnedModelsLoaded = true
+    const pinned = await api.models.pinned()
+    set({ pinnedModels: pinned })
+  },
+
+  togglePinnedModel: async (providerId, model, pinned) => {
+    // Optimistic: the picker toggles instantly, no round trip flicker.
+    set((s) => ({
+      pinnedModels: pinned
+        ? [...s.pinnedModels, { providerId, model }]
+        : s.pinnedModels.filter((p) => !(p.providerId === providerId && p.model === model))
+    }))
+    await api.models.setPinned(providerId, model, pinned)
   },
 
   setReasoningEffort: async (level) => {
