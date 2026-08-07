@@ -17,6 +17,7 @@ import {
 import { randomSlug, slugToBranchSegment } from '@shared/slugs'
 import { PageShell } from '../components/PageShell'
 import { McpServers } from '../components/McpServers'
+import { CookiePanel } from '../components/CookiePanel'
 import { ConfigBackup } from '../components/ConfigBackup'
 import { ActivitySection } from '../components/ActivitySection'
 import { ProviderLogo } from '../lib/providerLogos'
@@ -285,6 +286,19 @@ export default function Settings(): JSX.Element {
           <Button variant="secondary" className="shrink-0" onClick={() => api.browser.open()}>
             <Globe className="h-3.5 w-3.5" /> Open browser
           </Button>
+        </div>
+
+        <div className="mt-3 overflow-hidden sq sq-xl sq-ring rounded-xl border border-border bg-surface">
+          <div className="border-b border-border p-4">
+            <div className="text-sm font-medium text-text">Cookies</div>
+            <p className="mt-0.5 text-xs text-text-muted">
+              Read, edit, import and delete the browser&apos;s cookies — the built-in equivalent of
+              the Cookie-Editor extension. Import and export use its JSON format, so a blob copied
+              out of Chrome pastes straight in. To work on just one site, use the cookie button in
+              the browser&apos;s own toolbar.
+            </p>
+          </div>
+          <CookiePanel className="max-h-[420px]" />
         </div>
       </section>
 

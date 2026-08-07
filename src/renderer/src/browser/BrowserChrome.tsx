@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, Globe, Plus, RotateCw, Search, X } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, ArrowRight, Cookie, Globe, Plus, RotateCw, Search, X } from 'lucide-react'
 import type { BrowserState, BrowserTab } from '@shared/api'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
+import { CookiePanel } from '../components/CookiePanel'
 
 const BLANK: BrowserState = {
   url: '',
@@ -13,7 +14,7 @@ const BLANK: BrowserState = {
 }
 
 /**
- * The Roxy browser's chrome — a real React tab strip + URL bar (themed to match
+ * The Roxy browser's chrome â€” a real React tab strip + URL bar (themed to match
  * the app), rendered into the browser window's top BrowserView. It talks to the
  * main process purely through `window.roxy.browser.*`; the agent still drives
  * the active tab from main, and this just reflects/controls it.
@@ -24,7 +25,34 @@ export function BrowserChrome(): JSX.Element {
   const [draft, setDraft] = useState('')
   const [editing, setEditing] = useState(false)
   const [dragId, setDragId] = useState<string | null>(null)
+  const [cookiesOpen, setCookiesOpen] = useState(false)
 
+  // The host the cookie panel scopes to -- the active tab's, like the
+  // Cookie-Editor popup. Undefined on a blank tab, which shows the whole jar.
+  const host = useMemo(() => {
+    try {
+      return new URL(nav.url).hostname || undefined
+    } catch {
+      return undefined
+    }
+  }, [nav.url])
+
+  // A BrowserView always paints ABOVE the window's own webContents, so the
+  // panel can't simply overlay the page: main has to shrink the page view out
+  // of the way first. Growing the reserved chrome height does exactly that,
+  // and 0 hands the space back.
+  useEffect(() => {
+    void api.browser.setChromeHeight(cookiesOpen ? window.innerHeight : 0)
+  }, [cookiesOpen])
+
+  // Reserved height is absolute pixels, so a window resize while the panel is
+  // open would leave the page peeking out below it.
+  useEffect(() => {
+    if (!cookiesOpen) return
+    const onResize = (): void => void api.browser.setChromeHeight(window.innerHeight)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [cookiesOpen])
   useEffect(() => {
     const offState = api.browser.onState(setNav)
     const offTabs = api.browser.onTabs(setTabs)
@@ -53,7 +81,7 @@ export function BrowserChrome(): JSX.Element {
 
   return (
     <div className="flex h-screen w-screen select-none flex-col overflow-hidden bg-surface text-text">
-      {/* Tab strip — doubles as the draggable title bar; native controls overlay it. */}
+      {/* Tab strip â€” doubles as the draggable title bar; native controls overlay it. */}
       <div className="titlebar reserve-controls-left reserve-controls-right flex items-end gap-0.5 overflow-x-auto px-2 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((t) => (
           <div
@@ -154,7 +182,25 @@ export function BrowserChrome(): JSX.Element {
             className="h-8 w-full rounded-full border border-border bg-surface-2 pl-9 pr-3.5 text-xs text-text outline-none transition-colors placeholder:text-text-subtle focus:border-accent focus:bg-surface focus:ring-1 focus:ring-accent/35"
           />
         </div>
+        <NavButton onClick={() => setCookiesOpen((v) => !v)} title="Cookies" active={cookiesOpen}>
+          <Cookie className="h-4 w-4" />
+        </NavButton>
       </div>
+
+      {/* Cookie editor. Rendered in the chrome (not over the page) because a
+          BrowserView can't be painted over -- main shrinks the page view to
+          make room, so this genuinely sits on top. */}
+      {cookiesOpen && (
+        <CookiePanel
+          host={host}
+          className="min-h-0 flex-1"
+          action={
+            <NavButton onClick={() => setCookiesOpen(false)} title="Close cookies">
+              <X className="h-3.5 w-3.5" />
+            </NavButton>
+          }
+        />
+      )}
     </div>
   )
 }
@@ -163,12 +209,15 @@ function NavButton({
   children,
   onClick,
   disabled,
-  title
+  title,
+  active
 }: {
   children: React.ReactNode
   onClick: () => void
   disabled?: boolean
   title: string
+  /** Held-down look, for buttons that toggle a panel open. */
+  active?: boolean
 }): JSX.Element {
   return (
     <button
@@ -176,7 +225,10 @@ function NavButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="press-scale flex h-7 w-7 shrink-0 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-surface-2 hover:text-text disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-text-muted"
+      className={cn(
+        'press-scale flex h-7 w-7 shrink-0 items-center justify-center sq sq-lg rounded-lg text-text-muted hover:bg-surface-2 hover:text-text disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-text-muted',
+        active && 'bg-surface-2 text-text'
+      )}
     >
       {children}
     </button>

@@ -1,5 +1,5 @@
 /**
- * The Roxy browser — a real, persistent Electron BrowserWindow the agent can
+ * The Roxy browser â€” a real, persistent Electron BrowserWindow the agent can
  * drive. It uses a `persist:` session partition so cookies/logins survive
  * restarts (sign in once, automate forever), and it taps Electron's native
  * APIs to screenshot the page, read its HTML, and collect console messages.
@@ -22,17 +22,17 @@ import { CHANNELS } from '../../shared/ipc'
 import type { BrowserState, BrowserTab } from '../../shared/api'
 import { attachNativeContextMenu } from './context-menu'
 
-/** Persisted session → cookies, localStorage and logins survive app restarts. */
-const PARTITION = 'persist:roxy-browser'
+/** Persisted session â†’ cookies, localStorage and logins survive app restarts. */
+export const PARTITION = 'persist:roxy-browser'
 const MAX_CONSOLE = 500
 /** Height of the chrome overlaid at the top: tab strip + URL-bar toolbar. */
 const CHROME_H = 80
-/** Where a blank/new tab lands — a homepage, like a normal browser. */
+/** Where a blank/new tab lands â€” a homepage, like a normal browser. */
 const HOME_URL = 'https://www.google.com'
 /** The shared window used by the manual "Open browser" button and keyless callers. */
 const DEFAULT_KEY = '__default__'
 
-/** App icon path, injected from main (so this file has no `?asset` import — the
+/** App icon path, injected from main (so this file has no `?asset` import â€” the
  *  smoke harness bundles it with esbuild, which doesn't understand `?asset`). */
 let appIconPath: string | undefined
 export function setAppIcon(p: string): void {
@@ -48,14 +48,14 @@ export interface ConsoleEntry {
   ts: number
 }
 
-/** One open tab — a persistent-session page view. The active tab fills the
+/** One open tab â€” a persistent-session page view. The active tab fills the
  *  window; the rest sit at zero size (still alive, so their pages are kept). */
 interface Tab {
   id: string
   view: BrowserView
 }
 
-/** One isolated browser — a window + its tabs + console, owned by a session key. */
+/** One isolated browser â€” a window + its tabs + console, owned by a session key. */
 interface Session {
   key: string
   /** A human label (usually the project folder) shown in the window title. */
@@ -65,6 +65,14 @@ interface Session {
   activeTabId: string | null
   consoleLog: ConsoleEntry[]
   tabSeq: number
+  /**
+   * Chrome height in px when a chrome panel (the cookie editor) is open.
+   * BrowserViews always paint ABOVE the window's own webContents, so a panel
+   * rendered in the chrome would be hidden behind the page. Growing the chrome
+   * instead pushes the page view down out of sight -- the panel is genuinely
+   * on top, with no z-index fight to lose.
+   */
+  chromeH?: number
 }
 
 /** Every live browser, keyed by session (chat) id. */
@@ -80,7 +88,7 @@ function getSession(key: string): Session {
   return s
 }
 
-/** The session for `key` WITHOUT creating one — for read/nav ops that must not spawn a window. */
+/** The session for `key` WITHOUT creating one â€” for read/nav ops that must not spawn a window. */
 function peek(key: string): Session | undefined {
   return sessions.get(key)
 }
@@ -91,7 +99,7 @@ function activeView(s: Session): BrowserView | null {
   return t && !t.view.webContents.isDestroyed() ? t.view : null
 }
 
-/** The active page's contents for `key` — what every browser_* tool drives. */
+/** The active page's contents for `key` â€” what every browser_* tool drives. */
 function pageContents(key: string): Electron.WebContents {
   const s = peek(key)
   const v = s ? activeView(s) : null
@@ -99,9 +107,9 @@ function pageContents(key: string): Electron.WebContents {
   return v.webContents
 }
 
-/** The window title for a session — names the project so windows are tellable apart. */
+/** The window title for a session â€” names the project so windows are tellable apart. */
 function windowTitle(s: Session): string {
-  return s.label ? `Roxy Browser — ${s.label}` : 'Roxy Browser'
+  return s.label ? `Roxy Browser â€” ${s.label}` : 'Roxy Browser'
 }
 
 function ensureWindow(s: Session): BrowserWindow {
@@ -121,7 +129,7 @@ function ensureWindow(s: Session): BrowserWindow {
     backgroundColor: '#0a0a0a',
     autoHideMenuBar: true,
     ...(isMac || !appIconPath ? {} : { icon: appIconPath }),
-    // Hide the native OS title bar — our React chrome (tab strip + URL bar) IS
+    // Hide the native OS title bar â€” our React chrome (tab strip + URL bar) IS
     // the title bar. Keep native window controls, themed to match (no second
     // light bar stacked on top of the chrome).
     titleBarStyle: 'hidden',
@@ -137,11 +145,11 @@ function ensureWindow(s: Session): BrowserWindow {
   s.win = win
 
   // The chrome (tab strip + URL bar) is a real React app rendered into the
-  // WINDOW's OWN webContents — not a BrowserView — so its title-bar strip is
+  // WINDOW's OWN webContents â€” not a BrowserView â€” so its title-bar strip is
   // draggable via `-webkit-app-region` (which doesn't work inside a BrowserView)
   // and the native control overlay lands on it cleanly. Page tabs sit in
   // BrowserViews on top, below the chrome. Best-effort load (the test harness
-  // has no bundled browser.html — the pages still work).
+  // has no bundled browser.html â€” the pages still work).
   win.webContents.once('did-finish-load', () => {
     pushState(s)
     pushTabs(s)
@@ -171,14 +179,30 @@ function ensureWindow(s: Session): BrowserWindow {
 function layout(s: Session): void {
   if (!s.win || s.win.isDestroyed()) return
   const { width, height } = s.win.getContentBounds()
+  const top = s.chromeH ?? CHROME_H
   for (const t of s.tabs) {
     if (t.view.webContents.isDestroyed()) continue
     t.view.setBounds(
       t.id === s.activeTabId
-        ? { x: 0, y: CHROME_H, width, height: Math.max(0, height - CHROME_H) }
+        ? { x: 0, y: top, width, height: Math.max(0, height - top) }
         : { x: 0, y: 0, width: 0, height: 0 }
     )
   }
+}
+
+/**
+ * Reserve height px of window for the chrome, so a chrome-rendered panel can
+ * cover the page. Pass 0/undefined to restore the normal toolbar height.
+ *
+ * Clamped to the window, because a panel taller than the window would push the
+ * page view to a negative height and Chromium would reject the bounds.
+ */
+export function setChromeHeight(height: number, key: string = DEFAULT_KEY): void {
+  const s = peek(key)
+  if (!s || !s.win || s.win.isDestroyed()) return
+  const max = s.win.getContentBounds().height
+  s.chromeH = height > CHROME_H ? Math.min(height, max) : undefined
+  layout(s)
 }
 
 /** Create a tab (optionally at a URL) and make it active. Assumes a window. */
@@ -262,7 +286,7 @@ function tabsOf(s: Session): BrowserTab[] {
   })
 }
 
-/** The open tabs for `key` — also used by the browser_tabs tool. */
+/** The open tabs for `key` â€” also used by the browser_tabs tool. */
 export function listTabs(key: string = DEFAULT_KEY): BrowserTab[] {
   const s = peek(key)
   return s ? tabsOf(s) : []
@@ -307,7 +331,7 @@ export async function open(
   const wc = pageContents(key)
   const url = normalizeUrl(rawUrl)
   // Show the window so you can watch the agent browse, but DON'T steal focus
-  // (showInactive) — the agent driving the browser shouldn't yank you out of
+  // (showInactive) â€” the agent driving the browser shouldn't yank you out of
   // whatever you're typing. The Settings "Open browser" button (openWindow)
   // still focuses it for manual sign-in.
   if (s.win?.isMinimized()) s.win.restore()
@@ -378,7 +402,7 @@ export function close(key: string = DEFAULT_KEY): void {
   const s = sessions.get(key)
   if (!s) return
   if (s.win && !s.win.isDestroyed())
-    s.win.close() // fires 'closed' → sessions.delete
+    s.win.close() // fires 'closed' â†’ sessions.delete
   else sessions.delete(key)
 }
 
