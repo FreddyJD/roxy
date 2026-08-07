@@ -48,7 +48,7 @@ export interface UpsertMcpServerInput {
   enabled?: boolean
 }
 
-/** A skill discovered on disk (metadata only — the body is loaded on demand by the tool). */
+/** A skill discovered on disk (metadata only â€” the body is loaded on demand by the tool). */
 export interface SkillView {
   name: string
   description?: string
@@ -58,7 +58,7 @@ export interface SkillView {
   source: 'workspace' | 'global'
 }
 
-/** A skill plus its full markdown body — returned by `skills.read` for the editor. */
+/** A skill plus its full markdown body â€” returned by `skills.read` for the editor. */
 export interface SkillDetail extends SkillView {
   body: string
 }
@@ -68,7 +68,7 @@ export interface SkillWriteInput {
   name: string
   description?: string
   body?: string
-  /** Where to write it — defaults to 'global' from the Skills page (no workspace context). */
+  /** Where to write it â€” defaults to 'global' from the Skills page (no workspace context). */
   scope?: 'workspace' | 'global'
 }
 
@@ -98,7 +98,7 @@ export interface CreateChatInput {
   workspacePath?: string | null
   parentId?: string | null
   /**
-   * Run this session in its own git worktree — an isolated checkout on its own
+   * Run this session in its own git worktree â€” an isolated checkout on its own
    * branch, so it can't collide with other sessions on the same repo. Recorded
    * now, created on the first turn.
    */
@@ -119,7 +119,7 @@ export interface ForkChatInput {
 }
 
 /**
- * A background process owned by a session — a dev server, a watcher, an install.
+ * A background process owned by a session â€” a dev server, a watcher, an install.
  *
  * Subagent-started processes are owned by the ROOT session, so they appear in
  * their parent's panel; the parent is who can stop them.
@@ -157,7 +157,7 @@ export interface GitStatusView {
   defaultBranch: string | null
 }
 
-/** One checkout of a repository — the main working tree, or a workstream's. */
+/** One checkout of a repository â€” the main working tree, or a workstream's. */
 export interface WorktreeView {
   path: string
   branch: string | null
@@ -217,7 +217,7 @@ export interface CreateLoopInput {
 
 /** An image attached to a user message, sent to vision-capable models. */
 export interface ChatImage {
-  /** Image as a data URL (data:image/png;base64,…). */
+  /** Image as a data URL (data:image/png;base64,â€¦). */
   dataUrl: string
   /** MIME type, e.g. 'image/png'. */
   mediaType: string
@@ -235,7 +235,7 @@ export interface ChatMessage {
    * Each id pairs with a following `role:'tool'` message's `toolCallId`.
    */
   toolCalls?: { id: string; name: string; arguments: string }[]
-  /** For `role:'tool'` messages — which assistant tool call this result answers. */
+  /** For `role:'tool'` messages â€” which assistant tool call this result answers. */
   toolCallId?: string
 }
 
@@ -273,7 +273,7 @@ export type LlmEvent =
       /**
        * For a `task` call: the delegate's own session id.
        *
-       * Carried beside `input` rather than inside it on purpose — `input` is
+       * Carried beside `input` rather than inside it on purpose â€” `input` is
        * replayed verbatim as the model's `tool_calls` arguments on later turns
        * (see reconstructTurn), and an id the model never passed has no business
        * in its history. This is UI addressing: it's what lets the card's cancel
@@ -281,13 +281,13 @@ export type LlmEvent =
        */
       subChatId?: string
       /**
-       * Whether this call can be cancelled on its own while it runs — resolved in
+       * Whether this call can be cancelled on its own while it runs â€” resolved in
        * the harness from the tool catalog (`isInterruptibleTool`), which is the
        * only place that knows an MCP tool's runtime name.
        *
        * Sent rather than re-derived in the renderer so the button and the thing
        * it triggers can never disagree: one source, decided where the signal is
-       * actually threaded. Beside `input` for the same reason `subChatId` is —
+       * actually threaded. Beside `input` for the same reason `subChatId` is â€”
        * `input` is replayed verbatim as the model's tool_calls arguments, and
        * this is UI addressing the model never sent.
        */
@@ -314,7 +314,7 @@ export type LlmEvent =
    */
   | { type: 'tool-child'; callId: string; event: LlmChildEvent }
 
-/** The subset of `LlmEvent` a subagent can emit — everything except further nesting. */
+/** The subset of `LlmEvent` a subagent can emit â€” everything except further nesting. */
 export type LlmChildEvent = Exclude<LlmEvent, { type: 'tool-child' }>
 
 export interface LlmDelta {
@@ -344,7 +344,7 @@ export interface SubagentRunView {
   parentChatId: string | null
   description: string
   subagentType: string
-  /** True for a detached (`background: true`) run — it outlives its launching turn. */
+  /** True for a detached (`background: true`) run â€” it outlives its launching turn. */
   background: boolean
   startedAt: number
 }
@@ -365,7 +365,7 @@ export interface SessionsUpdated {
    * status map has no entry for it yet.
    */
   reason: 'worktree' | 'branch' | 'metadata'
-  /** The sessions affected — usually one. */
+  /** The sessions affected â€” usually one. */
   sessionIds: string[]
   /**
    * The session's git path after the change (its worktree, else its project
@@ -406,7 +406,7 @@ export interface ModelInfo {
   contextLimit?: number
   /** Max output tokens, when known. */
   outputLimit?: number
-  /** USD price per 1M tokens (from models.dev), when known — powers cost math. */
+  /** USD price per 1M tokens (from models.dev), when known â€” powers cost math. */
   cost?: ModelCost
 }
 
@@ -416,7 +416,7 @@ export interface ModelCost {
   input?: number
   /** Output (completion) tokens. */
   output?: number
-  /** Cache-read (cached input) tokens — usually far cheaper than `input`. */
+  /** Cache-read (cached input) tokens â€” usually far cheaper than `input`. */
   cacheRead?: number
   /** Cache-write tokens. */
   cacheWrite?: number
@@ -439,6 +439,38 @@ export interface BrowserTab {
   active: boolean
 }
 
+/**
+ * One cookie in the Cookie-Editor / EditThisCookie interchange shape - the
+ * format the built-in cookie editor imports, exports and renders. It is that
+ * extension's schema rather than Electron's so a blob copied out of Chrome
+ * pastes in unchanged (and back out again).
+ */
+export interface CookieRow {
+  name: string
+  value: string
+  domain: string
+  path: string
+  secure: boolean
+  httpOnly: boolean
+  /** True when the cookie is bound to exactly `domain` (no subdomains). */
+  hostOnly: boolean
+  /** True for a session cookie - no expiry, dropped when the browser exits. */
+  session: boolean
+  sameSite: 'no_restriction' | 'lax' | 'strict' | 'unspecified'
+  /** Seconds since epoch. Absent for session cookies. */
+  expirationDate?: number
+  /** Always "0" - carried only so exports match Cookie-Editor's output. */
+  storeId: string
+}
+
+/** Outcome of a cookie JSON paste: how many landed, and why any didn't. */
+export interface CookieImportResult {
+  imported: number
+  failed: number
+  /** Capped at a handful, so a wholly-bad paste can't flood a toast. */
+  errors: string[]
+}
+
 /** Auto-update lifecycle state (main -> renderer). */
 export type UpdateState =
   | { status: 'idle' }
@@ -459,7 +491,7 @@ export interface UpdateInfo {
 }
 
 /**
- * Remote Workspace — take the running desktop session to a phone via roxy.gg.
+ * Remote Workspace â€” take the running desktop session to a phone via roxy.gg.
  * The desktop stays authoritative (it runs the model + tools); the phone is a
  * thin remote control + live viewer paired through the relay.
  */
@@ -481,7 +513,7 @@ export interface RemoteState {
   phase: RemotePhase
   /** Room id on roxy.gg (present once minted). */
   brokerId?: string
-  /** Safe URL to open on the phone — guest token lives in the fragment. */
+  /** Safe URL to open on the phone â€” guest token lives in the fragment. */
   url?: string
   /** PIN shown on the desktop; the phone must enter it to pair. */
   pin?: string
@@ -508,8 +540,8 @@ export interface RemoteStartInput {
 
 /**
  * A streamed step of a phone-driven turn, pushed to the desktop renderer (via
- * `remote:delta`) so the PC mirrors the reply token-by-token — exactly like a
- * local turn's `LlmDelta` — instead of only reloading from disk when it ends.
+ * `remote:delta`) so the PC mirrors the reply token-by-token â€” exactly like a
+ * local turn's `LlmDelta` â€” instead of only reloading from disk when it ends.
  * Tagged with `sessionId` (not a requestId) since the renderer keys the live
  * mirror by chat, and a phone turn isn't tied to a local llm request.
  *
@@ -595,15 +627,15 @@ export interface RoxyApi {
     reorder(workspacePath: string | null, ids: string[]): Promise<void>
     /**
      * Subscribe to session rows changed by MAIN with no renderer call behind
-     * them — a worktree materialized on the first turn, a branch renamed under
+     * them â€” a worktree materialized on the first turn, a branch renamed under
      * it. Returns an unsubscribe fn.
      */
     onUpdated(callback: (payload: SessionsUpdated) => void): () => void
   }
   projects: {
-    /** Workspace paths in sidebar display order, top → bottom. */
+    /** Workspace paths in sidebar display order, top â†’ bottom. */
     listOrder(): Promise<string[]>
-    /** Persist the project order; `paths` is the full list, top → bottom. */
+    /** Persist the project order; `paths` is the full list, top â†’ bottom. */
     reorder(paths: string[]): Promise<void>
   }
   messages: {
@@ -640,7 +672,7 @@ export interface RoxyApi {
     /** Delete a skill by name; returns the updated list. */
     remove(name: string, cwd?: string): Promise<SkillView[]>
     /**
-     * Install skill(s) from a remote source — a GitHub `owner/repo`, a github.com
+     * Install skill(s) from a remote source â€” a GitHub `owner/repo`, a github.com
      * URL, or a direct SKILL.md URL (Roxy's in-app `npx skills add`). Writes global
      * skills by default (or workspace when a cwd is given).
      */
@@ -739,8 +771,8 @@ export interface RoxyApi {
     run(sessionId: string, name: string, input: Record<string, unknown>): Promise<ToolResult>
     /**
      * Cancel ONE tool call that is running right now, without stopping the turn
-     * around it. Resolves false when nothing was running for that call id — it
-     * finished between the click and the call — which the UI uses to avoid
+     * around it. Resolves false when nothing was running for that call id â€” it
+     * finished between the click and the call â€” which the UI uses to avoid
      * pretending it did something.
      */
     cancel(callId: string): Promise<boolean>
@@ -751,7 +783,7 @@ export interface RoxyApi {
     remove(id: string): Promise<void>
     /** Reorder a chat's queue; `ids` is the full queue front-to-back. */
     reorder(chatId: string, ids: string[]): Promise<void>
-    /** Edit a queued item in place — new text + images, same queue position. */
+    /** Edit a queued item in place â€” new text + images, same queue position. */
     update(id: string, content: string, images?: QueueImage[]): Promise<QueueItem | undefined>
   }
   usage: {
@@ -767,7 +799,7 @@ export interface RoxyApi {
     start(input: LlmStartInput): Promise<LlmResult>
     abort(requestId: string): Promise<void>
     /**
-     * Stop everything in flight for a session — the streaming turn, any
+     * Stop everything in flight for a session â€” the streaming turn, any
      * compaction running ahead of it, and every subagent it spawned. Works even
      * before a requestId exists, which `abort` cannot.
      */
@@ -789,7 +821,7 @@ export interface RoxyApi {
      * persisted transcript is then the truth).
      */
     snapshot(subChatId: string): Promise<MessagePart[] | null>
-    /** Every subagent currently running — restores live state after a window reload. */
+    /** Every subagent currently running â€” restores live state after a window reload. */
     listRunning(): Promise<SubagentRunView[]>
     /**
      * Tell main which chat is on screen, so the end-of-turn prune spares a sub
@@ -838,10 +870,33 @@ export interface RoxyApi {
     activateTab(id: string): Promise<void>
     /** Reorder a tab to a new index in the strip (drag-to-reorder). */
     moveTab(id: string, toIndex: number): Promise<void>
+    /**
+     * Reserve N px of window for the chrome so a chrome panel can cover the
+     * page; pass 0 to restore the normal toolbar height. Only meaningful from
+     * inside the browser window itself.
+     */
+    setChromeHeight(height: number): Promise<void>
     /** Subscribe to the browser toolbar's navigation state; returns an unsubscribe fn. */
     onState(callback: (state: BrowserState) => void): () => void
     /** Subscribe to the open tab list; returns an unsubscribe fn. */
     onTabs(callback: (tabs: BrowserTab[]) => void): () => void
+  }
+  /**
+   * The built-in cookie editor for the Roxy browser - what the Cookie-Editor
+   * extension does, against the browser's own persisted partition. Every shape
+   * here is Cookie-Editor's interchange format, so exports paste into Chrome
+   * and Chrome's exports paste in here.
+   */
+  cookies: {
+    /** Cookies for a URL's whole domain chain, or the entire jar when omitted. */
+    list(url?: string): Promise<CookieRow[]>
+    /** Create or overwrite one cookie. Resolves to an error string, or null on success. */
+    set(row: Partial<CookieRow>): Promise<string | null>
+    remove(row: Pick<CookieRow, 'name' | 'domain' | 'path' | 'secure'>): Promise<void>
+    /** Delete every cookie under a host, or the whole jar. Resolves to the count removed. */
+    clear(host?: string): Promise<number>
+    /** Import a Cookie-Editor / EditThisCookie JSON blob. Rejects only on malformed JSON. */
+    importJson(text: string): Promise<CookieImportResult>
   }
   services: {
     /** Background processes owned by a session (includes its subagents'). */
@@ -903,7 +958,7 @@ export interface RoxyApi {
     /** Remove a worktree directory and prune git's record of it. */
     removeWorktree(path: string, force?: boolean): Promise<{ ok: boolean; error?: string }>
     /**
-     * Rename a session's workstream branch. Safe while checked out — git
+     * Rename a session's workstream branch. Safe while checked out â€” git
      * rewrites the worktree's HEAD in place, leaving uncommitted work alone.
      */
     renameBranch(sessionId: string, to: string): Promise<{ ok: boolean; error?: string }>

@@ -211,6 +211,7 @@ const roxy: RoxyApi = {
     closeTab: (id) => ipcRenderer.invoke(CHANNELS.browserCloseTab, id),
     activateTab: (id) => ipcRenderer.invoke(CHANNELS.browserActivateTab, id),
     moveTab: (id, toIndex) => ipcRenderer.invoke(CHANNELS.browserMoveTab, id, toIndex),
+    setChromeHeight: (height) => ipcRenderer.invoke(CHANNELS.browserChromeHeight, height),
     onState: (callback) => {
       const handler = (_event: Electron.IpcRendererEvent, state: BrowserState): void =>
         callback(state)
@@ -223,6 +224,13 @@ const roxy: RoxyApi = {
       ipcRenderer.on(CHANNELS.browserTabs, handler)
       return () => ipcRenderer.removeListener(CHANNELS.browserTabs, handler)
     }
+  },
+  cookies: {
+    list: (url) => ipcRenderer.invoke(CHANNELS.cookiesList, url),
+    set: (row) => ipcRenderer.invoke(CHANNELS.cookiesSet, row),
+    remove: (row) => ipcRenderer.invoke(CHANNELS.cookiesRemove, row),
+    clear: (host) => ipcRenderer.invoke(CHANNELS.cookiesClear, host),
+    importJson: (text) => ipcRenderer.invoke(CHANNELS.cookiesImport, text)
   },
   services: {
     list: (sessionId) => ipcRenderer.invoke(CHANNELS.servicesList, sessionId),

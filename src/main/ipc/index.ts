@@ -4,6 +4,7 @@ import type { SessionConfigPatch } from '../../shared/session-config'
 import type { ClipboardAction } from '../../shared/context-menu'
 import { clipboardHasContent, runClipboardAction } from '../services/context-menu'
 import type {
+  CookieRow,
   CreateChatInput,
   CreateLoopInput,
   CreateWorktreeInput,
@@ -28,6 +29,7 @@ import * as repo from '../db/repo'
 import * as copilot from '../services/copilot'
 import * as cliproxy from '../services/cliproxy'
 import * as browser from '../services/browser'
+import * as cookies from '../services/cookies'
 import { listModels } from '../services/models'
 import { pickDefaultModel } from '../../shared/models'
 import { CLIPROXY_PROVIDER_IDS, accountsFor, isCliProxyProvider } from '../../shared/cliproxy'
@@ -87,7 +89,7 @@ const llmControllers = new Map<string, AbortController>()
  *
  * `llmControllers` alone was not enough for Stop to be reliable. The renderer
  * only learns a requestId once the turn is actually starting, and real work
- * happens before that — most of all compaction, which is a full model call on a
+ * happens before that â€” most of all compaction, which is a full model call on a
  * long history and used to run with a hardcoded never-aborted signal. Stop
  * during that window found no requestId and silently did nothing, which is a
  * large part of why the button felt stuck.
@@ -285,7 +287,7 @@ export function registerIpc(): void {
     // Fire-and-forget: deletion must never block on git, so a failure here is
     // logged and the session goes anyway (`git:prune-worktrees` sweeps up
     // whatever is left behind). It re-kills the session's processes internally
-    // and awaits them — the ordering that keeps removal working on Windows.
+    // and awaits them â€” the ordering that keeps removal working on Windows.
     void removeWorktreeForChat(id).then(
       (r) => {
         if (!r.ok && r.error) console.warn('[worktree] remove on delete failed:', r.error)
@@ -409,7 +411,7 @@ export function registerIpc(): void {
     state: getUpdateState()
   }))
   ipcMain.handle(CHANNELS.systemOpenExternal, async (_e, url: string) => {
-    // Only allow web URLs — never file:, javascript:, or other schemes.
+    // Only allow web URLs â€” never file:, javascript:, or other schemes.
     try {
       const parsed = new URL(url)
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
@@ -653,7 +655,7 @@ export function registerIpc(): void {
     // If this session is shared to a phone, relay the turn there too so the phone
     // streams a desktop-typed reply live (the mirror of a phone turn on the PC).
     // The current prompt is the last user message; announce it so the phone shows
-    // the bubble it never echoed. `null` when nothing's shared → zero overhead.
+    // the bubble it never echoed. `null` when nothing's shared â†’ zero overhead.
     const lastUser = [...input.messages].reverse().find((m) => m.role === 'user')
     const relay = remote.relayLocalTurnStart(input.sessionId, lastUser?.content)
     try {
@@ -677,7 +679,7 @@ export function registerIpc(): void {
     llmControllers.get(requestId)?.abort()
   })
   // Stop, as the UI means it: end everything this session has in flight,
-  // whatever stage it's at. Also cancels the session's delegates — stopping a
+  // whatever stage it's at. Also cancels the session's delegates â€” stopping a
   // turn while it waits on a subagent has to stop the subagent, or the work
   // carries on invisibly after the transcript says it stopped.
   ipcMain.handle(CHANNELS.llmAbortSession, (_e, sessionId: string) => {
@@ -765,6 +767,20 @@ export function registerIpc(): void {
     browser.moveTab(id, toIndex, keyOf(e))
   )
 
+  // ---- cookies (the built-in Cookie-Editor) ----
+  // One jar, shared by every session: the browser's persisted partition is
+  // global, so these are deliberately NOT keyed off the sender. Both surfaces
+  // -- the browser window's Cookies panel and Settings -> Browser -- call the
+  // same handlers and see the same cookies.
+  ipcMain.handle(CHANNELS.cookiesList, (_e, url?: string) => cookies.list(url))
+  ipcMain.handle(CHANNELS.cookiesSet, (_e, row: Partial<CookieRow>) => cookies.set(row))
+  ipcMain.handle(CHANNELS.cookiesRemove, (_e, row: CookieRow) => cookies.remove(row))
+  ipcMain.handle(CHANNELS.cookiesClear, (_e, host?: string) => cookies.clear(host))
+  ipcMain.handle(CHANNELS.cookiesImport, (_e, text: string) => cookies.importJson(text))
+  ipcMain.handle(CHANNELS.browserChromeHeight, (e, height: number) =>
+    browser.setChromeHeight(height, keyOf(e))
+  )
+
   // ---- services (a session's background processes) ----
   // Every handler resolves the ROOT session first: a subagent's dev server is
   // registered under its parent, and the parent's panel is where it belongs.
@@ -836,9 +852,9 @@ export function registerIpc(): void {
   ipcMain.handle(
     CHANNELS.gitCreateWorktree,
     async (_e, input: CreateWorktreeInput): Promise<CreateWorktreeResult> => {
-      if (!(await git.isGitAvailable())) return { ok: false, error: 'Git isn’t installed.' }
+      if (!(await git.isGitAvailable())) return { ok: false, error: 'Git isnâ€™t installed.' }
       const root = await git.repoRoot(input.cwd)
-      if (!root) return { ok: false, error: 'This folder isn’t a git repository.' }
+      if (!root) return { ok: false, error: 'This folder isnâ€™t a git repository.' }
       const r =
         input.mode === 'new'
           ? await git.createWorktree({
@@ -851,7 +867,7 @@ export function registerIpc(): void {
   )
 
   ipcMain.handle(CHANNELS.gitRemoveWorktree, async (_e, worktreePath: string, force?: boolean) => {
-    if (!(await git.isGitAvailable())) return { ok: false, error: 'Git isn’t installed.' }
+    if (!(await git.isGitAvailable())) return { ok: false, error: 'Git isnâ€™t installed.' }
     return git.removeWorktree(worktreePath, { force: force ?? false })
   })
 

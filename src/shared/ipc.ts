@@ -34,12 +34,12 @@ export const CHANNELS = {
    * main -> renderer: a session row changed in MAIN, with no renderer call to
    * hang a refresh off. The only source of truth for `worktree_path` / `branch`
    * / `dev_port` is the main process, and it writes them mid-turn (lazy worktree
-   * materialization) — so without this push the workstream strip keeps claiming
+   * materialization) â€” so without this push the workstream strip keeps claiming
    * "(pending) / branch pending" until something unrelated happens to refetch.
    */
   chatsUpdated: 'chats:updated',
 
-  /** Project (workspace) display order — read + drag-to-reorder. */
+  /** Project (workspace) display order â€” read + drag-to-reorder. */
   projectsListOrder: 'projects:listOrder',
   projectsReorder: 'projects:reorder',
 
@@ -101,7 +101,7 @@ export const CHANNELS = {
    *
    * The gap this closes: Stop is all-or-nothing. A turn that fires `bash npm
    * test` on a wedged suite, or a `webfetch` at a host that will never answer,
-   * could only be rescued by killing the whole turn — losing the reasoning and
+   * could only be rescued by killing the whole turn â€” losing the reasoning and
    * every other tool result with it. This aborts just that call; the tool reports
    * back as cancelled and the model carries on with the rest of its work.
    *
@@ -128,7 +128,7 @@ export const CHANNELS = {
    * renderer -> main: stop EVERYTHING in flight for a session.
    *
    * llm:abort needs a requestId, which the renderer only has once the turn is
-   * already streaming — so it cannot cancel the pre-flight work (compaction
+   * already streaming â€” so it cannot cancel the pre-flight work (compaction
    * above all) that runs first. This is Stop as the user means it, keyed by the
    * one id the UI always has.
    */
@@ -156,7 +156,7 @@ export const CHANNELS = {
    *
    * Keyed by sub chat id rather than the background job id `tasks:cancel` uses,
    * because that is the only handle the UI has for a FOREGROUND delegate (which
-   * has no job at all) — and it's the id every subagent surface already knows.
+   * has no job at all) â€” and it's the id every subagent surface already knows.
    */
   subagentCancel: 'subagent:cancel',
 
@@ -194,6 +194,23 @@ export const CHANNELS = {
   browserState: 'browser:state',
   /** main -> browser toolbar: open tab list */
   browserTabs: 'browser:tabs',
+
+  /**
+   * Cookie editor â€” the built-in equivalent of the Cookie-Editor extension.
+   * Reads/writes the browser partition's jar directly, and speaks Cookie-Editor's
+   * JSON on import/export so blobs move between it and Chrome unchanged.
+   */
+  cookiesList: 'cookies:list',
+  cookiesSet: 'cookies:set',
+  cookiesRemove: 'cookies:remove',
+  cookiesClear: 'cookies:clear',
+  cookiesImport: 'cookies:import',
+  /**
+   * browser chrome -> main: reserve N px for the chrome so a panel can cover
+   * the page. BrowserViews always paint above the window's webContents, so
+   * growing the chrome is the only way for chrome UI to sit on top.
+   */
+  browserChromeHeight: 'browser:chrome-height',
 
   /** renderer -> main: a session's background processes (the Services panel) */
   servicesList: 'services:list',
